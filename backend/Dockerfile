@@ -21,7 +21,9 @@ RUN sed -i 's|deb.debian.org|mirrors.cloud.tencent.com|g' /etc/apt/sources.list.
 # 统一 Python 环境：后端依赖 + 发布引擎
 COPY backend/requirements.txt /tmp/requirements.txt
 COPY publisher /opt/publisher
-RUN python -m venv /opt/venv \
+# 引擎的 qr_login.py / sau_cli.py 依赖 conf.py，仓库里只有模板，构建时自动生成
+RUN cp -n /opt/publisher/conf.example.py /opt/publisher/conf.py \
+    && python -m venv /opt/venv \
     && /opt/venv/bin/pip install --no-cache-dir -r /tmp/requirements.txt -e /opt/publisher
 
 # Chromium 运行所需的系统库（浏览器本体通过 volume 挂载，见 docker-compose）

@@ -1,19 +1,21 @@
 """作者全部作品列表：识别作者主页链接并抓取其全部作品。
 
-- B站走 yt-dlp flat playlist（无需浏览器）
+- B站走 wbi 签名直接调官方接口（免登录，无需浏览器）
 - 抖音/快手/小红书用 patchright(chromium) 打开作者主页，拦截分页接口 JSON
   并滚动触发加载；浏览器抓取全局串行（author_lock），防止 1.9GB 内存爆掉
 """
 import asyncio
+import hashlib
 import json
 import re
 import threading
 import time
+import urllib.parse
 
 import requests
 
 from app.config import PLATFORM_NAMES
-from app.services.cookies import cookie_exists, cookie_path, make_ytdlp_cookiefile
+from app.services.cookies import cookie_exists, cookie_path
 from app.services.downloader import BROWSER_UA, extract_url
 
 # 单个作者最多返回的作品数
@@ -78,45 +80,132 @@ def resolve_author_url(text: str) -> dict:
     return info
 
 
-# ================= B 站：yt-dlp flat playlist =================
+# ================= B 站：wbi 签名调官方接口（免登录，替代 yt-dlp space） =================
+
+# wbi 混淆表（bilibili-API-collect 标准表）：imgKey+subKey 按下标重排取前 32 位得 mixin_key
+_MIXIN_KEY_ENC_TAB = [
+    46, 47, 18, 2, 53, 8, 23, 32, 15, 50, 10, 31, 58, 3, 45, 35,
+    27, 43, 5, 49, 33, 9, 42, 19, 29, 28, 14, 39, 12, 38, 41, 13,
+    37, 48, 7, 16, 24, 55, 40, 61, 26, 17, 0, 1, 60, 51, 30, 4,
+    22, 25, 54, 21, 56, 59, 6, 63, 57, 62, 11, 36, 20, 34, 44, 52,
+]
+
+# wbi 密钥模块级缓存（12 小时）：nav 接口拿 imgKey/subKey，不必每个请求都取
+_wbi_cache = {"img_key": "", "sub_key": "", "expires": 0.0}
+_WBI_CACHE_TTL = 12 * 3600
+
+# B站风控码：触发时重试，仍失败则引导用户稍后重试或配 cookie
+_BILI_RISK_CODES = (-352, -412)
+
+
+def _get_wbi_keys() -> tuple[str, str]:
+    """取 wbi 签名用的 imgKey/subKey（nav 接口返回的 wbi_img 文件名），带 12 小时缓存。"""
+    now = time.time()
+    if _wbi_cache["img_key"] and now < _wbi_cache["expires"]:
+        return _wbi_cache["img_key"], _wbi_cache["sub_key"]
+    r = requests.get("https://api.bilibili.com/x/web-interface/nav",
+                     headers={"User-Agent": BROWSER_UA}, timeout=15)
+    wbi_img = r.json()["data"]["wbi_img"]
+    img_key = wbi_img["img_url"].rsplit("/", 1)[-1].split(".")[0]
+    sub_key = wbi_img["sub_url"].rsplit("/", 1)[-1].split(".")[0]
+    _wbi_cache.update(img_key=img_key, sub_key=sub_key, expires=now + _WBI_CACHE_TTL)
+    return img_key, sub_key
+
+
+def _wbi_sign(params: dict) -> dict:
+    """wbi 签名：参数加 wts，按 key 排序 urlencode，w_rid = md5(query + mixin_key)。"""
+    img_key, sub_key = _get_wbi_keys()
+    mixin_key = "".join((img_key + sub_key)[i] for i in _MIXIN_KEY_ENC_TAB)[:32]
+    params = {**params, "wts": int(time.time())}
+    # 按 wbi 规范过滤 value 中的 !'()* 字符
+    params = {k: "".join(c for c in str(v) if c not in "!'()*") for k, v in params.items()}
+    query = urllib.parse.urlencode(sorted(params.items()))
+    params["w_rid"] = hashlib.md5((query + mixin_key).encode()).hexdigest()
+    return params
+
+
+def _bili_get_json(url: str, params: dict, headers: dict) -> dict:
+    """调 B站接口并处理风控码（-352/-412 重试 2 次，间隔 2s）。"""
+    code = None
+    for attempt in range(3):  # 首次 + 最多 2 次重试
+        r = requests.get(url, params=params, headers=headers, timeout=15)
+        r.raise_for_status()
+        data = r.json()
+        code = data.get("code", 0)
+        if code == 0:
+            return data
+        if code in _BILI_RISK_CODES and attempt < 2:
+            time.sleep(2)
+            continue
+        break
+    if code in _BILI_RISK_CODES:
+        raise ValueError("B站风控拦截，请稍后重试或到「平台账号」页配置 B站 cookie")
+    raise RuntimeError(f"B站接口返回错误（code={code}）：{(data.get('message') or '').strip() or '未知错误'}")
+
+
+def _bili_duration(v) -> int | None:
+    """"mm:ss"/"hh:mm:ss" 时长字符串转秒（兼容已经是数字的情况）。"""
+    if not isinstance(v, str) or ":" not in v:
+        return _safe_int(v)
+    try:
+        parts = [int(p) for p in v.split(":")]
+    except ValueError:
+        return None
+    seconds = 0
+    for p in parts:
+        seconds = seconds * 60 + p
+    return seconds
+
 
 def _bilibili_works(author: dict) -> dict:
-    import yt_dlp
-
-    opts = {
-        "quiet": True, "no_warnings": True,
-        "extract_flat": True,  # 只取列表元数据，不逐条解析
-        "noplaylist": False,
+    """wbi 签名分页拉作者全部投稿（上限 MAX_WORKS 条），免登录无需 cookie。"""
+    m = re.search(r"space\.bilibili\.com/(\d+)", author["url"])
+    mid = m.group(1)
+    headers = {
+        "User-Agent": BROWSER_UA,
+        "Referer": f"https://space.bilibili.com/{mid}",
+        "Origin": "https://space.bilibili.com",
     }
-    cf = make_ytdlp_cookiefile("bilibili")
-    if cf:
-        opts["cookiefile"] = str(cf)
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(author["url"], download=False)
-
-    works = []
-    # extract_flat 下 entries 可能是惰性生成器，先物化再截断
-    for e in list(info.get("entries") or [])[:MAX_WORKS]:
-        bvid = e.get("id")
-        if not bvid:
-            continue
-        works.append({
-            "id": bvid,
-            "title": e.get("title") or "未命名视频",
-            "cover_url": "",
-            "url": f"https://www.bilibili.com/video/{bvid}",
-            "duration": e.get("duration"),
-            "like_count": None,
-            "create_time": None,
-        })
+    api = "https://api.bilibili.com/x/space/wbi/arc/search"
+    works: list[dict] = []
+    author_name = ""
+    pn = 1
+    while len(works) < MAX_WORKS:
+        params = _wbi_sign({"mid": mid, "pn": pn, "ps": 30, "order": "pubdate"})
+        data = _bili_get_json(api, params, headers)
+        body = data.get("data") or {}
+        vlist = (body.get("list") or {}).get("vlist") or []
+        for v in vlist:
+            bvid = v.get("bvid")
+            if not bvid:
+                continue
+            if not author_name:
+                author_name = (v.get("author") or "").strip()
+            pic = v.get("pic") or ""
+            if pic.startswith("//"):
+                pic = "https:" + pic
+            works.append({
+                "id": bvid,
+                "title": (v.get("title") or "").strip() or "未命名视频",
+                "cover_url": pic,
+                "url": f"https://www.bilibili.com/video/{bvid}",
+                "duration": _bili_duration(v.get("length")),
+                "like_count": None,
+                "create_time": _safe_int(v.get("created")),
+            })
+        total = _safe_int((body.get("page") or {}).get("count")) or 0
+        if not vlist or pn * 30 >= total:
+            break
+        pn += 1
+        time.sleep(0.5)  # 请求间隔防风控
     return {
         "author": {
-            "name": info.get("uploader") or info.get("channel") or PLATFORM_NAMES["bilibili"],
+            "name": author_name or PLATFORM_NAMES["bilibili"],
             "avatar": "",
             "url": author["url"],
             "platform": "bilibili",
         },
-        "works": works,
+        "works": works[:MAX_WORKS],
     }
 
 

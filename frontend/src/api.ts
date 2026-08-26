@@ -403,6 +403,37 @@ export async function uploadCookie(
   return data
 }
 
+/** 导入 cookie 字符串（支持浏览器复制串 / Netscape 文本 / storage_state JSON），返回解析条数 */
+export async function importCookieString(
+  platform: string,
+  account: string,
+  content: string,
+): Promise<{ ok: boolean; count: number }> {
+  const { data } = await http.post<{ ok: boolean; count: number }>('/accounts/cookie/import', {
+    platform,
+    account,
+    content,
+  })
+  return data
+}
+
+export interface CookieExportResult {
+  platform: string
+  account: string
+  cookie_string: string
+}
+
+/** 导出账号 cookie 为字符串（无 cookie 时 404） */
+export async function exportCookieString(
+  platform: string,
+  account: string,
+): Promise<CookieExportResult> {
+  const { data } = await http.get<CookieExportResult>(
+    `/accounts/${platform}/${account}/cookie/export`,
+  )
+  return data
+}
+
 export async function deleteAccount(
   platform: string,
   account: string,

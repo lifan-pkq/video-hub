@@ -1,19 +1,22 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react'
-import { CheckCircle, Plus, QrCode, UserCircle, XCircle } from '@phosphor-icons/react'
+import { CheckCircle, Copy, Plus, QrCode, UserCircle, XCircle } from '@phosphor-icons/react'
 import {
   cancelLogin,
   checkAccount,
   deleteAccount,
   errorMessage,
+  exportCookieString,
   fetchAccounts,
   fetchLoginStatus,
   formatTime,
+  importCookieString,
   PLATFORMS,
   QR_LOGIN_PLATFORMS,
   startLogin,
   uploadCookie,
   type Account,
   type CheckResult,
+  type CookieExportResult,
   type LoginSession,
 } from '../api'
 import {
@@ -28,6 +31,7 @@ import {
   PlatformIcon,
   Segment,
   Spinner,
+  TextArea,
   toast,
 } from '../ui'
 
@@ -45,6 +49,32 @@ function metaOf(platform: string) {
 
 function accountKey(a: Account): string {
   return `${a.platform}:${a.account}`
+}
+
+/** 复制到剪贴板：优先 navigator.clipboard，非安全上下文降级 textarea + execCommand */
+async function copyText(text: string): Promise<boolean> {
+  try {
+    if (window.isSecureContext && navigator.clipboard) {
+      await navigator.clipboard.writeText(text)
+      return true
+    }
+  } catch {
+    // 继续走降级方案
+  }
+  const ta = document.createElement('textarea')
+  ta.value = text
+  ta.style.position = 'fixed'
+  ta.style.opacity = '0'
+  document.body.appendChild(ta)
+  ta.focus()
+  ta.select()
+  try {
+    return document.execCommand('copy')
+  } catch {
+    return false
+  } finally {
+    document.body.removeChild(ta)
+  }
 }
 
 /** cookie 状态点标：未配置 ink-4 / 已失效 danger / 已配置·有效 success */
@@ -68,6 +98,16 @@ export default function AccountsPage() {
 
   const [uploading, setUploading] = useState<Record<string, boolean>>({})
   const fileRefs = useRef<Record<string, HTMLInputElement | null>>({})
+
+  // 导入 cookie 字符串弹窗
+  const [importTarget, setImportTarget] = useState<Account | null>(null)
+  const [importContent, setImportContent] = useState('')
+  const [importError, setImportError] = useState<string | null>(null)
+  const [importing, setImporting] = useState(false)
+
+  // 导出 cookie 字符串弹窗
+  const [exporting, setExporting] = useState<Record<string, boolean>>({})
+  const [exportData, setExportData] = useState<CookieExportResult | null>(null)
 
   // 扫码登录弹窗
   const [loginOpen, setLoginOpen] = useState(false)
@@ -214,6 +254,62 @@ export default function AccountsPage() {
     }
   }
 
+  const openImportModal = (acc: Account) => {
+    setImportTarget(acc)
+    setImportContent('')
+    setImportError(null)
+  }
+
+  const closeImportModal = () => {
+    if (importing) return
+    setImportTarget(null)
+    setImportContent('')
+    setImportError(null)
+  }
+
+  const handleImport = async () => {
+    if (!importTarget) return
+    const content = importContent.trim()
+    if (!content) {
+      setImportError('请先粘贴 cookie 内容')
+      return
+    }
+    setImportError(null)
+    setImporting(true)
+    try {
+      const r = await importCookieString(importTarget.platform, importTarget.account, content)
+      toast.success(`导入成功，共 ${r.count} 条 cookie`)
+      setImportTarget(null)
+      setImportContent('')
+      await load()
+    } catch (e) {
+      setImportError(errorMessage(e))
+    } finally {
+      setImporting(false)
+    }
+  }
+
+  const handleExport = async (acc: Account) => {
+    const key = accountKey(acc)
+    setExporting((s) => ({ ...s, [key]: true }))
+    try {
+      const r = await exportCookieString(acc.platform, acc.account)
+      setExportData(r)
+      if (await copyText(r.cookie_string)) toast.success('已复制到剪贴板')
+      else toast.warning('自动复制失败，请手动复制')
+    } catch (e) {
+      toast.error(`导出失败：${errorMessage(e)}`)
+    } finally {
+      setExporting((s) => ({ ...s, [key]: false }))
+    }
+  }
+
+  const handleCopyExport = async () => {
+    if (!exportData) return
+    if (await copyText(exportData.cookie_string)) toast.success('已复制到剪贴板')
+    else toast.error('复制失败，请手动选择复制')
+  }
+
   const handleDelete = async (acc: Account) => {
     const ok = await confirmDialog({
       title: '确认删除',
@@ -343,8 +439,14 @@ export default function AccountsPage() {
                               loading={uploading[key]}
                               onClick={() => fileRefs.current[key]?.click()}
                             >
-                              上传 cookie
+                              上传文件
                             </Button>
+                            <Button onClick={() => openImportModal(acc)}>导入</Button>
+                            {acc.cookie_exists && (
+                              <Button loading={exporting[key]} onClick={() => handleExport(acc)}>
+                                导出
+                              </Button>
+                            )}
                             {acc.cookie_exists && (
                               <Button
                                 variant="text"
@@ -507,6 +609,79 @@ export default function AccountsPage() {
             )}
           </div>
         )}
+      </Modal>
+
+      {/* 导入 cookie 字符串弹窗 */}
+      <Modal
+        open={!!importTarget}
+        onClose={closeImportModal}
+        title={
+          importTarget
+            ? `导入 cookie · ${metaOf(importTarget.platform).label} / ${importTarget.account}`
+            : '导入 cookie'
+        }
+        width={520}
+      >
+        <div className="text-xs leading-relaxed text-ink-3">
+          获取方式：浏览器登录对应平台 → F12 → 网络 → 点任意请求 → 请求头 Cookie 整段复制粘贴到下方。
+        </div>
+        <TextArea
+          className="mt-3"
+          rows={7}
+          value={importContent}
+          onChange={setImportContent}
+          placeholder={
+            '粘贴 cookie，支持三种格式：\n1. 浏览器 F12 复制的 cookie 字符串（name=val; name2=val2; …）\n2. Netscape 文本\n3. storage_state JSON'
+          }
+        />
+        {importError && (
+          <Alert type="error" className="mt-3">
+            {importError}
+          </Alert>
+        )}
+        <Button
+          variant="primary"
+          full
+          loading={importing}
+          disabled={!importContent.trim()}
+          onClick={handleImport}
+          className="mt-4"
+        >
+          确认导入
+        </Button>
+      </Modal>
+
+      {/* 导出 cookie 字符串弹窗 */}
+      <Modal
+        open={!!exportData}
+        onClose={() => setExportData(null)}
+        title={
+          exportData
+            ? `导出 cookie · ${metaOf(exportData.platform).label} / ${exportData.account}`
+            : '导出 cookie'
+        }
+        width={520}
+      >
+        <div className="text-xs leading-relaxed text-ink-3">
+          cookie 字符串已自动复制到剪贴板，也可手动选中下方内容复制。
+        </div>
+        <TextArea
+          className="mt-3"
+          rows={7}
+          value={exportData?.cookie_string ?? ''}
+          onChange={() => {}}
+          readOnly
+          onFocus={(e) => e.target.select()}
+        />
+        <Button
+          variant="primary"
+          full
+          icon={<Copy size={15} />}
+          onClick={handleCopyExport}
+          className="mt-4"
+        >
+          复制
+        </Button>
       </Modal>
     </div>
   )

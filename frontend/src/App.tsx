@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { Command as CommandIcon } from '@phosphor-icons/react'
 import { fetchTasks } from './api'
@@ -9,13 +9,21 @@ import ThemeToggle from './components/ThemeToggle'
 import CommandPalette from './components/CommandPalette'
 import DashboardPage from './pages/DashboardPage'
 import VideosPage from './pages/VideosPage'
-import EditorPage from './pages/EditorPage'
 import DownloadPage from './pages/DownloadPage'
 import RecordPage from './pages/RecordPage'
 import PublishPage from './pages/PublishPage'
 import TasksPage from './pages/TasksPage'
 import AccountsPage from './pages/AccountsPage'
 import NotFoundPage from './pages/NotFoundPage'
+
+// 编辑器依赖重型时间线库，按需懒加载
+const EditorPage = lazy(() => import('./pages/EditorPage'))
+
+function EditorFallback() {
+  return (
+    <div className="flex h-[240px] items-center justify-center text-sm text-ink-3">编辑器加载中…</div>
+  )
+}
 
 function Logo() {
   return (
@@ -160,7 +168,14 @@ export default function App() {
           <Routes location={location}>
             <Route path="/" element={<DashboardPage />} />
             <Route path="/videos" element={<VideosPage />} />
-            <Route path="/edit" element={<EditorPage />} />
+            <Route
+              path="/edit"
+              element={
+                <Suspense fallback={<EditorFallback />}>
+                  <EditorPage />
+                </Suspense>
+              }
+            />
             <Route path="/download" element={<DownloadPage />} />
             <Route path="/record" element={<RecordPage />} />
             <Route path="/publish" element={<PublishPage />} />

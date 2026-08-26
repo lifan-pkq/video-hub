@@ -5,6 +5,7 @@
 - 每次发布同时落库 publish_records，供历史查询
 """
 import asyncio
+import re
 import shutil
 
 from app.config import (BILI_TID, PLATFORM_NAMES, PLATFORMS, PUBLISH_ACCOUNT, PUBLISH_TIMEOUT,
@@ -48,30 +49,34 @@ async def _run_sau(task, platform: str, args: list[str]) -> tuple[int, str]:
     )
     output: list[str] = []
     assert proc.stdout is not None
-    async for raw in proc.stdout:
-        line = raw.decode("utf-8", errors="replace").rstrip()
-        # 去掉 ANSI 颜色码，前端显示更干净
-        import re
-        line = re.sub(r"\x1b\[[0-9;]*m", "", line)
-        if line.strip():
-            output.append(line)
-            # 抖音短信验证状态跟踪：引擎弹出验证 → 通知前端弹窗；填完 → 关闭弹窗
-            if "等待验证码输入" in line or "已点击「获取验证码」" in line:
-                task.needs_verify = True
-            elif "验证码未通过" in line:
-                # 上一个码被抖音拒绝，引擎已自动重发短信，提示用户输入新码
-                task.needs_verify = True
-            elif "验证码已填入输入框" in line or "验证码处理完成" in line:
-                task.needs_verify = False
-            task.log(f"[{PLATFORM_NAMES.get(platform, platform)}] {line}")
+
+    async def _pump():
+        async for raw in proc.stdout:
+            line = raw.decode("utf-8", errors="replace").rstrip()
+            # 去掉 ANSI 颜色码，前端显示更干净
+            line = re.sub(r"\x1b\[[0-9;]*m", "", line)
+            if line.strip():
+                output.append(line)
+                # 抖音短信验证状态跟踪：引擎弹出验证 → 通知前端弹窗；填完 → 关闭弹窗
+                if "等待验证码输入" in line or "已点击「获取验证码」" in line:
+                    task.needs_verify = True
+                elif "验证码未通过" in line:
+                    # 上一个码被抖音拒绝，引擎已自动重发短信，提示用户输入新码
+                    task.needs_verify = True
+                elif "验证码已填入输入框" in line or "验证码处理完成" in line:
+                    task.needs_verify = False
+                task.log(f"[{PLATFORM_NAMES.get(platform, platform)}] {line}")
+
+    # 超时计时覆盖整个输出读取过程（进程不退出时 stdout 循环永不结束，会死锁）
     try:
-        code = await asyncio.wait_for(proc.wait(), timeout=PUBLISH_TIMEOUT)
+        await asyncio.wait_for(_pump(), timeout=PUBLISH_TIMEOUT)
     except asyncio.TimeoutError:
         proc.kill()
         await proc.wait()
         task.log(f"[{PLATFORM_NAMES.get(platform, platform)}] 执行超时，已终止")
         return -1, "\n".join(output)
-    return code, "\n".join(output)
+    await proc.wait()
+    return proc.returncode, "\n".join(output)
 
 
 async def check_platform(platform: str, account: str = PUBLISH_ACCOUNT) -> dict:

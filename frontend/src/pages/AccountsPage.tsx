@@ -77,6 +77,7 @@ export default function AccountsPage() {
   const [loginStarting, setLoginStarting] = useState(false)
   const [session, setSession] = useState<LoginSession | null>(null)
   const pollRef = useRef<number | null>(null)
+  const successTimerRef = useRef<number | null>(null)
   const sessionRef = useRef<LoginSession | null>(null)
   sessionRef.current = session
 
@@ -94,10 +95,11 @@ export default function AccountsPage() {
     load()
   }, [load])
 
-  // 卸载时停止登录轮询
+  // 卸载时停止登录轮询与延迟关闭定时器
   useEffect(() => {
     return () => {
       if (pollRef.current) window.clearInterval(pollRef.current)
+      if (successTimerRef.current) window.clearTimeout(successTimerRef.current)
     }
   }, [])
 
@@ -118,7 +120,9 @@ export default function AccountsPage() {
           stopPolling()
           if (s.state === 'success') {
             // 稍等片刻让用户看到成功提示，然后自动关闭并刷新列表
-            window.setTimeout(() => {
+            if (successTimerRef.current) window.clearTimeout(successTimerRef.current)
+            successTimerRef.current = window.setTimeout(() => {
+              successTimerRef.current = null
               setLoginOpen(false)
               setSession(null)
               toast.success('登录成功，账号已添加')

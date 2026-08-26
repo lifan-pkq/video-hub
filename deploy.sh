@@ -1,7 +1,7 @@
 #!/bin/bash
 # Video Hub 部署脚本
 # 用法: SSHPASS='服务器密码' ./deploy.sh
-set -e
+set -euo pipefail
 
 SERVER_USER="ubuntu"
 SERVER_IP="49.234.25.175"
@@ -22,6 +22,7 @@ rsync -avz --delete -e "$RSYNC_SSH" \
   --exclude='.git' --exclude='node_modules' --exclude='data' \
   --exclude='.env' \
   --exclude='publisher/.venv' --exclude='publisher/logs' \
+  --exclude='publisher/cookies' \
   --exclude='**/__pycache__' --exclude='ms-playwright' \
   "$PROJECT_DIR/" "$SERVER_USER@$SERVER_IP:$REMOTE_DIR/"
 
@@ -49,6 +50,19 @@ EOF
 echo "=== [4/6] 停止并备份服务器上的旧项目 ==="
 "${SSH_CMD[@]}" bash -s <<'EOF'
 set -e
+# 1.9GB 内存跑 whisper+chromium 需要 swap 兜底，无 swap 则创建 2G swapfile
+if [ -z "$(swapon --show)" ]; then
+  if [ ! -f /swapfile ]; then
+    sudo fallocate -l 2G /swapfile
+    sudo chmod 600 /swapfile
+    sudo mkswap /swapfile
+    grep -q '^/swapfile ' /etc/fstab || echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+  fi
+  sudo swapon /swapfile
+  echo "已创建并启用 2G swap"
+else
+  echo "swap 已存在，跳过"
+fi
 # 停止旧项目容器
 docker rm -f douyin-auto-web douyin-auto-scheduler 2>/dev/null || true
 # 备份旧项目目录后删除（data/ 下有 root 所有的文件，需要 sudo）
@@ -66,11 +80,23 @@ docker ps --filter "publish=80" -q | xargs -r docker stop 2>/dev/null || true
 EOF
 
 echo "=== [5/6] 服务器上构建并启动 ==="
-"${SSH_CMD[@]}" "cd $REMOTE_DIR && docker compose build && docker compose up -d"
+# 1.9GB 内存：build 前先停旧容器释放内存，避免 build 期间 OOM
+"${SSH_CMD[@]}" "cd $REMOTE_DIR && docker compose stop backend web && docker compose build && docker compose up -d"
 
 echo "=== [6/6] 健康检查 ==="
-sleep 8
-"${SSH_CMD[@]}" "curl -sf http://localhost/api/health && echo && curl -s -o /dev/null -w '前端 HTTP %{http_code}\n' http://localhost/"
+# whisper 模型加载慢，重试等待后端就绪；超时则报错退出
+"${SSH_CMD[@]}" bash -s <<'EOF'
+ok=0
+for i in $(seq 1 30); do
+  curl -sf http://localhost/api/health && { ok=1; break; } || sleep 2
+done
+echo
+if [ "$ok" -ne 1 ]; then
+  echo "健康检查失败：后端 /api/health 未就绪" >&2
+  exit 1
+fi
+curl -s -o /dev/null -w '前端 HTTP %{http_code}\n' http://localhost/
+EOF
 
 echo ""
 echo "=== 部署完成 ==="

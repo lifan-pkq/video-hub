@@ -4,7 +4,7 @@ import asyncio
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.config import ensure_dirs
+from app.config import CORS_ORIGINS, ensure_dirs
 from app.db import fail_interrupted_recordings
 from app.routers import accounts, download, edit, publish, recordings, sms, stats, videos, watchers
 from app.services import watcher
@@ -13,7 +13,7 @@ app = FastAPI(title="Video Hub", version="1.2.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=CORS_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
 )

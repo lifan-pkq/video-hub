@@ -3,10 +3,14 @@ import json
 import re
 import shutil
 import subprocess
+import threading
 import time
 from pathlib import Path
 
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
+
+# 渲染/AI 分析并发上限（2 核服务器，防多请求同时跑 ffmpeg/whisper 打爆内存）
+render_semaphore = threading.Semaphore(2)
 
 
 def probe_video(path: Path) -> dict:
@@ -78,6 +82,12 @@ def probe_has_audio(path: Path) -> bool:
 
 
 def concat_clips(clips: list[dict], out_path: Path, on_progress=None):
+    """拼接渲染入口：信号量限并发，多请求排队执行。"""
+    with render_semaphore:
+        _concat_clips(clips, out_path, on_progress)
+
+
+def _concat_clips(clips: list[dict], out_path: Path, on_progress=None):
     """按顺序裁剪 + 拼接多个片段为单个 mp4。
 
     clips: [{"path": Path, "start": float, "end": float}]
@@ -170,6 +180,8 @@ def range_stream(path: Path, range_header: str | None):
     start = int(m.group(1)) if m.group(1) else 0
     end = int(m.group(2)) if m.group(2) else file_size - 1
     end = min(end, file_size - 1)
+    if start >= file_size:
+        return Response(status_code=416, headers={"Content-Range": f"bytes */{file_size}"})
     length = end - start + 1
 
     def iterfile():

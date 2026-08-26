@@ -10,3 +10,8 @@ publisher/cookies/*qrcode*.png
 **/.DS_Store
 deploy
 *.md
+ms-playwright
+frontend
+.env
+**/__pycache__
+*.bak.*.tar.gz

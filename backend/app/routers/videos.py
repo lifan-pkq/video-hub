@@ -12,6 +12,9 @@ from app.services.media import make_cover, probe_video, range_stream
 
 router = APIRouter(prefix="/api/videos", tags=["videos"])
 
+# 上传允许的视频扩展名白名单
+ALLOWED_SUFFIXES = {".mp4", ".mov", ".webm", ".mkv", ".flv", ".avi"}
+
 
 def _serialize(v: dict) -> dict:
     return {
@@ -60,18 +63,27 @@ def get_cover(video_id: int):
 async def upload_video(file: UploadFile = File(...), title: str = ""):
     """从本地上传一个视频导入视频库。"""
     ensure_dirs()
-    suffix = Path(file.filename or "video.mp4").suffix or ".mp4"
+    suffix = (Path(file.filename or "video.mp4").suffix or ".mp4").lower()
+    if suffix not in ALLOWED_SUFFIXES:
+        raise HTTPException(400, f"不支持的文件类型（仅支持 {' '.join(sorted(ALLOWED_SUFFIXES))}）")
     safe = re.sub(r'[\\/:*?"<>|#\n\r]', "_", Path(file.filename or "video").stem)[:80] or "video"
     final = VIDEOS_DIR / f"{safe}{suffix}"
     n = 1
     while final.exists():
         final = VIDEOS_DIR / f"{safe}_{n}{suffix}"
         n += 1
+    max_bytes = MAX_UPLOAD_MB * 1024 * 1024
     size = 0
-    with open(final, "wb") as f:
-        while chunk := await file.read(1024 * 1024):
-            f.write(chunk)
-            size += len(chunk)
+    try:
+        with open(final, "wb") as f:
+            while chunk := await file.read(1024 * 1024):
+                size += len(chunk)
+                if size > max_bytes:
+                    raise HTTPException(413, f"文件超过大小上限（{MAX_UPLOAD_MB}MB）")
+                f.write(chunk)
+    except Exception:
+        final.unlink(missing_ok=True)  # 删除半成品文件
+        raise
     meta = probe_video(final)
     cover_name = final.stem + ".jpg"
     cover = cover_name if make_cover(final, COVERS_DIR / cover_name) else None

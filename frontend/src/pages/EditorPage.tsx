@@ -535,14 +535,19 @@ export default function EditorPage() {
         <div className="flex min-w-0 flex-1 flex-col gap-4">
           <Panel pad="sm">
             <div className="flex items-center justify-center rounded-lg bg-black" style={{ minHeight: 240 }}>
-              {clips.length === 0 ? (
+              {clips.length === 0 && (
                 <div className="flex h-[240px] flex-col items-center justify-center gap-2 text-ink-3">
                   <FilmSlate size={30} />
                   <span className="text-sm">从左侧素材库添加片段开始剪辑</span>
                 </div>
-              ) : (
-                <video ref={videoRef} playsInline className="max-h-[46vh] w-full rounded-lg object-contain" />
               )}
+              {/* 常挂载：保证 loadedmetadata/timeupdate 监听器总能绑定（无片段时隐藏） */}
+              <video
+                ref={videoRef}
+                playsInline
+                hidden={clips.length === 0}
+                className="max-h-[46vh] w-full rounded-lg object-contain"
+              />
             </div>
             <div className="mt-2.5 flex items-center gap-3">
               <Button size="sm" icon={<SkipBack size={14} />} onClick={() => setPlayhead(0)} disabled={clips.length === 0}>

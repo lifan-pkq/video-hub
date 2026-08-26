@@ -42,6 +42,15 @@ USE_XVFB = os.environ.get("VIDEO_HUB_XVFB", "").lower() in ("1", "true", "yes") 
 PUBLISH_TIMEOUT = int(os.environ.get("VIDEO_HUB_PUBLISH_TIMEOUT", "900"))
 DOWNLOAD_TIMEOUT = int(os.environ.get("VIDEO_HUB_DOWNLOAD_TIMEOUT", "600"))
 
+# CORS 允许的源（逗号分隔；前端默认由同源 nginx 服务，仅本地开发需要跨域）
+CORS_ORIGINS = [o.strip() for o in os.environ.get(
+    "VIDEO_HUB_CORS_ORIGINS",
+    "http://localhost:5173,http://127.0.0.1:5173",
+).split(",") if o.strip()]
+
+# 本地上传文件大小上限（MB）
+MAX_UPLOAD_MB = int(os.environ.get("VIDEO_HUB_MAX_UPLOAD_MB", "4096"))
+
 # AI 智能剪辑（字幕分析用 LLM，OpenAI 兼容协议，可换 Agnes/DeepSeek/通义/小米 MiMo）
 AI_BASE_URL = os.environ.get("VIDEO_HUB_AI_BASE_URL", "https://api.xiaomimimo.com/v1")
 AI_API_KEY = os.environ.get("VIDEO_HUB_AI_API_KEY", "")

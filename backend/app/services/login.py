@@ -57,9 +57,13 @@ def start_login(platform: str, account: str) -> dict:
         if USE_XVFB and shutil.which("xvfb-run"):
             cmd = ["xvfb-run", "-a", *cmd]
         log_f = open(d / "process.log", "wb")
-        proc = subprocess.Popen(cmd, cwd=str(PUBLISHER_DIR),
-                                stdout=log_f, stderr=subprocess.STDOUT,
-                                stdin=subprocess.DEVNULL)
+        try:
+            proc = subprocess.Popen(cmd, cwd=str(PUBLISHER_DIR),
+                                    stdout=log_f, stderr=subprocess.STDOUT,
+                                    stdin=subprocess.DEVNULL)
+        except Exception:
+            log_f.close()
+            raise
         _sessions[session_id] = {
             "platform": platform, "account": account,
             "proc": proc, "log_f": log_f,

@@ -14,6 +14,7 @@ class Task:
         self.logs: list[str] = []
         self.result: dict = {}       # download → video 信息；publish → 各平台结果
         self.needs_verify = False    # 抖音发布触发短信验证，等待用户输入验证码
+        self.cancelled = False       # 超时取消标志（下载线程的 progress hook 检查它）
         self.created_at = time.strftime("%Y-%m-%d %H:%M:%S")
         self.finished_at = None
 
@@ -53,9 +54,12 @@ class TaskManager:
         t = Task(type_, title)
         with self._lock:
             self._tasks[t.id] = t
-            # 只保留最近 200 个任务
+            # 只保留最近 200 个任务（进行中的任务不淘汰）
             if len(self._tasks) > 200:
-                for old in sorted(self._tasks.values(), key=lambda x: x.created_at)[:-200]:
+                done = sorted((t for t in self._tasks.values()
+                               if t.status not in ("pending", "running")),
+                              key=lambda x: x.created_at)
+                for old in done[:len(self._tasks) - 200]:
                     self._tasks.pop(old.id, None)
         return t
 

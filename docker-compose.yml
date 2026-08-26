@@ -1,3 +1,10 @@
+# 日志轮转：单文件 10MB、保留 3 份，防止磁盘被日志打满
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: 10m
+    max-file: "3"
+
 services:
   backend:
     build:
@@ -5,6 +12,18 @@ services:
       dockerfile: backend/Dockerfile
     container_name: video-hub-backend
     restart: unless-stopped
+    # 1.9GB 小内存机：限制内存，给系统留余量
+    mem_limit: 1400m
+    # chromium 容器化必需，默认 64MB /dev/shm 会随机崩
+    shm_size: 512m
+    logging: *default-logging
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      # whisper 模型加载慢，多给启动宽限
+      start_period: 60s
     volumes:
       - ./data:/app/data
       - ./publisher/cookies:/opt/publisher/cookies
@@ -16,7 +35,8 @@ services:
       VIDEO_HUB_AI_BASE_URL: ${VIDEO_HUB_AI_BASE_URL:-https://api.xiaomimimo.com/v1}
       VIDEO_HUB_AI_API_KEY: ${VIDEO_HUB_AI_API_KEY:-}
       VIDEO_HUB_AI_MODEL: ${VIDEO_HUB_AI_MODEL:-mimo-v2.5}
-      VIDEO_HUB_WHISPER_MODEL: ${VIDEO_HUB_WHISPER_MODEL:-small}
+      # 小内存机默认 base 模型；内存富余可升回 small（识别更准但更吃内存）
+      VIDEO_HUB_WHISPER_MODEL: ${VIDEO_HUB_WHISPER_MODEL:-base}
       # whisper 模型下载走国内镜像；缓存挂到 data 卷持久化；xet 与镜像站不兼容需禁用
       HF_ENDPOINT: ${HF_ENDPOINT:-https://hf-mirror.com}
       HF_HUB_CACHE: /app/data/.hf_cache

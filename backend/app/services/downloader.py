@@ -56,12 +56,29 @@ def parse_video(text: str) -> dict:
     }
 
 
+# 部分 yt-dlp 版本无 DownloadCancelled，回退到基类
+DownloadCancelled = getattr(yt_dlp.utils, "DownloadCancelled", yt_dlp.utils.YoutubeDLError)
+
+
 def _progress_hook(task, info: dict):
+    # 超时分支会置 cancelled 标志，这里中断仍在运行的下载线程
+    if getattr(task, "cancelled", False):
+        raise DownloadCancelled("下载已超时取消")
     if info.get("status") == "downloading":
         total = info.get("total_bytes") or info.get("total_bytes_estimate") or 0
         done = info.get("downloaded_bytes") or 0
         if total:
             task.progress = min(done / total * 100, 99.0)
+
+
+def _cleanup_partial_files():
+    """清理超时取消残留的 yt-dlp 临时文件（.part / .ytdl），防止孤儿文件。"""
+    for pattern in ("*.part", "*.ytdl"):
+        for p in TMP_DIR.glob(pattern):
+            try:
+                p.unlink()
+            except OSError:
+                pass
 
 
 def _do_download(task, text: str) -> tuple[Path, dict]:
@@ -85,11 +102,15 @@ def _do_download(task, text: str) -> tuple[Path, dict]:
             downloaded = downloaded.with_suffix(".mp4")
 
     title = (info.get("title") or "未命名视频").strip()
-    safe_title = re.sub(r'[\\/:*?"<>|#\n\r]', "_", title)[:80].strip("_") or f"video_{info.get('id')}"
-    final_name = f"{safe_title}_{info.get('id')}.mp4"
-    final_path = VIDEOS_DIR / final_name
+    # 视频 id 消毒后拼入文件名，防路径穿越
+    vid = re.sub(r'[^A-Za-z0-9_-]', '_', str(info.get('id') or ''))[:64] or "video"
+    safe_title = re.sub(r'[\\/:*?"<>|#\n\r]', "_", title)[:80].strip("_") or f"video_{vid}"
+    final_path = VIDEOS_DIR / f"{safe_title}_{vid}.mp4"
     if final_path.exists():
-        final_path = VIDEOS_DIR / f"{safe_title}_{info.get('id')}_{task.id}.mp4"
+        final_path = VIDEOS_DIR / f"{safe_title}_{vid}_{task.id}.mp4"
+    final_path = final_path.resolve()
+    if VIDEOS_DIR.resolve() not in final_path.parents:
+        raise RuntimeError("非法的下载文件名（路径越界）")
     downloaded.replace(final_path)
     return final_path, info
 
@@ -128,7 +149,10 @@ async def run_download(task, text: str):
             asyncio.to_thread(_do_download, task, text), timeout=DOWNLOAD_TIMEOUT
         )
     except asyncio.TimeoutError:
+        # 置取消标志：progress hook 在下载线程里抛异常中断 yt-dlp
+        task.cancelled = True
         task.log(f"下载超时（{DOWNLOAD_TIMEOUT}s）")
+        _cleanup_partial_files()
         task.finish("failed")
         return
     except Exception as e:

@@ -327,6 +327,37 @@ export async function submitVerifyCode(
   return data
 }
 
+// ================= 作者作品 =================
+
+/** 作者主页解析出的单条作品 */
+export interface AuthorWork {
+  id: string
+  title: string
+  cover_url: string | null
+  url: string
+  duration: number | null
+  like_count: number | null
+  /** 发布时间戳（秒） */
+  create_time: number | null
+}
+
+/** POST /author/parse 响应 */
+export interface AuthorWorksResult {
+  author: {
+    name: string
+    avatar: string | null
+    url: string
+    platform: string
+  }
+  works: AuthorWork[]
+}
+
+/** 解析作者主页作品列表（浏览器抓取，可能耗时 30-90 秒，超时放宽到 130s；429 = 另一个抓取进行中） */
+export async function parseAuthorWorks(text: string): Promise<AuthorWorksResult> {
+  const { data } = await http.post<AuthorWorksResult>('/author/parse', { text }, { timeout: 130000 })
+  return data
+}
+
 // ================= 发布 =================
 
 export async function publishVideo(payload: PublishPayload): Promise<{ task_id: string }> {

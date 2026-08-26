@@ -49,8 +49,8 @@ async def download_batch(req: BatchDownloadRequest):
     texts = [t.strip() for t in req.texts if t.strip()]
     if not texts:
         raise HTTPException(400, "至少提供一条链接")
-    if len(texts) > 20:
-        raise HTTPException(400, "单次最多 20 条")
+    if len(texts) > 100:
+        raise HTTPException(400, "单次最多 100 条")
     task_ids = []
     for i, text in enumerate(texts):
         task = task_manager.create("download", f"[{i + 1}/{len(texts)}] {text[:56]}")

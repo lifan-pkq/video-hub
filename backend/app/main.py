@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import CORS_ORIGINS, ensure_dirs
 from app.db import fail_interrupted_recordings
-from app.routers import accounts, download, edit, publish, recordings, sms, stats, videos, watchers
+from app.routers import accounts, author, download, edit, publish, recordings, sms, stats, videos, watchers
 from app.services import watcher
 
 app = FastAPI(title="Video Hub", version="1.2.0")
@@ -27,6 +27,7 @@ app.include_router(recordings.router)
 app.include_router(sms.router)
 app.include_router(stats.router)
 app.include_router(watchers.router)
+app.include_router(author.router)
 
 
 @app.on_event("startup")

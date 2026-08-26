@@ -57,6 +57,16 @@ def make_ytdlp_cookiefile(platform: str, account: str = PUBLISH_ACCOUNT) -> Path
     return out
 
 
+def storage_state_to_requests_cookies(platform: str, account: str = PUBLISH_ACCOUNT) -> dict:
+    """把 storage_state 的 cookies 转成 requests 可用的 {name: value} dict；源文件不存在返回空 dict。"""
+    src = cookie_path(platform, account)
+    if not src.exists():
+        return {}
+    with open(src, encoding="utf-8") as f:
+        state = json.load(f)
+    return {c["name"]: c["value"] for c in state.get("cookies", []) if c.get("name")}
+
+
 def save_cookie(platform: str, content: bytes, account: str = PUBLISH_ACCOUNT) -> Path:
     """保存用户上传的 storage_state JSON，并使之对应的 netscape 缓存失效。"""
     if not valid_account_name(account):

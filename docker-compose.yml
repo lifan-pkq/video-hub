@@ -11,6 +11,7 @@ services:
       context: .
       dockerfile: backend/Dockerfile
     container_name: video-hub-backend
+    init: true  # tini 作为 PID 1 收割僵尸进程（chromium 被杀后残留 zombie）
     restart: unless-stopped
     # 1.9GB 小内存机：限制内存，给系统留余量
     mem_limit: 1400m

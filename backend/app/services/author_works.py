@@ -159,7 +159,7 @@ def _bili_prepare_session(mid: str) -> tuple[requests.Session, dict]:
 def _bili_get_json(session: requests.Session, url: str, params: dict, headers: dict) -> dict:
     """调 B站接口并处理风控（412/-352 是间歇性的，实测同一参数重试几次可过）。"""
     code = None
-    for attempt in range(6):  # 首次 + 最多 5 次重试
+    for attempt in range(8):  # 首次 + 最多 7 次重试（风控为概率拦截，实测重试可过）
         if attempt:
             time.sleep(3)
             if attempt % 2 == 0:  # 隔次换票据，避免换票过频反而触发风控
@@ -208,10 +208,17 @@ def _bilibili_works(author: dict) -> dict:
     works: list[dict] = []
     author_name = ""
     pn = 1
-    while len(works) < MAX_WORKS:
+    deadline = time.time() + 90  # 分页总时长熔断：超时返回已抓到的部分（路由上限 120s）
+    while len(works) < MAX_WORKS and time.time() < deadline:
         params = _wbi_sign({"mid": mid, "pn": pn, "ps": 30, "order": "pubdate",
                             "platform": "web", "web_location": 1550101})
-        data = _bili_get_json(session, api, params, headers)
+        try:
+            data = _bili_get_json(session, api, params, headers)
+        except ValueError:
+            if works:
+                # 翻页中途被风控：返回已抓到的部分，不让整个请求失败
+                break
+            raise
         body = data.get("data") or {}
         vlist = (body.get("list") or {}).get("vlist") or []
         for v in vlist:
@@ -236,7 +243,7 @@ def _bilibili_works(author: dict) -> dict:
         if not vlist or pn * 30 >= total:
             break
         pn += 1
-        time.sleep(1.5)  # 请求间隔防风控（风控敏感接口，宁慢勿封）
+        time.sleep(3)  # 请求间隔防风控（风控敏感接口，宁慢勿封）
     return {
         "author": {
             "name": author_name or PLATFORM_NAMES["bilibili"],

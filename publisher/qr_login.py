@@ -131,10 +131,13 @@ def main() -> int:
             # B站走 TV 端官方 API（同步阻塞），不启动浏览器
             return await asyncio.to_thread(bilibili_qr_login, account_file, args.qr_path, status)
         headless = not args.headed
+        # 浏览器实况截图路径：与 status 文件同目录，供 web 端展示页面真实状态
+        screenshot_path = str(args.status_file.parent / "screenshot.png")
         if args.platform == "douyin":
             from uploader.douyin_uploader.main import douyin_setup
             return await douyin_setup(str(account_file), handle=True, return_detail=True,
-                                      qrcode_callback=on_qrcode, headless=headless)
+                                      qrcode_callback=on_qrcode, headless=headless,
+                                      screenshot_path=screenshot_path)
         if args.platform == "xiaohongshu":
             from uploader.xiaohongshu_uploader.main import xiaohongshu_setup
             return await xiaohongshu_setup(str(account_file), handle=True, return_detail=True,

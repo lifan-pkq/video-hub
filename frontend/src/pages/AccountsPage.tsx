@@ -116,6 +116,7 @@ export default function AccountsPage() {
   const [loginError, setLoginError] = useState<string | null>(null)
   const [loginStarting, setLoginStarting] = useState(false)
   const [session, setSession] = useState<LoginSession | null>(null)
+  const [shotTick, setShotTick] = useState(0)
   const pollRef = useRef<number | null>(null)
   const successTimerRef = useRef<number | null>(null)
   const sessionRef = useRef<LoginSession | null>(null)
@@ -156,6 +157,7 @@ export default function AccountsPage() {
       try {
         const s = await fetchLoginStatus(sessionId)
         setSession(s)
+        setShotTick(Date.now())
         if (s.done || s.state === 'success' || s.state === 'failed' || s.state === 'timeout') {
           stopPolling()
           if (s.state === 'success') {
@@ -575,6 +577,20 @@ export default function AccountsPage() {
                   </div>
                 )}
                 <div className="mt-3 text-[13px] text-ink-1">请用对应平台的手机 App 扫码登录</div>
+                {session.platform !== 'bilibili' && (
+                  <div className="mt-4">
+                    <div className="mb-2 text-[12px] text-ink-3">
+                      浏览器实况（2 秒刷新）：手机上确认后这里应跳转到登录后页面；若出现滑块/安全验证请告知
+                    </div>
+                    <img
+                      src={`/api/accounts/login/${session.session_id}/screenshot.png?v=${shotTick}`}
+                      alt="浏览器实况"
+                      className="mx-auto w-full max-w-md rounded-lg border border-line"
+                      onError={(e) => { (e.target as HTMLImageElement).style.visibility = 'hidden' }}
+                      onLoad={(e) => { (e.target as HTMLImageElement).style.visibility = 'visible' }}
+                    />
+                  </div>
+                )}
               </div>
             )}
 

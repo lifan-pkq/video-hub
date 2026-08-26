@@ -9,7 +9,7 @@ from app.config import PLATFORMS, PLATFORM_NAMES
 from app.services.cookies import (cookie_path, delete_cookie, export_cookie_string,
                                   import_cookie_string, list_accounts, save_cookie,
                                   valid_account_name)
-from app.services.login import cancel_login, get_login, qr_file, start_login
+from app.services.login import cancel_login, get_login, qr_file, screenshot_file, start_login
 from app.services.publisher import check_platform
 
 router = APIRouter(prefix="/api/accounts", tags=["accounts"])
@@ -153,6 +153,16 @@ async def login_qr(session_id: str):
     head = qr.read_bytes()[:128].lstrip()
     media = "image/svg+xml" if head.startswith(b"<") else "image/png"
     return FileResponse(str(qr), media_type=media,
+                        headers={"Cache-Control": "no-store"})
+
+
+@router.get("/login/{session_id}/screenshot.png")
+async def login_screenshot(session_id: str):
+    """浏览器实况截图（扫码登录期间引擎周期性保存）。"""
+    shot = screenshot_file(session_id)
+    if not shot:
+        raise HTTPException(404, "暂无截图")
+    return FileResponse(str(shot), media_type="image/png",
                         headers={"Cache-Control": "no-store"})
 
 

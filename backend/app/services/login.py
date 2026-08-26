@@ -130,6 +130,14 @@ def qr_file(session_id: str) -> Path | None:
     return qr if qr.exists() else None
 
 
+def screenshot_file(session_id: str) -> Path | None:
+    """浏览器实况截图（扫码登录时引擎周期性保存，供前端展示页面真实状态）。"""
+    if session_id not in _sessions:
+        return None
+    shot = _session_dir(session_id) / "screenshot.png"
+    return shot if shot.exists() else None
+
+
 def cancel_login(session_id: str) -> bool:
     with _lock:
         s = _sessions.get(session_id)

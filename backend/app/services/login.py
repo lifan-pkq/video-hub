@@ -60,7 +60,8 @@ def start_login(platform: str, account: str) -> dict:
         try:
             proc = subprocess.Popen(cmd, cwd=str(PUBLISHER_DIR),
                                     stdout=log_f, stderr=subprocess.STDOUT,
-                                    stdin=subprocess.DEVNULL)
+                                    stdin=subprocess.DEVNULL,
+                                    start_new_session=True)  # 独立进程组：取消/超时可整树 kill（含 chromium 子进程）
         except Exception:
             log_f.close()
             raise
@@ -73,6 +74,18 @@ def start_login(platform: str, account: str) -> dict:
     return {"session_id": session_id, "platform": platform, "account": account}
 
 
+def _kill_tree(proc: subprocess.Popen):
+    """杀掉整个进程组（python + xvfb + chromium 子进程树），防止浏览器进程泄漏。"""
+    import os
+    import signal
+    if proc.poll() is not None:
+        return
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    except (ProcessLookupError, PermissionError, OSError):
+        proc.kill()
+
+
 def _watch(session_id: str):
     s = _sessions.get(session_id)
     if not s:
@@ -81,7 +94,7 @@ def _watch(session_id: str):
     try:
         proc.wait(timeout=SESSION_TTL)
     except subprocess.TimeoutExpired:
-        proc.kill()
+        _kill_tree(proc)
         proc.wait()
         # 进程被超时杀掉但引擎没写最终状态时补写
         st = _read_status(session_id)
@@ -130,5 +143,5 @@ def cancel_login(session_id: str) -> bool:
             return False
         proc: subprocess.Popen = s["proc"]
         if proc.poll() is None:
-            proc.kill()
+            _kill_tree(proc)
         return True

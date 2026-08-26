@@ -46,6 +46,7 @@ async def _run_sau(task, platform: str, args: list[str]) -> tuple[int, str]:
         cwd=str(PUBLISHER_DIR),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
+        start_new_session=True,  # 独立进程组：超时/取消时整树 kill（含 chromium）
     )
     output: list[str] = []
     assert proc.stdout is not None
@@ -71,7 +72,13 @@ async def _run_sau(task, platform: str, args: list[str]) -> tuple[int, str]:
     try:
         await asyncio.wait_for(_pump(), timeout=PUBLISH_TIMEOUT)
     except asyncio.TimeoutError:
-        proc.kill()
+        # 整组杀：只杀 sau 主进程会遗留 chromium 子进程，1.9GB 内存机上泄漏几个就 OOM
+        import os
+        import signal
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except (ProcessLookupError, PermissionError, OSError):
+            proc.kill()
         await proc.wait()
         task.log(f"[{PLATFORM_NAMES.get(platform, platform)}] 执行超时，已终止")
         return -1, "\n".join(output)

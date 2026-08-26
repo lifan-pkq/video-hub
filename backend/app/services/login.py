@@ -75,15 +75,9 @@ def start_login(platform: str, account: str) -> dict:
 
 
 def _kill_tree(proc: subprocess.Popen):
-    """杀掉整个进程组（python + xvfb + chromium 子进程树），防止浏览器进程泄漏。"""
-    import os
-    import signal
-    if proc.poll() is not None:
-        return
-    try:
-        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-    except (ProcessLookupError, PermissionError, OSError):
-        proc.kill()
+    """杀掉整个进程组（python + xvfb）并收割孤儿 chromium（chromium 会自离进程组）。"""
+    from app.services.proc import kill_tree
+    kill_tree(proc)
 
 
 def _watch(session_id: str):

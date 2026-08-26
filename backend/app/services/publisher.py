@@ -72,18 +72,28 @@ async def _run_sau(task, platform: str, args: list[str]) -> tuple[int, str]:
     try:
         await asyncio.wait_for(_pump(), timeout=PUBLISH_TIMEOUT)
     except asyncio.TimeoutError:
-        # 整组杀：只杀 sau 主进程会遗留 chromium 子进程，1.9GB 内存机上泄漏几个就 OOM
-        import os
-        import signal
-        try:
-            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-        except (ProcessLookupError, PermissionError, OSError):
-            proc.kill()
+        # 整组杀 + 收割孤儿 chromium（chromium 会自离进程组，killpg 杀不到）
+        _kill_sau_tree(proc)
         await proc.wait()
         task.log(f"[{PLATFORM_NAMES.get(platform, platform)}] 执行超时，已终止")
         return -1, "\n".join(output)
     await proc.wait()
     return proc.returncode, "\n".join(output)
+
+
+def _kill_sau_tree(proc):
+    """杀 asyncio 子进程进程组并收割孤儿浏览器（proc 是 asyncio Process，取 pid 操作）。"""
+    import os
+    import signal
+    from app.services.proc import reap_orphan_browsers
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+    except (ProcessLookupError, PermissionError, OSError):
+        try:
+            proc.terminate()
+        except ProcessLookupError:
+            pass
+    reap_orphan_browsers()
 
 
 async def check_platform(platform: str, account: str = PUBLISH_ACCOUNT) -> dict:

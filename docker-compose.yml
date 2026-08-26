@@ -1,0 +1,41 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: video-hub-backend
+    restart: unless-stopped
+    volumes:
+      - ./data:/app/data
+      - ./publisher/cookies:/opt/publisher/cookies
+      - ./ms-playwright:/root/.cache/ms-playwright
+    networks:
+      - video-hub-net
+    environment:
+      # AI 智能剪辑（OpenAI 兼容协议）；key 放服务器 .env，不进代码库
+      VIDEO_HUB_AI_BASE_URL: ${VIDEO_HUB_AI_BASE_URL:-https://api.xiaomimimo.com/v1}
+      VIDEO_HUB_AI_API_KEY: ${VIDEO_HUB_AI_API_KEY:-}
+      VIDEO_HUB_AI_MODEL: ${VIDEO_HUB_AI_MODEL:-mimo-v2.5}
+      VIDEO_HUB_WHISPER_MODEL: ${VIDEO_HUB_WHISPER_MODEL:-small}
+      # whisper 模型下载走国内镜像；缓存挂到 data 卷持久化；xet 与镜像站不兼容需禁用
+      HF_ENDPOINT: ${HF_ENDPOINT:-https://hf-mirror.com}
+      HF_HUB_CACHE: /app/data/.hf_cache
+      HF_HUB_DISABLE_XET: "1"
+
+  web:
+    image: nginx:alpine
+    container_name: video-hub-web
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - ./frontend/dist:/usr/share/nginx/html:ro
+      - ./deploy/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - backend
+    networks:
+      - video-hub-net
+
+networks:
+  video-hub-net:
+    driver: bridge

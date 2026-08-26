@@ -1,0 +1,24 @@
+# 敏感数据（绝不提交）
+publisher/cookies/
+data/
+.env
+*.netscape.txt
+
+# 依赖与构建产物
+node_modules/
+frontend/dist/
+.venv/
+**/__pycache__/
+*.pyc
+
+# 运行时与浏览器
+ms-playwright/
+publisher/logs/
+publisher/media/
+publisher/db/
+
+# 系统
+.DS_Store
+
+ms-playwright
+.playwright-mcp/

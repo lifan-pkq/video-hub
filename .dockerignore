@@ -1,0 +1,12 @@
+# 项目根目录 .dockerignore（后端镜像构建上下文）
+.git
+frontend/node_modules
+frontend/dist
+data
+publisher/.venv
+publisher/logs
+publisher/**/__pycache__
+publisher/cookies/*qrcode*.png
+**/.DS_Store
+deploy
+*.md

@@ -1,0 +1,193 @@
+"""媒体工具：ffprobe 探测视频信息、ffmpeg 生成封面/拼接渲染、Range 视频流。两者不存在时静默降级。"""
+import json
+import re
+import shutil
+import subprocess
+import time
+from pathlib import Path
+
+from fastapi.responses import FileResponse, StreamingResponse
+
+
+def probe_video(path: Path) -> dict:
+    """返回 {duration, width, height, has_audio}，失败返回空 dict。"""
+    if not shutil.which("ffprobe"):
+        return {}
+    try:
+        out = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries",
+             "format=duration:stream=codec_type,codec_name,width,height",
+             "-of", "json", str(path)],
+            capture_output=True, text=True, timeout=60,
+        )
+        data = json.loads(out.stdout or "{}")
+        info: dict = {}
+        if data.get("format", {}).get("duration"):
+            info["duration"] = round(float(data["format"]["duration"]), 1)
+        streams = data.get("streams", [])
+        for s in streams:
+            if s.get("codec_type") == "video":
+                info["width"] = s.get("width")
+                info["height"] = s.get("height")
+                break
+        info["has_audio"] = any(s.get("codec_type") == "audio" for s in streams)
+        for s in streams:
+            if s.get("codec_type") == "video":
+                info["codec"] = s.get("codec_name")
+                break
+        return info
+    except Exception:
+        return {}
+
+
+def ensure_h264(path: Path) -> bool:
+    """若视频不是 H.264（浏览器无法解码，如抖音 bytevc1/HEVC），转码为 H.264。
+
+    原地替换文件（音频直接 copy）。已是 H.264 或无 ffmpeg 时不动，返回是否做了转码。
+    """
+    codec = probe_video(path).get("codec")
+    if codec in (None, "h264") or not shutil.which("ffmpeg"):
+        return False
+    tmp = path.with_suffix(".h264tmp.mp4")
+    r = subprocess.run(
+        ["ffmpeg", "-y", "-i", str(path),
+         "-c:v", "libx264", "-crf", "20", "-preset", "veryfast",
+         "-pix_fmt", "yuv420p", "-c:a", "copy", "-movflags", "+faststart", str(tmp)],
+        capture_output=True, timeout=600,
+    )
+    if r.returncode != 0 or not tmp.exists() or tmp.stat().st_size == 0:
+        tmp.unlink(missing_ok=True)
+        raise RuntimeError(f"转码 H.264 失败（原编码 {codec}）：{r.stderr.decode('utf-8', errors='replace')[-200:]}")
+    tmp.replace(path)
+    return True
+
+
+def probe_has_audio(path: Path) -> bool:
+    """是否有音轨（探测失败时按有音轨处理，避免无声误判）。"""
+    if not shutil.which("ffprobe"):
+        return True
+    try:
+        out = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "a",
+             "-show_entries", "stream=index", "-of", "csv=p=0", str(path)],
+            capture_output=True, text=True, timeout=60,
+        )
+        return bool(out.stdout.strip())
+    except Exception:
+        return True
+
+
+def concat_clips(clips: list[dict], out_path: Path, on_progress=None):
+    """按顺序裁剪 + 拼接多个片段为单个 mp4。
+
+    clips: [{"path": Path, "start": float, "end": float}]
+    画布取首段分辨率（上限 1920），其余片段等比缩放居中加黑边；
+    无音轨的片段补静音轨。on_progress(percent) 回调渲染进度。
+    失败抛 RuntimeError。
+    """
+    if not shutil.which("ffmpeg"):
+        raise RuntimeError("服务器未安装 ffmpeg")
+    n = len(clips)
+    first = probe_video(clips[0]["path"])
+    fw, fh = first.get("width") or 1080, first.get("height") or 1920
+    scale = min(1.0, 1920 / max(fw, fh, 1))
+    w, h = max(2, int(fw * scale) // 2 * 2), max(2, int(fh * scale) // 2 * 2)
+
+    cmd = ["ffmpeg", "-y"]
+    filters: list[str] = []
+    total = 0.0
+    for i, c in enumerate(clips):
+        start, end = float(c["start"]), float(c["end"])
+        dur = end - start
+        total += dur
+        cmd += ["-ss", f"{start:.3f}", "-to", f"{end:.3f}", "-i", str(c["path"])]
+        filters.append(
+            f"[{i}:v]scale={w}:{h}:force_original_aspect_ratio=decrease,"
+            f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,fps=30,format=yuv420p,setsar=1[v{i}]"
+        )
+        if probe_has_audio(c["path"]):
+            filters.append(f"[{i}:a]aresample=48000,aformat=channel_layouts=stereo[a{i}]")
+        else:
+            filters.append(f"anullsrc=r=48000:cl=stereo,atrim=duration={dur:.3f}[a{i}]")
+    filters.append("".join(f"[v{i}][a{i}]" for i in range(n)) + f"concat=n={n}:v=1:a=1[v][a]")
+
+    cmd += [
+        "-filter_complex", ";".join(filters),
+        "-map", "[v]", "-map", "[a]",
+        "-c:v", "libx264", "-crf", "20", "-preset", "fast",
+        "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart",
+        "-progress", "pipe:1", "-nostats", "-v", "warning",
+        str(out_path),
+    ]
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    deadline = time.time() + 1800
+    assert proc.stdout is not None
+    while True:
+        line = proc.stdout.readline()
+        if not line:
+            break
+        if line.startswith("out_time_ms=") and on_progress and total > 0:
+            try:
+                us = int(line.split("=", 1)[1].strip())
+                on_progress(min(99.0, us / 1e6 / total * 100))
+            except ValueError:
+                pass
+        if time.time() > deadline:
+            proc.kill()
+            raise RuntimeError("渲染超时（30 分钟）")
+    err = (proc.stderr.read() if proc.stderr else "") or ""
+    if proc.wait() != 0 or not out_path.exists() or out_path.stat().st_size == 0:
+        if out_path.exists():
+            out_path.unlink()
+        raise RuntimeError("渲染失败：" + err[-300:])
+    if on_progress:
+        on_progress(100.0)
+
+
+def make_cover(video_path: Path, cover_path: Path, seek: float = 1.0) -> bool:
+    """截取视频第 seek 秒作为封面 jpg。"""
+    if not shutil.which("ffmpeg"):
+        return False
+    try:
+        subprocess.run(
+            ["ffmpeg", "-y", "-ss", str(seek), "-i", str(video_path),
+             "-frames:v", "1", "-q:v", "3", str(cover_path)],
+            capture_output=True, timeout=120,
+        )
+        return cover_path.exists() and cover_path.stat().st_size > 0
+    except Exception:
+        return False
+
+
+def range_stream(path: Path, range_header: str | None):
+    """支持 Range 的视频流响应（拖动进度条/边录边看都靠它）。"""
+    file_size = path.stat().st_size
+    if not range_header:
+        return FileResponse(path, media_type="video/mp4")
+    m = re.match(r"bytes=(\d*)-(\d*)", range_header)
+    if not m:
+        return FileResponse(path, media_type="video/mp4")
+    start = int(m.group(1)) if m.group(1) else 0
+    end = int(m.group(2)) if m.group(2) else file_size - 1
+    end = min(end, file_size - 1)
+    length = end - start + 1
+
+    def iterfile():
+        with open(path, "rb") as f:
+            f.seek(start)
+            remaining = length
+            while remaining > 0:
+                chunk = f.read(min(1024 * 1024, remaining))
+                if not chunk:
+                    break
+                remaining -= len(chunk)
+                yield chunk
+
+    return StreamingResponse(
+        iterfile(), status_code=206, media_type="video/mp4",
+        headers={
+            "Content-Range": f"bytes {start}-{end}/{file_size}",
+            "Accept-Ranges": "bytes",
+            "Content-Length": str(length),
+        },
+    )

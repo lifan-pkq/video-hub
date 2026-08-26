@@ -92,13 +92,13 @@ async def cookie_auth(account_file):
     return False
 
 
-async def douyin_setup(account_file, handle=False, return_detail=False, qrcode_callback=None, headless: bool = LOCAL_CHROME_HEADLESS, cdp_url: str | None = None, screenshot_path: str | None = None):
+async def douyin_setup(account_file, handle=False, return_detail=False, qrcode_callback=None, headless: bool = LOCAL_CHROME_HEADLESS, cdp_url: str | None = None, screenshot_path: str | None = None, use_stealth: bool = True):
     if not os.path.exists(account_file) or not await cookie_auth(account_file):
         if not handle:
             result = _build_login_result(False, "cookie_invalid", "cookie文件不存在或已失效", account_file)
             return result if return_detail else False
         douyin_logger.info(_msg("🥹", "cookie 失效了，准备打开浏览器重新登录"))
-        result = await douyin_cookie_gen(account_file, qrcode_callback=qrcode_callback, headless=headless, cdp_url=cdp_url, screenshot_path=screenshot_path)
+        result = await douyin_cookie_gen(account_file, qrcode_callback=qrcode_callback, headless=headless, cdp_url=cdp_url, screenshot_path=screenshot_path, use_stealth=use_stealth)
         return result if return_detail else result["success"]
 
     result = _build_login_result(True, "cookie_valid", "cookie有效", account_file)
@@ -254,6 +254,7 @@ async def douyin_cookie_gen(
     headless: bool = LOCAL_CHROME_HEADLESS,
     cdp_url: str | None = None,
     screenshot_path: str | None = None,
+    use_stealth: bool = True,
 ):
     async with async_playwright() as playwright:
         if cdp_url:

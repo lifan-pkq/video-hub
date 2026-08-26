@@ -137,7 +137,8 @@ def main() -> int:
             from uploader.douyin_uploader.main import douyin_setup
             return await douyin_setup(str(account_file), handle=True, return_detail=True,
                                       qrcode_callback=on_qrcode, headless=headless,
-                                      screenshot_path=screenshot_path)
+                                      screenshot_path=screenshot_path,
+                                      use_stealth=False)  # stealth 会被抖音识别并撑破页面/触发风控，扫码登录不用它
         if args.platform == "xiaohongshu":
             from uploader.xiaohongshu_uploader.main import xiaohongshu_setup
             return await xiaohongshu_setup(str(account_file), handle=True, return_detail=True,

@@ -124,22 +124,63 @@ def _wbi_sign(params: dict) -> dict:
     return params
 
 
-def _bili_get_json(url: str, params: dict, headers: dict) -> dict:
-    """调 B站接口并处理风控码（-352/-412 重试 2 次，间隔 2s）。"""
+def _bili_get_ticket(session: requests.Session) -> None:
+    """申请 bili_ticket（匿名风控票据）写入 session cookie，显著降低 -352/412 概率。"""
+    import hmac
+    ts = int(time.time())
+    hexsign = hmac.new(b"XgwSnGZ1p", f"ts{ts}".encode(), hashlib.sha256).hexdigest()
+    r = session.post(
+        "https://api.bilibili.com/bapis/bilibili.api.ticket.v1.Ticket/GenWebTicket",
+        params={"key_id": "ec02", "hexsign": hexsign, "context[ts]": ts, "csrf": ""},
+        headers={"Referer": "https://www.bilibili.com/"}, timeout=15)
+    ticket = (r.json().get("data") or {}).get("ticket")
+    if ticket:
+        session.cookies.set("bili_ticket", ticket, domain=".bilibili.com")
+
+
+def _bili_prepare_session(mid: str) -> tuple[requests.Session, dict]:
+    """构建带匿名风控 cookie（buvid3 + bili_ticket）与完整浏览器请求头的会话。"""
+    headers = {
+        "User-Agent": BROWSER_UA,
+        "Referer": f"https://space.bilibili.com/{mid}",
+        "Origin": "https://space.bilibili.com",
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "zh-CN,zh;q=0.9",
+    }
+    session = requests.Session()
+    try:
+        session.get("https://www.bilibili.com/", headers=headers, timeout=15)  # 拿 buvid3/b_nut
+        _bili_get_ticket(session)
+    except requests.RequestException:
+        pass
+    return session, headers
+
+
+def _bili_get_json(session: requests.Session, url: str, params: dict, headers: dict) -> dict:
+    """调 B站接口并处理风控（HTTP 412 / code -352/-412：重新申请 ticket 后退避重试）。"""
     code = None
-    for attempt in range(3):  # 首次 + 最多 2 次重试
-        r = requests.get(url, params=params, headers=headers, timeout=15)
+    for attempt in range(4):  # 首次 + 最多 3 次重试
+        if attempt:
+            time.sleep(2 + attempt)  # 递增退避
+            try:
+                _bili_get_ticket(session)  # 换票据再试
+            except requests.RequestException:
+                pass
+        r = session.get(url, params=params, headers=headers, timeout=15)
+        if r.status_code == 412:  # IP/请求头风控，换票据重试
+            continue
         r.raise_for_status()
         data = r.json()
         code = data.get("code", 0)
         if code == 0:
             return data
-        if code in _BILI_RISK_CODES and attempt < 2:
-            time.sleep(2)
+        if code in _BILI_RISK_CODES:
             continue
         break
     if code in _BILI_RISK_CODES:
         raise ValueError("B站风控拦截，请稍后重试或到「平台账号」页配置 B站 cookie")
+    if code is None:
+        raise ValueError("B站风控拦截（412），请稍后重试或到「平台账号」页配置 B站 cookie")
     raise RuntimeError(f"B站接口返回错误（code={code}）：{(data.get('message') or '').strip() or '未知错误'}")
 
 
@@ -161,18 +202,15 @@ def _bilibili_works(author: dict) -> dict:
     """wbi 签名分页拉作者全部投稿（上限 MAX_WORKS 条），免登录无需 cookie。"""
     m = re.search(r"space\.bilibili\.com/(\d+)", author["url"])
     mid = m.group(1)
-    headers = {
-        "User-Agent": BROWSER_UA,
-        "Referer": f"https://space.bilibili.com/{mid}",
-        "Origin": "https://space.bilibili.com",
-    }
+    session, headers = _bili_prepare_session(mid)
     api = "https://api.bilibili.com/x/space/wbi/arc/search"
     works: list[dict] = []
     author_name = ""
     pn = 1
     while len(works) < MAX_WORKS:
-        params = _wbi_sign({"mid": mid, "pn": pn, "ps": 30, "order": "pubdate"})
-        data = _bili_get_json(api, params, headers)
+        params = _wbi_sign({"mid": mid, "pn": pn, "ps": 30, "order": "pubdate",
+                            "platform": "web", "web_location": 1550101})
+        data = _bili_get_json(session, api, params, headers)
         body = data.get("data") or {}
         vlist = (body.get("list") or {}).get("vlist") or []
         for v in vlist:
@@ -197,7 +235,7 @@ def _bilibili_works(author: dict) -> dict:
         if not vlist or pn * 30 >= total:
             break
         pn += 1
-        time.sleep(0.5)  # 请求间隔防风控
+        time.sleep(1.5)  # 请求间隔防风控（风控敏感接口，宁慢勿封）
     return {
         "author": {
             "name": author_name or PLATFORM_NAMES["bilibili"],

@@ -157,17 +157,18 @@ def _bili_prepare_session(mid: str) -> tuple[requests.Session, dict]:
 
 
 def _bili_get_json(session: requests.Session, url: str, params: dict, headers: dict) -> dict:
-    """调 B站接口并处理风控（HTTP 412 / code -352/-412：重新申请 ticket 后退避重试）。"""
+    """调 B站接口并处理风控（412/-352 是间歇性的，实测同一参数重试几次可过）。"""
     code = None
-    for attempt in range(4):  # 首次 + 最多 3 次重试
+    for attempt in range(6):  # 首次 + 最多 5 次重试
         if attempt:
-            time.sleep(2 + attempt)  # 递增退避
-            try:
-                _bili_get_ticket(session)  # 换票据再试
-            except requests.RequestException:
-                pass
+            time.sleep(3)
+            if attempt % 2 == 0:  # 隔次换票据，避免换票过频反而触发风控
+                try:
+                    _bili_get_ticket(session)
+                except requests.RequestException:
+                    pass
         r = session.get(url, params=params, headers=headers, timeout=15)
-        if r.status_code == 412:  # IP/请求头风控，换票据重试
+        if r.status_code == 412:
             continue
         r.raise_for_status()
         data = r.json()

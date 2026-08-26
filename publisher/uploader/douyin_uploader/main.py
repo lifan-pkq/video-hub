@@ -265,7 +265,11 @@ async def douyin_cookie_gen(
             browser = await playwright.chromium.launch(headless=headless, channel="chromium")
             context = await browser.new_context()
             should_close_context = True
-        context = await set_init_script(context)
+        # 注意：抖音创作者中心能识别 stealth.min.js 的特征并把页面容器撑成 4000px 宽
+        # （登录卡被挤出可视区，页面留白，且大概率伴随风控导致扫码确认不生效）。
+        # patchright 本身已处理 webdriver/CDP 痕迹，扫码登录场景下应关闭 stealth。
+        if use_stealth:
+            context = await set_init_script(context)
         qrcode_path = None
         result = _build_login_result(False, "failed", "抖音登录失败", account_file)
         try:

@@ -1,74 +1,45 @@
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react'
-import { Link, useLocation, useSearchParams } from 'react-router-dom'
-import { CalendarBlank, Clock, MagnifyingGlass, VideoCamera, X } from '@phosphor-icons/react'
-import {
-  Alert,
-  Button,
-  Checkbox,
-  DateTimeInput,
-  EmptyState,
-  Input,
-  Modal,
-  PageHeader,
-  Panel,
-  PlatformIcon,
-  Segment,
-  Select,
-  Tag,
-  TextArea,
-  toast,
-} from '../ui'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { useLocation, useSearchParams } from 'react-router-dom'
+import { ArrowLeft, ArrowRight } from '@phosphor-icons/react'
+import { Button, PageHeader, Panel, toast } from '../ui'
 import {
   errorMessage,
   fetchAccounts,
-  fetchPublishRecords,
   fetchTask,
   fetchVideos,
-  formatDuration,
-  formatTime,
-  PLATFORMS,
-  platformLabel,
   publishVideo,
   submitVerifyCode,
   type Account,
-  type PublishRecord,
   type Task,
   type Video,
 } from '../api'
-import StatusBadge from '../components/StatusBadge'
-import TaskLogs from '../components/TaskLogs'
+import WizardSteps from '../components/WizardSteps'
+import PublishVideoStep from '../components/PublishVideoStep'
+import PublishCopyStep, { TITLE_MAX } from '../components/PublishCopyStep'
+import PublishAccountsStep from '../components/PublishAccountsStep'
+import PublishConfirmStep, { type PublishMode } from '../components/PublishConfirmStep'
+import PublishResult from '../components/PublishResult'
+import PublishVerifyModal from '../components/PublishVerifyModal'
+import PublishRecords from '../components/PublishRecords'
 
-const TITLE_MAX = 55
 const FINISHED = ['success', 'failed', 'partial']
 
-/** "douyin:default" → "抖音 / default" */
-function targetLabel(key: string): string {
-  const i = key.indexOf(':')
-  if (i < 0) return key
-  return `${platformLabel(key.slice(0, i))} / ${key.slice(i + 1)}`
-}
-
-const WEEKDAYS = ['日', '一', '二', '三', '四', '五', '六']
-
-/** 排期分组的日期标题："2026-08-22" → "2026/8/22 星期六" */
-function scheduleDayLabel(day: string): string {
-  const [y, m, d] = day.split('-').map(Number)
-  return `${y}/${m}/${d} 星期${WEEKDAYS[new Date(y, m - 1, d).getDay()]}`
-}
-
-/** 定时时间是否已过（schedule 为本地时间 "YYYY-MM-DD HH:mm"） */
-function scheduleExpired(schedule: string): boolean {
-  return new Date(schedule.replace(' ', 'T')).getTime() < Date.now()
-}
+const STEPS = [
+  { key: 'video', label: '选择视频' },
+  { key: 'copy', label: '填写文案' },
+  { key: 'accounts', label: '选择平台账号' },
+  { key: 'confirm', label: '发布设置与确认' },
+]
 
 export default function PublishPage() {
   const location = useLocation()
   const [searchParams] = useSearchParams()
 
+  const [step, setStep] = useState(0)
+
   const [videos, setVideos] = useState<Video[]>([])
   const [selectedId, setSelectedId] = useState<number | null>(null)
-  /** 视频网格搜索关键词（client-side 按标题过滤） */
-  const [videoQuery, setVideoQuery] = useState('')
+  const [accounts, setAccounts] = useState<Account[]>([])
 
   const [title, setTitle] = useState('')
   const [desc, setDesc] = useState('')
@@ -76,18 +47,19 @@ export default function PublishPage() {
   const [tagInput, setTagInput] = useState('')
   // 选中的发布目标，元素格式 "platform:account"
   const [targets, setTargets] = useState<string[]>([])
-  const [accounts, setAccounts] = useState<Account[]>([])
-  const [schedule, setSchedule] = useState<string>('')
+  const [mode, setMode] = useState<PublishMode>('now')
+  const [schedule, setSchedule] = useState('')
 
   const [publishing, setPublishing] = useState(false)
   const [task, setTask] = useState<Task | null>(null)
   const timerRef = useRef<number | null>(null)
+  /** 发布记录面板的刷新信号（任务终态时递增） */
+  const [recordsKey, setRecordsKey] = useState(0)
 
-  // 短信验证弹窗
+  // 短信验证状态机（迁移自旧发布页，逻辑保持一致）
   const [verifyOpen, setVerifyOpen] = useState(false)
   const [verifyCode, setVerifyCode] = useState('')
   const [verifyBusy, setVerifyBusy] = useState(false)
-  /** waiting = 已提交等待引擎验证；input = 等待用户输入 */
   const [verifyPhase, setVerifyPhase] = useState<'input' | 'waiting'>('input')
   const [verifyRejected, setVerifyRejected] = useState(false)
   /** 用户主动关闭过本次验证弹窗（needs_verify 持续为 true 时不再自动弹出） */
@@ -98,42 +70,30 @@ export default function PublishPage() {
   const verifyConsumedRef = useRef(false)
   const verifySubmittedAtRef = useRef(0)
 
-  const [records, setRecords] = useState<PublishRecord[]>([])
-  const [logRecord, setLogRecord] = useState<PublishRecord | null>(null)
-  // 发布记录筛选（client-side）
-  const [filterPlatform, setFilterPlatform] = useState('')
-  const [filterStatus, setFilterStatus] = useState('')
-  const [filterKeyword, setFilterKeyword] = useState('')
-  // 发布记录区视角：records 表格 / schedule 排期时间线
-  const [recordView, setRecordView] = useState<'records' | 'schedule'>('records')
+  const selectedVideo = videos.find((v) => v.id === selectedId) ?? null
 
-  const loadRecords = useCallback(async () => {
-    try {
-      setRecords(await fetchPublishRecords())
-    } catch {
-      // 记录加载失败不阻塞主流程
-    }
-  }, [])
-
-  // 加载视频列表并处理预选
+  // 加载视频列表并处理预选（?video=ID / ?videoId=ID / location.state.videoId）
   useEffect(() => {
     fetchVideos()
       .then((list) => {
         setVideos(list)
         const stateId = (location.state as { videoId?: number } | null)?.videoId
-        const queryId = searchParams.get('videoId')
+        const queryId = searchParams.get('video') ?? searchParams.get('videoId')
         const preselect = stateId ?? (queryId ? Number(queryId) : null)
         if (preselect && list.some((v) => v.id === preselect)) {
           setSelectedId(preselect)
           const v = list.find((x) => x.id === preselect)
-          if (v && !title) setTitle(v.title.slice(0, TITLE_MAX))
+          if (v) setTitle((t) => t || v.title.slice(0, TITLE_MAX))
         }
       })
       .catch(() => {})
-    loadRecords()
-    // 加载可用账号（仅有 cookie 的账号可发布）
+
+    // 先快速加载账号（cookie 状态），再后台校准 valid/detail（check 较慢，不阻塞）
     fetchAccounts()
-      .then((list) => setAccounts(list.filter((a) => a.cookie_exists)))
+      .then(setAccounts)
+      .catch(() => {})
+    fetchAccounts(true)
+      .then(setAccounts)
       .catch(() => {})
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -143,8 +103,6 @@ export default function PublishPage() {
       if (timerRef.current) window.clearInterval(timerRef.current)
     }
   }, [])
-
-  const selectedVideo = videos.find((v) => v.id === selectedId) ?? null
 
   // 重置短信验证状态机（新任务 / 任务结束时调用）
   const resetVerify = useCallback(() => {
@@ -244,7 +202,7 @@ export default function PublishPage() {
         if (FINISHED.includes(t.status)) {
           if (timerRef.current) window.clearInterval(timerRef.current)
           timerRef.current = null
-          loadRecords()
+          setRecordsKey((k) => k + 1)
           if (t.status === 'success') toast.success('全部账号发布成功')
           else if (t.status === 'partial') toast.warning('部分账号发布失败，请查看结果')
           else toast.error('发布失败，请查看结果与日志')
@@ -255,28 +213,45 @@ export default function PublishPage() {
     }, 1500)
   }
 
-  const addTag = () => {
-    const t = tagInput.trim().replace(/^#/, '')
-    if (t && !tags.includes(t)) setTags([...tags, t])
-    setTagInput('')
+  const handleSelectVideo = (v: Video) => {
+    setSelectedId(v.id)
+    if (!title) setTitle(v.title.slice(0, TITLE_MAX))
   }
 
-  const handlePlatformTargets = (platform: string, values: string[]) => {
-    setTargets((prev) => [...prev.filter((k) => !k.startsWith(`${platform}:`)), ...values])
+  const validateTitle = (): boolean => {
+    if (!title.trim()) {
+      toast.warning('标题必填')
+      return false
+    }
+    if (title.trim().length > TITLE_MAX) {
+      toast.warning(`标题最长 ${TITLE_MAX} 字`)
+      return false
+    }
+    return true
+  }
+
+  const goNext = () => {
+    if (step === 0 && !selectedId) {
+      toast.warning('请先选择一个视频')
+      return
+    }
+    if (step === 1 && !validateTitle()) return
+    if (step === 2 && targets.length === 0) {
+      toast.warning('请至少选择一个账号')
+      return
+    }
+    setStep((s) => Math.min(s + 1, STEPS.length - 1))
   }
 
   const handlePublish = async () => {
     if (!selectedVideo || publishing) return
-    if (!title.trim()) {
-      toast.warning('标题必填')
-      return
-    }
-    if (title.trim().length > TITLE_MAX) {
-      toast.warning(`标题最长 ${TITLE_MAX} 字`)
-      return
-    }
+    if (!validateTitle()) return
     if (targets.length === 0) {
       toast.warning('请至少选择一个账号')
+      return
+    }
+    if (mode === 'schedule' && !schedule) {
+      toast.warning('请选择定时发布时间')
       return
     }
 
@@ -293,12 +268,12 @@ export default function PublishPage() {
         title: title.trim(),
         desc: desc.trim(),
         tags,
-        schedule: schedule || null,
+        schedule: mode === 'schedule' && schedule ? schedule : null,
       })
       const t = await fetchTask(task_id)
       applyTask(t)
       if (!FINISHED.includes(t.status)) startPolling(task_id)
-      else loadRecords()
+      else setRecordsKey((k) => k + 1)
     } catch (e) {
       toast.error(`创建发布任务失败：${errorMessage(e)}`)
     } finally {
@@ -306,493 +281,98 @@ export default function PublishPage() {
     }
   }
 
-  // 每个目标（平台:账号）的状态徽标
-  const targetBadge = (key: string) => {
-    if (!task) return null
-    const result = task.result.targets?.[key]
-    if (result) return <StatusBadge status={result.status} />
-    if (task.status === 'pending') return <StatusBadge status="pending" />
-    if (task.status === 'running') return <StatusBadge status="running" />
-    return <StatusBadge status={task.status} />
-  }
-
-  // 可用账号按平台分组
-  const accountsByPlatform = new Map<string, Account[]>()
-  for (const acc of accounts) {
-    const list = accountsByPlatform.get(acc.platform) ?? []
-    list.push(acc)
-    accountsByPlatform.set(acc.platform, list)
-  }
-
   const busy = task !== null && ['pending', 'running'].includes(task.status)
 
-  // 视频网格搜索过滤（不影响预选逻辑，预选基于完整列表）
-  const videoKeyword = videoQuery.trim().toLowerCase()
-  const filteredVideos = videoKeyword
-    ? videos.filter((v) => v.title.toLowerCase().includes(videoKeyword))
-    : videos
-
-  // 发布记录筛选：平台 + 状态 + 关键词（匹配视频名或发布标题）
-  const recordKeyword = filterKeyword.trim().toLowerCase()
-  const filteredRecords = records.filter((r) => {
-    if (filterPlatform && r.platform !== filterPlatform) return false
-    if (filterStatus && r.status !== filterStatus) return false
-    if (
-      recordKeyword &&
-      !r.video_title.toLowerCase().includes(recordKeyword) &&
-      !r.title.toLowerCase().includes(recordKeyword)
-    ) {
-      return false
-    }
-    return true
-  })
-
-  // 排期视图：筛选后取有定时时间的记录，按时间正序，再按日期（"YYYY-MM-DD"）分组
-  const scheduledRecords = filteredRecords
-    .filter((r) => r.schedule !== null)
-    .sort((a, b) => a.schedule!.localeCompare(b.schedule!))
-  const scheduleGroups = new Map<string, PublishRecord[]>()
-  for (const r of scheduledRecords) {
-    const day = r.schedule!.slice(0, 10)
-    const list = scheduleGroups.get(day) ?? []
-    list.push(r)
-    scheduleGroups.set(day, list)
+  // 再发一条：回到向导第一步，保留表单状态，清空当前任务
+  const handleRestart = () => {
+    if (busy) return
+    setTask(null)
+    resetVerify()
+    setStep(0)
   }
 
   return (
     <div>
-      <PageHeader title="发布视频" desc="选择视频，填写发布信息，一键分发到多个平台账号" />
+      <PageHeader title="发布视频" desc="四步完成多平台分发：选视频 → 写文案 → 选账号 → 确认发布" />
 
-      <div className="grid gap-4 lg:grid-cols-2">
-        {/* 左：视频选择 */}
-        <Panel
-          title="选择视频"
-          extra={
-            <Input
-              allowClear
-              prefix={<MagnifyingGlass size={14} />}
-              placeholder="搜索视频标题"
-              value={videoQuery}
-              onChange={setVideoQuery}
-              className="w-[180px]"
-            />
-          }
-        >
-          {videos.length === 0 ? (
-            <EmptyState
-              icon={<VideoCamera size={28} />}
-              title="暂无视频"
-              desc="请先到视频库上传或下载视频，再回来选择发布"
-            />
-          ) : filteredVideos.length === 0 ? (
-            <EmptyState icon={<MagnifyingGlass size={28} />} title="没有匹配的视频" desc="换个关键词试试" />
-          ) : (
-            <div className="grid max-h-[560px] grid-cols-2 gap-3 overflow-y-auto pr-1 sm:grid-cols-3">
-              {filteredVideos.map((v, i) => (
-                <div
-                  key={v.id}
-                  onClick={() => {
-                    setSelectedId(v.id)
-                    if (!title) setTitle(v.title.slice(0, TITLE_MAX))
-                  }}
-                  className={`enter-item cursor-pointer overflow-hidden rounded-lg ring-2 transition-all ${
-                    selectedId === v.id ? 'ring-accent' : 'ring-transparent hover:ring-line'
-                  }`}
-                  style={{ animationDelay: `${Math.min(i * 50, 400)}ms` }}
-                >
-                  <div className="relative aspect-video bg-fill">
-                    {v.cover_url ? (
-                      <img src={v.cover_url} alt={v.title} loading="lazy" className="h-full w-full object-cover" />
-                    ) : (
-                      <div className="flex h-full items-center justify-center text-ink-4">
-                        <PlatformIcon platform={v.source_platform} size={32} />
-                      </div>
-                    )}
-                    <span className="tnum absolute bottom-1 right-1 rounded bg-black/70 px-1 text-[10px] text-white">
-                      {formatDuration(v.duration)}
-                    </span>
-                  </div>
-                  <span className="block truncate px-1.5 py-1 text-xs text-ink-3" title={v.title}>
-                    {v.title}
-                  </span>
-                </div>
-              ))}
-            </div>
-          )}
-        </Panel>
+      {task ? (
+        <PublishResult task={task} targets={targets} busy={busy} onRestart={handleRestart} />
+      ) : (
+        <Panel>
+          <WizardSteps steps={STEPS} current={step} />
 
-        {/* 右：发布表单 */}
-        <Panel title="发布信息">
-          <div className="space-y-4">
-            <div>
-              <label className="mb-1.5 block text-[13px] text-ink-2">
-                标题 <span className="text-danger">*</span>
-                <span className="ml-2 text-xs text-ink-3">（小红书限制20字以内）</span>
-              </label>
-              <Input
-                value={title}
-                onChange={setTitle}
-                maxLength={TITLE_MAX}
-                placeholder={`必填，最长 ${TITLE_MAX} 字`}
-                suffix={
-                  <span className="tnum text-xs">
-                    {title.length}/{TITLE_MAX}
-                  </span>
-                }
+          <div className="mt-5">
+            {step === 0 && (
+              <PublishVideoStep videos={videos} selectedId={selectedId} onSelect={handleSelectVideo} />
+            )}
+            {step === 1 && (
+              <PublishCopyStep
+                title={title}
+                desc={desc}
+                tags={tags}
+                tagInput={tagInput}
+                onTitleChange={setTitle}
+                onDescChange={setDesc}
+                onTagsChange={setTags}
+                onTagInputChange={setTagInput}
               />
-            </div>
-
-            <div>
-              <label className="mb-1.5 block text-[13px] text-ink-2">简介</label>
-              <TextArea value={desc} onChange={setDesc} rows={3} placeholder="视频简介（可选）" />
-            </div>
-
-            <div>
-              <label className="mb-1.5 block text-[13px] text-ink-2">标签（回车添加）</label>
-              <Input
-                value={tagInput}
-                onChange={setTagInput}
-                placeholder="输入标签后回车"
-                onKeyDown={(e: KeyboardEvent<HTMLInputElement>) => {
-                  if (e.key === 'Enter') {
-                    e.preventDefault()
-                    addTag()
-                  }
-                }}
+            )}
+            {step === 2 && <PublishAccountsStep accounts={accounts} targets={targets} onChange={setTargets} />}
+            {step === 3 && selectedVideo && (
+              <PublishConfirmStep
+                video={selectedVideo}
+                title={title.trim()}
+                desc={desc.trim()}
+                tags={tags}
+                targets={targets}
+                mode={mode}
+                schedule={schedule}
+                onModeChange={setMode}
+                onScheduleChange={setSchedule}
+                publishing={publishing}
+                onSubmit={handlePublish}
               />
-              {tags.length > 0 && (
-                <div className="mt-2 flex flex-wrap gap-2">
-                  {tags.map((t) => (
-                    <Tag key={t} color="blue">
-                      #{t}
-                      <button
-                        type="button"
-                        aria-label={`删除标签 ${t}`}
-                        onClick={() => setTags(tags.filter((x) => x !== t))}
-                        className="-mr-0.5 flex items-center opacity-60 transition-opacity hover:opacity-100"
-                      >
-                        <X size={10} weight="bold" />
-                      </button>
-                    </Tag>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            <div>
-              <label className="mb-1.5 block text-[13px] text-ink-2">发布账号</label>
-              {accountsByPlatform.size === 0 ? (
-                <Alert type="warning">
-                  暂无可用账号（需已配置 cookie），请先到
-                  <Link to="/accounts" className="mx-1 text-accent hover:underline">
-                    平台账号
-                  </Link>
-                  页添加
-                </Alert>
-              ) : (
-                <div className="space-y-2">
-                  {[...accountsByPlatform.entries()].map(([platform, list]) => (
-                    <div key={platform} className="flex items-start gap-3">
-                      <span className="flex w-16 shrink-0 items-center gap-1.5 pt-[5px]">
-                        <PlatformIcon platform={platform} size={16} />
-                        <span className="text-xs text-ink-3">{platformLabel(platform)}</span>
-                      </span>
-                      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-                        {list.map((acc) => {
-                          const key = `${acc.platform}:${acc.account}`
-                          return (
-                            <Checkbox
-                              key={key}
-                              checked={targets.includes(key)}
-                              onChange={(checked: boolean) => {
-                                const current = targets.filter((k) => k.startsWith(`${platform}:`))
-                                handlePlatformTargets(
-                                  platform,
-                                  checked ? [...current, key] : current.filter((k) => k !== key),
-                                )
-                              }}
-                              label={acc.account}
-                            />
-                          )
-                        })}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            <div>
-              <label className="mb-1.5 block text-[13px] text-ink-2">定时发布（留空 = 立即发布）</label>
-              <div className="flex items-center gap-2">
-                <Clock size={15} className="shrink-0 text-ink-3" />
-                <DateTimeInput value={schedule} onChange={setSchedule} className="w-[220px]" />
-                {schedule && (
-                  <Button size="sm" variant="text" onClick={() => setSchedule('')}>
-                    清空
-                  </Button>
-                )}
-              </div>
-            </div>
+            )}
           </div>
 
-          <Button
-            variant="primary"
-            full
-            className="mt-4"
-            loading={publishing}
-            disabled={!selectedVideo || busy}
-            onClick={handlePublish}
-          >
-            {publishing
-              ? '创建任务中…'
-              : busy
-                ? '发布中…'
-                : selectedVideo
-                  ? `发布「${selectedVideo.title.slice(0, 12)}${selectedVideo.title.length > 12 ? '…' : ''}」`
-                  : '请先选择视频'}
-          </Button>
-        </Panel>
-      </div>
-
-      {/* 任务状态 */}
-      {task && (
-        <Panel title="发布进度" className="mt-4">
-          <div className="mb-3 flex items-center gap-2">
-            <StatusBadge status={task.status} />
-            <span className="tnum text-[13px] text-ink-3">{task.progress}%</span>
-            <div className="ml-4 flex flex-wrap items-center gap-3">
-              {targets.map((key) => (
-                <span key={key} className="flex items-center gap-1 text-sm">
-                  {targetLabel(key)} {targetBadge(key)}
-                </span>
-              ))}
-            </div>
+          {/* 步骤导航 */}
+          <div className="mt-5 flex items-center justify-between gap-2 border-t border-line-soft pt-4">
+            <Button
+              variant="ghost"
+              icon={<ArrowLeft size={14} />}
+              disabled={step === 0 || publishing}
+              onClick={() => setStep((s) => Math.max(s - 1, 0))}
+            >
+              上一步
+            </Button>
+            {step < STEPS.length - 1 && (
+              <Button variant="primary" onClick={goNext}>
+                下一步
+                <ArrowRight size={14} />
+              </Button>
+            )}
           </div>
-          {task.result.targets && (
-            <div className="mb-3 space-y-1">
-              {Object.entries(task.result.targets).map(([key, r]) => (
-                <Alert key={key} type={r.status === 'success' ? 'success' : 'error'}>
-                  {`${targetLabel(key)}：${r.message || (r.status === 'success' ? '发布成功' : '发布失败')}`}
-                </Alert>
-              ))}
-            </div>
-          )}
-          <TaskLogs logs={task.logs} />
         </Panel>
       )}
 
-      {/* 发布记录 */}
-      <Panel
-        title="发布记录"
-        className="mt-4"
-        extra={
-          <Segment
-            value={recordView}
-            onChange={(v) => setRecordView(v as 'records' | 'schedule')}
-            options={[
-              { value: 'records', label: '记录' },
-              { value: 'schedule', label: '排期' },
-            ]}
-          />
-        }
-      >
-        <div className="mb-3 flex flex-wrap items-center gap-2">
-          <Select
-            width={120}
-            value={filterPlatform}
-            onChange={setFilterPlatform}
-            options={[
-              { label: '全部平台', value: '' },
-              ...PLATFORMS.map((p) => ({ label: p.label, value: p.key })),
-            ]}
-          />
-          <Select
-            width={120}
-            value={filterStatus}
-            onChange={setFilterStatus}
-            options={[
-              { label: '全部状态', value: '' },
-              { label: '成功', value: 'success' },
-              { label: '失败', value: 'failed' },
-              { label: '运行中', value: 'running' },
-            ]}
-          />
-          <Input
-            allowClear
-            prefix={<MagnifyingGlass size={14} />}
-            placeholder="搜索视频或发布标题"
-            value={filterKeyword}
-            onChange={setFilterKeyword}
-            className="w-[200px]"
-          />
-        </div>
-        {recordView === 'records' ? (
-          <div className="overflow-x-auto">
-            <table className="vh-table">
-              <thead>
-                <tr>
-                  <th className="w-[160px]">时间</th>
-                  <th className="w-[180px]">视频</th>
-                  <th className="w-[96px]">平台</th>
-                  <th className="w-[100px]">账号</th>
-                  <th className="w-[100px]">状态</th>
-                  <th>标题</th>
-                  <th className="w-[90px]">操作</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredRecords.map((r) => (
-                  <tr key={r.id}>
-                    <td>
-                      <span className="tnum text-xs text-ink-3">{formatTime(r.created_at)}</span>
-                      {r.schedule && <span className="tnum block text-xs text-accent">定时 {r.schedule}</span>}
-                    </td>
-                    <td>
-                      <span className="block max-w-[170px] truncate text-xs" title={r.video_title}>
-                        {r.video_title}
-                      </span>
-                    </td>
-                    <td>
-                      <span className="flex items-center gap-1.5">
-                        <PlatformIcon platform={r.platform} size={14} />
-                        <span>{platformLabel(r.platform)}</span>
-                      </span>
-                    </td>
-                    <td>{r.account || '-'}</td>
-                    <td>
-                      <StatusBadge status={r.status} />
-                    </td>
-                    <td>
-                      <span className="block max-w-[220px] truncate" title={r.title}>
-                        {r.title}
-                      </span>
-                    </td>
-                    <td>
-                      <Button size="sm" variant="text" onClick={() => setLogRecord(r)}>
-                        查看日志
-                      </Button>
-                    </td>
-                  </tr>
-                ))}
-                {filteredRecords.length === 0 && (
-                  <tr>
-                    <td colSpan={7}>
-                      {records.length === 0 ? (
-                        <EmptyState title="暂无发布记录" desc="发布任务完成后会在这里展示" />
-                      ) : (
-                        <EmptyState title="没有匹配的记录" desc="调整筛选条件试试" />
-                      )}
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        ) : scheduledRecords.length === 0 ? (
-          <EmptyState
-            icon={<CalendarBlank size={28} />}
-            title="暂无排期"
-            desc="发布视频时选择定时发布时间，就会出现在这里"
-          />
-        ) : (
-          <div className="space-y-4">
-            {[...scheduleGroups.entries()].map(([day, list]) => (
-              <div key={day} className="flex gap-4">
-                <h3 className="section-title w-[132px] shrink-0 pt-2">{scheduleDayLabel(day)}</h3>
-                <div className="min-w-0 flex-1 space-y-3 border-l border-line pl-4">
-                  {list.map((r) => (
-                    <div
-                      key={r.id}
-                      className={`vh-card flex items-center gap-3 p-3 ${scheduleExpired(r.schedule!) ? 'opacity-60' : ''}`}
-                    >
-                      <span className="tnum font-display w-14 shrink-0 text-lg">{r.schedule!.slice(11)}</span>
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate text-[13px]" title={r.video_title}>
-                          {r.video_title}
-                        </span>
-                        <span className="mt-1 flex items-center gap-1.5 text-xs text-ink-3">
-                          <PlatformIcon platform={r.platform} size={14} />
-                          <span className="truncate">{r.account || '-'}</span>
-                        </span>
-                      </span>
-                      <StatusBadge status={r.status} />
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </Panel>
+      {/* 发布记录（保留旧页能力：记录/排期双视角 + 筛选 + 日志） */}
+      <PublishRecords refreshKey={recordsKey} />
 
-      {/* 短信验证弹窗（遮罩不可点关闭，轮询期间保持刷新） */}
-      <Modal
-        title="抖音需要短信验证"
+      {/* 抖音短信验证弹窗 */}
+      <PublishVerifyModal
         open={verifyOpen}
-        maskClosable={false}
+        phase={verifyPhase}
+        rejected={verifyRejected}
+        busy={verifyBusy}
+        code={verifyCode}
+        onCodeChange={setVerifyCode}
+        onSubmit={handleVerifySubmit}
         onClose={() => {
           // 用户暂不操作：本轮 needs_verify 持续期间不再自动弹出
           verifyDismissedRef.current = true
           setVerifyOpen(false)
         }}
-        width={420}
-        footer={
-          verifyPhase === 'input' ? (
-            <Button
-              variant="primary"
-              full
-              loading={verifyBusy}
-              disabled={!verifyCode.trim()}
-              onClick={handleVerifySubmit}
-            >
-              提交验证码
-            </Button>
-          ) : null
-        }
-      >
-        <p className="text-[13px] leading-relaxed text-ink-3">
-          验证码已发送到你的手机，请输入短信中的 6 位数字。提交后引擎会自动填入并继续发布。
-        </p>
-        {verifyRejected && (
-          <Alert type="warning" className="mt-3">
-            上次提交的验证码未通过或已过期，请重新获取后再输入
-          </Alert>
-        )}
-        {verifyPhase === 'waiting' ? (
-          <Alert type="info" className="mt-3">
-            已提交，等待引擎验证…
-          </Alert>
-        ) : (
-          <Input
-            value={verifyCode}
-            onChange={(v: string) => setVerifyCode(v.replace(/\D/g, '').slice(0, 8))}
-            maxLength={8}
-            placeholder="输入验证码"
-            inputMode="numeric"
-            onKeyDown={(e: KeyboardEvent<HTMLInputElement>) => {
-              if (e.key === 'Enter') handleVerifySubmit()
-            }}
-            className="tnum mt-3"
-            autoFocus
-          />
-        )}
-      </Modal>
-
-      {/* 日志弹窗 */}
-      <Modal
-        title={`发布日志 - ${logRecord ? platformLabel(logRecord.platform) : ''}${logRecord ? ` / ${logRecord.account}` : ''}`}
-        open={!!logRecord}
-        onClose={() => setLogRecord(null)}
-        footer={null}
-        width={720}
-      >
-        {logRecord && (
-          <div className="log-box" style={{ maxHeight: 400 }}>
-            {logRecord.log || '（无日志）'}
-          </div>
-        )}
-      </Modal>
+      />
     </div>
   )
 }

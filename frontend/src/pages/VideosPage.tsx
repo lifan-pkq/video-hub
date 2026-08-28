@@ -1,19 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type KeyboardEvent } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
-import { Checks, DownloadSimple, FilmSlate, MagnifyingGlass, Plus, Scissors, VideoCamera } from '@phosphor-icons/react'
+import { Checks, DownloadSimple, MagnifyingGlass, Plus, VideoCamera } from '@phosphor-icons/react'
 import {
   deleteVideo,
   errorMessage,
   fetchVideos,
-  formatDuration,
   formatSize,
   platformLabel,
   renameVideo,
-  trimVideo,
   uploadVideo,
   type Video,
 } from '../api'
-import VideoCard from '../components/VideoCard'
+import LibraryVideoCard from '../components/LibraryVideoCard'
+import VideoPlayerModal from '../components/VideoPlayerModal'
 import {
   Button,
   Checkbox,
@@ -28,20 +27,20 @@ import {
   toast,
 } from '../ui'
 
-type SortKey = 'newest' | 'oldest' | 'largest' | 'longest'
+type SortKey = 'newest' | 'oldest' | 'longest'
 
 const SORT_OPTIONS: { value: SortKey; label: string }[] = [
   { value: 'newest', label: '最新优先' },
   { value: 'oldest', label: '最旧优先' },
-  { value: 'largest', label: '最大文件' },
-  { value: 'longest', label: '最长时长' },
+  { value: 'longest', label: '时长最长' },
 ]
 
-/** 海报墙网格 */
+/** 海报墙网格：移动端 2 列 */
 const GRID_CLASS = 'grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6'
 
-/** 截取快捷区间（秒） */
-const TRIM_PRESETS = [15, 30, 60]
+/** 触屏设备（无 hover）操作条需点击展开 */
+const isCoarsePointer = () =>
+  typeof window !== 'undefined' && window.matchMedia('(hover: none)').matches
 
 export default function VideosPage() {
   const navigate = useNavigate()
@@ -49,8 +48,10 @@ export default function VideosPage() {
   const [videos, setVideos] = useState<Video[]>([])
   const [loading, setLoading] = useState(true)
 
-  const [playing, setPlaying] = useState<Video | null>(null)
+  // 在线播放
+  const [playId, setPlayId] = useState<number | null>(null)
 
+  // 上传
   const [uploading, setUploading] = useState(false)
   const [uploadProgress, setUploadProgress] = useState(0)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -60,7 +61,7 @@ export default function VideosPage() {
   const [sourceFilter, setSourceFilter] = useState('all')
   const [sortBy, setSortBy] = useState<SortKey>('newest')
 
-  // SPA 内从命令面板跳到 /videos?q= 时组件不重挂载，需监听参数变化
+  // SPA 内从命令面板跳到 /library?q= 时组件不重挂载，需监听参数变化
   useEffect(() => {
     const q = searchParams.get('q')
     if (q !== null) setSearch(q)
@@ -70,16 +71,13 @@ export default function VideosPage() {
   const [selecting, setSelecting] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
 
+  // 移动端：点击展开操作条的卡片
+  const [openActionsId, setOpenActionsId] = useState<number | null>(null)
+
   // 重命名
   const [renaming, setRenaming] = useState<Video | null>(null)
   const [renameTitle, setRenameTitle] = useState('')
   const [renameSaving, setRenameSaving] = useState(false)
-
-  // 截取
-  const [trimTarget, setTrimTarget] = useState<Video | null>(null)
-  const [trimStart, setTrimStart] = useState('0')
-  const [trimEnd, setTrimEnd] = useState('')
-  const [trimming, setTrimming] = useState(false)
 
   const load = useCallback(async () => {
     try {
@@ -95,11 +93,22 @@ export default function VideosPage() {
     load()
   }, [load])
 
+  // 点击卡片以外的空白处收起移动端操作条（卡片自身点击由 handleCardClick 处理）
+  useEffect(() => {
+    if (openActionsId === null) return
+    const close = (e: MouseEvent) => {
+      if (!(e.target as HTMLElement | null)?.closest?.('.poster-card')) setOpenActionsId(null)
+    }
+    document.addEventListener('click', close)
+    return () => document.removeEventListener('click', close)
+  }, [openActionsId])
+
+  // ================= 上传 =================
+
   const handleUpload = async (file: File) => {
     setUploading(true)
     setUploadProgress(0)
     try {
-      // 文件名（去掉扩展名）作为默认标题
       const title = file.name.replace(/\.[^.]+$/, '')
       const v = await uploadVideo(file, title, setUploadProgress)
       toast.success(`已上传「${v.title}」`)
@@ -109,6 +118,27 @@ export default function VideosPage() {
     } finally {
       setUploading(false)
     }
+  }
+
+  // ================= 卡片交互 =================
+
+  /** 桌面端点击直接播放；触屏首次点击展开操作条，再次点击播放 */
+  const handleCardClick = (video: Video) => {
+    if (isCoarsePointer() && openActionsId !== video.id) {
+      setOpenActionsId(video.id)
+      return
+    }
+    setOpenActionsId(null)
+    setPlayId(video.id)
+  }
+
+  const handleEdit = (video: Video) => {
+    // 跳剪辑页并预选该视频（query 供刷新/直链场景，state 供当前剪辑页 SPA 内识别）
+    navigate(`/edit?video=${video.id}`, { state: { videoIds: [video.id] } })
+  }
+
+  const handlePublish = (video: Video) => {
+    navigate(`/publish?video=${video.id}`, { state: { videoId: video.id } })
   }
 
   const handleDelete = async (video: Video) => {
@@ -123,7 +153,7 @@ export default function VideosPage() {
     try {
       await deleteVideo(video.id)
       toast.success('已删除')
-      await load()
+      setVideos((prev) => prev.filter((v) => v.id !== video.id))
     } catch (e) {
       toast.error(`删除失败：${errorMessage(e)}`)
     }
@@ -166,7 +196,7 @@ export default function VideosPage() {
     await load()
   }
 
-  // ================= 重命名 / 下载 =================
+  // ================= 重命名 =================
 
   const openRename = (video: Video) => {
     setRenaming(video)
@@ -183,7 +213,6 @@ export default function VideosPage() {
     setRenameSaving(true)
     try {
       const updated = await renameVideo(renaming.id, title)
-      // 本地更新，不必整表刷新
       setVideos((prev) => prev.map((v) => (v.id === updated.id ? { ...v, title: updated.title } : v)))
       toast.success('已重命名')
       setRenaming(null)
@@ -194,65 +223,6 @@ export default function VideosPage() {
     }
   }
 
-  const handleDownload = (video: Video) => {
-    const a = document.createElement('a')
-    a.href = video.file_url
-    a.download = `${video.title}.mp4`
-    document.body.appendChild(a)
-    a.click()
-    a.remove()
-  }
-
-  // ================= 截取 =================
-
-  // ================= AI 智能剪辑 =================
-
-  const handleAiEdit = (video: Video) => {
-    // 跳到剪辑页：该视频自动进时间线并立即开始 AI 分析
-    navigate('/edit', { state: { videoIds: [video.id], autoAnalyze: true } })
-  }
-
-  const openTrim = (video: Video) => {
-    setTrimTarget(video)
-    setTrimStart('0')
-    setTrimEnd(video.duration != null ? String(Math.round(video.duration * 10) / 10) : '')
-  }
-
-  const trimDuration = trimTarget?.duration ?? null
-  const trimStartNum = parseFloat(trimStart)
-  const trimEndNum = parseFloat(trimEnd)
-
-  // 校验：0 ≤ start < end ≤ duration（duration 未知时不校验上限）
-  let trimError = ''
-  if (trimTarget) {
-    if (Number.isNaN(trimStartNum) || Number.isNaN(trimEndNum)) trimError = '请输入有效的秒数'
-    else if (trimStartNum < 0) trimError = '开始时间不能小于 0'
-    else if (trimDuration != null && trimEndNum > trimDuration)
-      trimError = `结束时间不能超过视频时长（${formatDuration(trimDuration)}）`
-    else if (trimStartNum >= trimEndNum) trimError = '开始时间必须小于结束时间'
-  }
-  const trimValid = !!trimTarget && trimError === ''
-
-  const applyTrimPreset = (seconds: number) => {
-    setTrimStart('0')
-    setTrimEnd(String(trimDuration != null ? Math.min(seconds, Math.round(trimDuration * 10) / 10) : seconds))
-  }
-
-  const submitTrim = async () => {
-    if (!trimTarget || !trimValid) return
-    setTrimming(true)
-    try {
-      await trimVideo(trimTarget.id, trimStartNum, trimEndNum)
-      toast.success('已生成截取片段')
-      setTrimTarget(null)
-      await load()
-    } catch (e) {
-      toast.error(`截取失败：${errorMessage(e)}`)
-    } finally {
-      setTrimming(false)
-    }
-  }
-
   // ================= 派生数据 =================
 
   const totalSize = useMemo(() => videos.reduce((sum, v) => sum + v.size, 0), [videos])
@@ -260,7 +230,7 @@ export default function VideosPage() {
   // 来源筛选选项：按列表中实际出现的 source_platform 动态生成
   const sourceOptions = useMemo(() => {
     const keys = Array.from(new Set(videos.map((v) => v.source_platform ?? 'local')))
-    return [{ value: 'all', label: '全部' }, ...keys.map((k) => ({ value: k, label: platformLabel(k) }))]
+    return [{ value: 'all', label: '全部来源' }, ...keys.map((k) => ({ value: k, label: platformLabel(k) }))]
   }, [videos])
 
   const filtered = useMemo(() => {
@@ -274,9 +244,6 @@ export default function VideosPage() {
     switch (sortBy) {
       case 'oldest':
         sorted.sort((a, b) => a.created_at.localeCompare(b.created_at))
-        break
-      case 'largest':
-        sorted.sort((a, b) => b.size - a.size)
         break
       case 'longest':
         sorted.sort((a, b) => (b.duration ?? 0) - (a.duration ?? 0))
@@ -294,22 +261,29 @@ export default function VideosPage() {
     setSelectedIds(allChecked ? new Set() : new Set(filtered.map((v) => v.id)))
   }
 
+  const playTitle = playId !== null ? videos.find((v) => v.id === playId)?.title : undefined
+
   // ================= 渲染 =================
 
   return (
     <div>
       <PageHeader
-        title="视频库"
+        title="素材库"
         desc={`共 ${videos.length} 个视频 · 总大小 ${formatSize(totalSize)}`}
         extra={
-          <Button
-            variant="primary"
-            icon={<Plus size={15} weight="bold" />}
-            loading={uploading}
-            onClick={() => fileInputRef.current?.click()}
-          >
-            上传视频
-          </Button>
+          <>
+            <Link to="/library/import">
+              <Button icon={<DownloadSimple size={15} />}>去导入</Button>
+            </Link>
+            <Button
+              variant="primary"
+              icon={<Plus size={15} weight="bold" />}
+              loading={uploading}
+              onClick={() => fileInputRef.current?.click()}
+            >
+              上传视频
+            </Button>
+          </>
         }
       />
       <input
@@ -324,18 +298,18 @@ export default function VideosPage() {
         }}
       />
 
-      {/* 上传区（常驻紧凑） */}
+      {/* 拖拽上传区（常驻紧凑，保留旧页拖拽能力） */}
       <div className="mb-6 [&_[role=button]]:py-6">
         <Dropzone
           accept="video/*"
           uploading={uploading}
           progress={uploadProgress}
-          tip="支持本地视频文件，上传后可发布到各平台"
+          tip="拖拽视频到此处上传，或在下方素材库中在线播放、剪辑、发布"
           onFile={handleUpload}
         />
       </div>
 
-      {/* 工具栏 */}
+      {/* 工具条 */}
       {selecting ? (
         <div className="mb-4 flex flex-wrap items-center gap-3">
           <span className="text-sm text-ink-2">
@@ -352,7 +326,6 @@ export default function VideosPage() {
           </Button>
           <Button
             size="sm"
-            icon={<FilmSlate size={15} />}
             disabled={selectedIds.size < 2}
             onClick={() =>
               navigate('/edit', { state: { videoIds: filtered.filter((v) => selectedIds.has(v.id)).map((v) => v.id) } })
@@ -372,7 +345,7 @@ export default function VideosPage() {
             placeholder="搜索标题…"
             value={search}
             onChange={setSearch}
-            className="w-[220px]"
+            className="w-full sm:w-[220px]"
           />
           <Select value={sourceFilter} onChange={setSourceFilter} width={120} options={sourceOptions} />
           <Select
@@ -381,7 +354,7 @@ export default function VideosPage() {
             width={120}
             options={SORT_OPTIONS}
           />
-          <Button className="ml-auto" icon={<Checks size={15} />} onClick={() => setSelecting(true)}>
+          <Button className="sm:ml-auto" icon={<Checks size={15} />} onClick={() => setSelecting(true)}>
             多选
           </Button>
         </div>
@@ -398,13 +371,13 @@ export default function VideosPage() {
         <Panel pad="none">
           <EmptyState
             icon={<VideoCamera size={26} />}
-            title="暂无视频"
-            desc="从抖音下载，或上传本地视频"
+            title="素材库还是空的"
+            desc="从导入向导下载平台视频，或上传本地视频，之后即可在线播放、剪辑与发布"
             action={
               <>
-                <Link to="/download">
+                <Link to="/library/import">
                   <Button variant="primary" icon={<DownloadSimple size={15} />}>
-                    去下载视频
+                    去导入视频
                   </Button>
                 </Link>
                 <Button icon={<Plus size={15} />} onClick={() => fileInputRef.current?.click()}>
@@ -422,17 +395,16 @@ export default function VideosPage() {
         <div className={GRID_CLASS}>
           {filtered.map((v, i) => (
             <div key={v.id} className="enter-item" style={{ animationDelay: `${Math.min(i * 50, 400)}ms` }}>
-              <VideoCard
+              <LibraryVideoCard
                 video={v}
                 selected={selectedIds.has(v.id)}
                 selecting={selecting}
+                actionsOpen={openActionsId === v.id}
                 onToggleSelect={toggleSelect}
-                onPlay={setPlaying}
-                onPublish={(video) => navigate('/publish', { state: { videoId: video.id } })}
-                onTrim={openTrim}
-                onAiEdit={handleAiEdit}
+                onCardClick={handleCardClick}
+                onEdit={handleEdit}
+                onPublish={handlePublish}
                 onRename={openRename}
-                onDownload={handleDownload}
                 onDelete={handleDelete}
               />
             </div>
@@ -440,103 +412,8 @@ export default function VideosPage() {
         </div>
       )}
 
-      {/* 播放弹窗 */}
-      <Modal open={!!playing} onClose={() => setPlaying(null)} title={playing?.title} width={860}>
-        {playing && (
-          <>
-            <video
-              src={playing.file_url}
-              controls
-              autoPlay
-              className="w-full rounded bg-black"
-              style={{ maxHeight: '70vh' }}
-            />
-            <div className="mt-3 flex justify-end">
-              <Button
-                icon={<Scissors size={15} />}
-                onClick={() => {
-                  const v = playing
-                  setPlaying(null)
-                  if (v) openTrim(v)
-                }}
-              >
-                截取此片段
-              </Button>
-            </div>
-          </>
-        )}
-      </Modal>
-
-      {/* 截取弹窗 */}
-      <Modal
-        open={!!trimTarget}
-        onClose={() => setTrimTarget(null)}
-        title={`截取片段${trimTarget ? ` · ${trimTarget.title}` : ''}`}
-        width={640}
-        footer={
-          <div className="flex w-full flex-col items-end gap-1.5">
-            <div className="flex gap-2">
-              <Button variant="ghost" onClick={() => setTrimTarget(null)}>
-                取消
-              </Button>
-              <Button
-                variant="primary"
-                icon={<Scissors size={15} />}
-                loading={trimming}
-                disabled={!trimValid}
-                onClick={submitTrim}
-              >
-                开始截取
-              </Button>
-            </div>
-            {trimError && <p className="m-0 text-xs text-danger">{trimError}</p>}
-          </div>
-        }
-      >
-        {trimTarget && (
-          <>
-            <video
-              src={trimTarget.file_url}
-              controls
-              className="max-h-[40vh] w-full rounded-lg bg-black"
-            />
-            <div className="mt-3 text-xs text-ink-3">
-              共 <span className="tnum">{formatDuration(trimDuration)}</span>
-            </div>
-            <div className="mt-3 flex flex-wrap items-end gap-3">
-              <div className="w-[140px]">
-                <div className="mb-1 text-xs text-ink-3">开始（秒）</div>
-                <Input
-                  type="number"
-                  step={0.5}
-                  min={0}
-                  value={trimStart}
-                  onChange={setTrimStart}
-                  placeholder="0"
-                />
-              </div>
-              <div className="w-[140px]">
-                <div className="mb-1 text-xs text-ink-3">结束（秒）</div>
-                <Input
-                  type="number"
-                  step={0.5}
-                  min={0}
-                  value={trimEnd}
-                  onChange={setTrimEnd}
-                  placeholder={trimDuration != null ? String(trimDuration) : '结束秒数'}
-                />
-              </div>
-              <div className="flex gap-2">
-                {TRIM_PRESETS.map((s) => (
-                  <Button key={s} size="sm" onClick={() => applyTrimPreset(s)}>
-                    前 {s}s
-                  </Button>
-                ))}
-              </div>
-            </div>
-          </>
-        )}
-      </Modal>
+      {/* 在线播放弹窗（骨架共享组件，Range 流式） */}
+      <VideoPlayerModal videoId={playId} title={playTitle} onClose={() => setPlayId(null)} />
 
       {/* 重命名弹窗 */}
       <Modal

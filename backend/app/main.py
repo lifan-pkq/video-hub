@@ -6,8 +6,9 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import CORS_ORIGINS, ensure_dirs
 from app.db import fail_interrupted_recordings
-from app.routers import accounts, author, download, edit, publish, recordings, sms, stats, videos, watchers
+from app.routers import accounts, author, download, edit, events, publish, recordings, sms, stats, videos, watchers
 from app.services import watcher
+from app.services.events import event_hub
 
 app = FastAPI(title="Video Hub", version="1.2.0")
 
@@ -28,11 +29,14 @@ app.include_router(sms.router)
 app.include_router(stats.router)
 app.include_router(watchers.router)
 app.include_router(author.router)
+app.include_router(events.router)
 
 
 @app.on_event("startup")
 async def _startup():
     ensure_dirs()
+    # 事件中心绑定事件循环，之后任务线程的 broadcast 才生效
+    event_hub.bind_loop()
     # ffmpeg 子进程不跨服务重启存活，此前 recording 状态的标记为失败
     fail_interrupted_recordings()
     # 主播监控轮询（自动录制）

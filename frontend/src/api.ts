@@ -179,6 +179,24 @@ const http = axios.create({
 
 export default http
 
+// ================= WebSocket =================
+
+/**
+ * 推导实时事件流 WebSocket 地址（ws/wss 协议自适应）。
+ * 由 axios baseURL（默认 '/api'，可为绝对 URL）+ 当前页面 host 推导，
+ * 结果形如 ws(s)://host/api/ws。
+ */
+export function getWsUrl(): string {
+  const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+  try {
+    const base = http.defaults.baseURL ?? '/api'
+    const u = new URL(base, window.location.origin)
+    return `${proto}//${u.host}${u.pathname.replace(/\/+$/, '')}/ws`
+  } catch {
+    return `${proto}//${window.location.host}/api/ws`
+  }
+}
+
 // ================= 视频库 =================
 
 export async function fetchVideos(): Promise<Video[]> {

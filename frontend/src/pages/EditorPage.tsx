@@ -116,14 +116,18 @@ export default function EditorPage() {
   useEffect(() => {
     if (prefillRef.current || libLoading) return
     const st = location.state as { videoIds?: number[]; autoAnalyze?: boolean } | null
-    if (!st?.videoIds?.length) return
+    // 兼容直链 ?video=ID（多个用逗号分隔），与 location.state 双通道
+    const q = new URLSearchParams(location.search).get('video')
+    const queryIds = q ? q.split(',').map((s) => Number(s.trim())).filter((n) => Number.isFinite(n) && n > 0) : []
+    const ids = st?.videoIds?.length ? st.videoIds : queryIds
+    if (!ids.length) return
     prefillRef.current = true
-    const picked = st.videoIds
+    const picked = ids
       .map((id) => videos.find((v) => v.id === id))
       .filter((v): v is Video => !!v && (v.duration ?? 0) > 0)
     if (picked.length > 0) {
       setClips(pack(picked.map((v) => newClip(v))))
-      if (st.autoAnalyze) startAiAnalysis(picked.map((v) => v.id))
+      if (st?.autoAnalyze) startAiAnalysis(picked.map((v) => v.id))
       else toast.success(`已加入 ${picked.length} 个片段`)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps

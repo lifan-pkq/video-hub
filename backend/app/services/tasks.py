@@ -72,6 +72,8 @@ class Task:
             self.logs = self.logs[-1000:]
 
     def finish(self, status: str):
+        if self._status == "cancelled":
+            return  # 已取消的任务不允许被后台线程改写终态
         self._status = status
         self.finished_at = time.strftime("%Y-%m-%d %H:%M:%S")
         self._emit(force=True)  # 终态必发

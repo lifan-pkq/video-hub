@@ -1,97 +1,50 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react'
-import { CheckCircle, Copy, Plus, QrCode, UserCircle, XCircle } from '@phosphor-icons/react'
+import { ClipboardText, QrCode, UserCircle } from '@phosphor-icons/react'
 import {
-  cancelLogin,
   checkAccount,
   deleteAccount,
   errorMessage,
   exportCookieString,
   fetchAccounts,
-  fetchLoginStatus,
   formatTime,
-  importCookieString,
   PLATFORMS,
   QR_LOGIN_PLATFORMS,
-  startLogin,
   uploadCookie,
   type Account,
   type CheckResult,
   type CookieExportResult,
-  type LoginSession,
 } from '../api'
 import {
   Alert,
   Button,
   confirmDialog,
   EmptyState,
-  Input,
-  Modal,
   PageHeader,
   Panel,
   PlatformIcon,
-  Segment,
-  Spinner,
-  TextArea,
+  Tag,
   toast,
 } from '../ui'
+import AccountsLoginModal from '../components/AccountsLoginModal'
+import AccountsImportModal from '../components/AccountsImportModal'
+import AccountsExportModal from '../components/AccountsExportModal'
+import { accountKey, metaOf } from '../components/AccountsShared'
 
-/** 支持扫码登录的平台（B站走 cookie 上传，不在此列） */
-const QR_PLATFORM_META: { key: string; label: string }[] = QR_LOGIN_PLATFORMS.map((key) => ({
-  key,
-  label: PLATFORMS.find((p) => p.key === key)?.label ?? key,
-}))
-
-const ACCOUNT_NAME_RE = /^[A-Za-z0-9_-]+$/
-
-function metaOf(platform: string) {
-  return PLATFORMS.find((m) => m.key === platform) ?? { key: platform, label: platform }
-}
-
-function accountKey(a: Account): string {
-  return `${a.platform}:${a.account}`
-}
-
-/** 复制到剪贴板：优先 navigator.clipboard，非安全上下文降级 textarea + execCommand */
-async function copyText(text: string): Promise<boolean> {
-  try {
-    if (window.isSecureContext && navigator.clipboard) {
-      await navigator.clipboard.writeText(text)
-      return true
-    }
-  } catch {
-    // 继续走降级方案
-  }
-  const ta = document.createElement('textarea')
-  ta.value = text
-  ta.style.position = 'fixed'
-  ta.style.opacity = '0'
-  document.body.appendChild(ta)
-  ta.focus()
-  ta.select()
-  try {
-    return document.execCommand('copy')
-  } catch {
-    return false
-  } finally {
-    document.body.removeChild(ta)
-  }
-}
-
-/** cookie 状态点标：未配置 ink-4 / 已失效 danger / 已配置·有效 success */
-function CookieBadge({ tone, text }: { tone: 'gray' | 'danger' | 'success'; text: string }) {
-  const color =
-    tone === 'gray' ? 'var(--ink-4)' : tone === 'danger' ? 'var(--danger)' : 'var(--success)'
-  return (
-    <span className="flex items-center gap-1.5 text-xs text-ink-3">
-      <span className="h-2 w-2 rounded-full" style={{ background: color }} />
-      {text}
-    </span>
-  )
+/** cookie 状态徽标：有效=绿 / 失效=红 / 未知=灰 */
+function cookieBadge(acc: Account, checked: CheckResult | null) {
+  const invalid = checked ? !checked.valid : acc.valid === false
+  const valid = checked ? checked.valid : acc.valid === true
+  if (!acc.cookie_exists) return <Tag color="gray">未配置 Cookie</Tag>
+  if (invalid) return <Tag color="red">Cookie 已失效</Tag>
+  if (valid) return <Tag color="green">Cookie 有效</Tag>
+  return <Tag color="gray">状态未知</Tag>
 }
 
 export default function AccountsPage() {
   const [accounts, setAccounts] = useState<Account[]>([])
   const [loading, setLoading] = useState(true)
+  /** 顶部平台卡片筛选：null = 全部 */
+  const [filter, setFilter] = useState<string | null>(null)
 
   const [checking, setChecking] = useState<Record<string, boolean>>({})
   const [checkResults, setCheckResults] = useState<Record<string, CheckResult | { error: string }>>({})
@@ -99,28 +52,21 @@ export default function AccountsPage() {
   const [uploading, setUploading] = useState<Record<string, boolean>>({})
   const fileRefs = useRef<Record<string, HTMLInputElement | null>>({})
 
-  // 导入 cookie 字符串弹窗
-  const [importTarget, setImportTarget] = useState<Account | null>(null)
-  const [importContent, setImportContent] = useState('')
-  const [importError, setImportError] = useState<string | null>(null)
-  const [importing, setImporting] = useState(false)
-
-  // 导出 cookie 字符串弹窗
-  const [exporting, setExporting] = useState<Record<string, boolean>>({})
-  const [exportData, setExportData] = useState<CookieExportResult | null>(null)
-
   // 扫码登录弹窗
   const [loginOpen, setLoginOpen] = useState(false)
   const [loginPlatform, setLoginPlatform] = useState('douyin')
   const [loginAccount, setLoginAccount] = useState('')
-  const [loginError, setLoginError] = useState<string | null>(null)
-  const [loginStarting, setLoginStarting] = useState(false)
-  const [session, setSession] = useState<LoginSession | null>(null)
-  const [shotTick, setShotTick] = useState(0)
-  const pollRef = useRef<number | null>(null)
-  const successTimerRef = useRef<number | null>(null)
-  const sessionRef = useRef<LoginSession | null>(null)
-  sessionRef.current = session
+  const [loginLock, setLoginLock] = useState(false)
+
+  // 导入 cookie 弹窗
+  const [importOpen, setImportOpen] = useState(false)
+  const [importPlatform, setImportPlatform] = useState('douyin')
+  const [importAccount, setImportAccount] = useState('')
+  const [importLock, setImportLock] = useState(false)
+
+  // 导出 cookie 弹窗
+  const [exporting, setExporting] = useState<Record<string, boolean>>({})
+  const [exportData, setExportData] = useState<CookieExportResult | null>(null)
 
   const load = useCallback(async () => {
     try {
@@ -136,86 +82,18 @@ export default function AccountsPage() {
     load()
   }, [load])
 
-  // 卸载时停止登录轮询与延迟关闭定时器
-  useEffect(() => {
-    return () => {
-      if (pollRef.current) window.clearInterval(pollRef.current)
-      if (successTimerRef.current) window.clearTimeout(successTimerRef.current)
-    }
-  }, [])
-
-  const stopPolling = () => {
-    if (pollRef.current) {
-      window.clearInterval(pollRef.current)
-      pollRef.current = null
-    }
-  }
-
-  const startPolling = (sessionId: string) => {
-    stopPolling()
-    pollRef.current = window.setInterval(async () => {
-      try {
-        const s = await fetchLoginStatus(sessionId)
-        setSession(s)
-        setShotTick(Date.now())
-        if (s.done || s.state === 'success' || s.state === 'failed' || s.state === 'timeout') {
-          stopPolling()
-          if (s.state === 'success') {
-            // 稍等片刻让用户看到成功提示，然后自动关闭并刷新列表
-            if (successTimerRef.current) window.clearTimeout(successTimerRef.current)
-            successTimerRef.current = window.setTimeout(() => {
-              successTimerRef.current = null
-              setLoginOpen(false)
-              setSession(null)
-              toast.success('登录成功，账号已添加')
-              load()
-            }, 1200)
-          }
-        }
-      } catch {
-        // 轮询失败静默重试
-      }
-    }, 2000)
-  }
-
-  const handleStartLogin = async () => {
-    const account = loginAccount.trim()
-    if (!ACCOUNT_NAME_RE.test(account)) {
-      setLoginError('账号名只能包含字母、数字、下划线和短横线')
-      return
-    }
-    setLoginError(null)
-    setLoginStarting(true)
-    try {
-      const s = await startLogin(loginPlatform, account)
-      setSession(s)
-      if (s.state === 'failed' || s.state === 'timeout') return
-      startPolling(s.session_id)
-    } catch (e) {
-      setLoginError(errorMessage(e))
-    } finally {
-      setLoginStarting(false)
-    }
-  }
-
-  const closeLoginModal = () => {
-    stopPolling()
-    const s = sessionRef.current
-    // 非成功状态关闭时取消登录会话
-    if (s && s.state !== 'success') {
-      cancelLogin(s.session_id).catch(() => {})
-    }
-    setLoginOpen(false)
-    setSession(null)
-    setLoginError(null)
-  }
-
-  const openLoginModal = (platform = 'douyin', account = '') => {
+  const openLogin = (platform = 'douyin', account = '', lock = false) => {
     setLoginPlatform(platform)
     setLoginAccount(account)
-    setLoginError(null)
-    setSession(null)
+    setLoginLock(lock)
     setLoginOpen(true)
+  }
+
+  const openImport = (platform = 'douyin', account = '', lock = false) => {
+    setImportPlatform(platform)
+    setImportAccount(account)
+    setImportLock(lock)
+    setImportOpen(true)
   }
 
   const handleCheck = async (acc: Account) => {
@@ -256,60 +134,16 @@ export default function AccountsPage() {
     }
   }
 
-  const openImportModal = (acc: Account) => {
-    setImportTarget(acc)
-    setImportContent('')
-    setImportError(null)
-  }
-
-  const closeImportModal = () => {
-    if (importing) return
-    setImportTarget(null)
-    setImportContent('')
-    setImportError(null)
-  }
-
-  const handleImport = async () => {
-    if (!importTarget) return
-    const content = importContent.trim()
-    if (!content) {
-      setImportError('请先粘贴 cookie 内容')
-      return
-    }
-    setImportError(null)
-    setImporting(true)
-    try {
-      const r = await importCookieString(importTarget.platform, importTarget.account, content)
-      toast.success(`导入成功，共 ${r.count} 条 cookie`)
-      setImportTarget(null)
-      setImportContent('')
-      await load()
-    } catch (e) {
-      setImportError(errorMessage(e))
-    } finally {
-      setImporting(false)
-    }
-  }
-
   const handleExport = async (acc: Account) => {
     const key = accountKey(acc)
     setExporting((s) => ({ ...s, [key]: true }))
     try {
-      const r = await exportCookieString(acc.platform, acc.account)
-      setExportData(r)
-      if (await copyText(r.cookie_string)) toast.success('已复制到剪贴板')
-      else toast.warning('自动复制失败，请手动复制')
+      setExportData(await exportCookieString(acc.platform, acc.account))
     } catch (e) {
       toast.error(`导出失败：${errorMessage(e)}`)
     } finally {
       setExporting((s) => ({ ...s, [key]: false }))
     }
-  }
-
-  const handleCopyExport = async () => {
-    if (!exportData) return
-    if (await copyText(exportData.cookie_string)) toast.success('已复制到剪贴板')
-    else toast.error('复制失败，请手动选择复制')
   }
 
   const handleDelete = async (acc: Account) => {
@@ -341,6 +175,100 @@ export default function AccountsPage() {
     ...PLATFORMS.map((m) => m.key).filter((k) => grouped.has(k)),
     ...[...grouped.keys()].filter((k) => !PLATFORMS.some((m) => m.key === k)),
   ]
+  const visiblePlatforms = filter ? [filter] : platformOrder
+
+  const renderAccountCard = (acc: Account, i: number) => {
+    const key = accountKey(acc)
+    const check = checkResults[key]
+    // 本地校验结果优先于列表返回的 valid 字段
+    const checked = check && !('error' in check) ? check : null
+    const invalid = checked ? !checked.valid : acc.valid === false
+    const reason = checked && !checked.valid ? checked.detail : invalid ? acc.detail : undefined
+    return (
+      <div
+        key={key}
+        className="vh-card enter-item p-4"
+        style={{ animationDelay: `${Math.min(i * 50, 200)}ms` }}
+      >
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="break-all font-medium text-ink-1" style={{ fontSize: 15 }}>
+                {acc.account}
+              </span>
+              {cookieBadge(acc, checked)}
+            </div>
+            <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-ink-3">
+              {acc.updated_at && <span className="tnum">更新于 {formatTime(acc.updated_at)}</span>}
+              {invalid && reason && <span className="break-all text-danger">失效原因：{reason}</span>}
+            </div>
+          </div>
+          <div className="flex shrink-0 flex-wrap items-center gap-2">
+            {acc.cookie_exists && (
+              <Button loading={checking[key]} onClick={() => handleCheck(acc)}>
+                校验
+              </Button>
+            )}
+            {QR_LOGIN_PLATFORMS.includes(acc.platform) && (
+              <Button
+                variant={acc.cookie_exists ? 'secondary' : 'primary'}
+                icon={<QrCode size={13} />}
+                onClick={() => openLogin(acc.platform, acc.account, true)}
+              >
+                {acc.cookie_exists ? '重新登录' : '扫码登录'}
+              </Button>
+            )}
+            <Button loading={uploading[key]} onClick={() => fileRefs.current[key]?.click()}>
+              上传文件
+            </Button>
+            <Button onClick={() => openImport(acc.platform, acc.account, true)}>
+              导入
+            </Button>
+            {acc.cookie_exists && (
+              <Button loading={exporting[key]} onClick={() => handleExport(acc)}>
+                导出
+              </Button>
+            )}
+            {acc.cookie_exists && (
+              <Button
+                variant="text"
+                style={{ color: 'var(--danger)' }}
+                onClick={() => handleDelete(acc)}
+              >
+                删除
+              </Button>
+            )}
+            <input
+              ref={(el) => {
+                fileRefs.current[key] = el
+              }}
+              type="file"
+              accept=".json"
+              className="hidden"
+              onChange={(e: ChangeEvent<HTMLInputElement>) => {
+                const f = e.target.files?.[0]
+                if (f) handleUpload(acc, f)
+              }}
+            />
+          </div>
+        </div>
+
+        {/* 校验结果 */}
+        {check && (
+          <Alert
+            className="mt-3"
+            type={'error' in check ? 'error' : check.valid ? 'success' : 'warning'}
+          >
+            {'error' in check
+              ? `校验失败：${check.error}`
+              : check.valid
+                ? `有效${check.detail ? `：${check.detail}` : ''}`
+                : `无效${check.detail ? `：${check.detail}` : ''}`}
+          </Alert>
+        )}
+      </div>
+    )
+  }
 
   return (
     <div>
@@ -348,11 +276,44 @@ export default function AccountsPage() {
         title="平台账号"
         desc="管理各平台的登录账号，发布功能依赖有效的 cookie"
         extra={
-          <Button variant="primary" icon={<Plus size={15} weight="bold" />} onClick={() => openLoginModal()}>
-            添加账号
-          </Button>
+          <>
+            <Button icon={<ClipboardText size={15} />} onClick={() => openImport()}>
+              导入 Cookie
+            </Button>
+            <Button variant="primary" icon={<QrCode size={15} weight="bold" />} onClick={() => openLogin()}>
+              扫码登录
+            </Button>
+          </>
         }
       />
+
+      {/* 平台汇总卡片：移动端 2×2，桌面一行四个 */}
+      <div className="mb-6 grid grid-cols-2 gap-3 md:grid-cols-4">
+        {PLATFORMS.map((m) => {
+          const count = grouped.get(m.key)?.length ?? 0
+          const active = filter === m.key
+          return (
+            <button
+              key={m.key}
+              type="button"
+              aria-pressed={active}
+              onClick={() => setFilter((f) => (f === m.key ? null : m.key))}
+              className={`vh-card flex items-center gap-3 p-4 text-left transition-all hover:border-line ${
+                active ? 'border-accent bg-accent-soft' : ''
+              }`}
+              style={active ? { borderColor: 'var(--accent)' } : undefined}
+            >
+              <PlatformIcon platform={m.key} size={32} />
+              <div className="min-w-0">
+                <div className="truncate text-[13px] font-medium text-ink-1">{m.label}</div>
+                <div className="mt-0.5 text-xs text-ink-3">
+                  <span className="tnum">{count}</span> 个账号
+                </div>
+              </div>
+            </button>
+          )
+        })}
+      </div>
 
       {loading ? (
         <div className="space-y-3">
@@ -370,12 +331,22 @@ export default function AccountsPage() {
           <EmptyState
             icon={<UserCircle size={28} />}
             title="暂无账号"
-            desc="点击右上角添加账号，扫码登录"
+            desc="扫码登录或粘贴 cookie 字符串，即可添加平台账号"
+            action={
+              <>
+                <Button variant="primary" icon={<QrCode size={15} />} onClick={() => openLogin()}>
+                  扫码登录
+                </Button>
+                <Button icon={<ClipboardText size={15} />} onClick={() => openImport()}>
+                  导入 Cookie
+                </Button>
+              </>
+            }
           />
         </Panel>
       ) : (
         <div className="max-w-3xl space-y-5">
-          {platformOrder.map((platform) => {
+          {visiblePlatforms.map((platform) => {
             const meta = metaOf(platform)
             const list = grouped.get(platform) ?? []
             return (
@@ -385,320 +356,58 @@ export default function AccountsPage() {
                   <span className="section-title">{meta.label}</span>
                   <span className="text-xs text-ink-3">{list.length} 个账号</span>
                 </div>
-                <div className="space-y-3">
-                  {list.map((acc, i) => {
-                    const key = accountKey(acc)
-                    const check = checkResults[key]
-                    // 本地校验结果优先于列表返回的 valid 字段
-                    const checked = check && !('error' in check) ? check : null
-                    const invalid = checked ? !checked.valid : acc.valid === false
-                    const valid = checked ? checked.valid : acc.valid === true
-                    return (
-                      <div
-                        key={key}
-                        className="vh-card enter-item p-4"
-                        style={{ animationDelay: `${Math.min(i * 50, 200)}ms` }}
-                      >
-                        <div className="flex items-center justify-between">
-                          <div>
-                            <span className="font-medium text-ink-1" style={{ fontSize: 15 }}>
-                              {acc.account}
-                            </span>
-                            <div className="mt-1 flex items-center gap-2" style={{ fontSize: 12 }}>
-                              {!acc.cookie_exists ? (
-                                <CookieBadge tone="gray" text="未配置 cookie" />
-                              ) : invalid ? (
-                                <CookieBadge tone="danger" text="cookie 已失效" />
-                              ) : (
-                                <CookieBadge
-                                  tone="success"
-                                  text={valid ? 'cookie 有效' : 'cookie 已配置'}
-                                />
-                              )}
-                              {acc.updated_at && (
-                                <span className="tnum text-xs text-ink-3">
-                                  更新于 {formatTime(acc.updated_at)}
-                                </span>
-                              )}
-                            </div>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            {acc.cookie_exists && (
-                              <Button loading={checking[key]} onClick={() => handleCheck(acc)}>
-                                校验
-                              </Button>
-                            )}
-                            {!acc.cookie_exists && QR_LOGIN_PLATFORMS.includes(acc.platform) && (
-                              <Button
-                                variant="primary"
-                                onClick={() => openLoginModal(acc.platform, acc.account)}
-                              >
-                                扫码登录
-                              </Button>
-                            )}
+                {list.length === 0 ? (
+                  <Panel pad="none">
+                    <EmptyState
+                      icon={<UserCircle size={24} />}
+                      title={`暂无${meta.label}账号`}
+                      desc="扫码登录或导入 cookie 添加账号"
+                      action={
+                        <>
+                          {QR_LOGIN_PLATFORMS.includes(platform) && (
                             <Button
-                              variant={acc.cookie_exists ? 'primary' : 'secondary'}
-                              loading={uploading[key]}
-                              onClick={() => fileRefs.current[key]?.click()}
+                              variant="primary"
+                              icon={<QrCode size={13} />}
+                              onClick={() => openLogin(platform)}
                             >
-                              上传文件
+                              扫码登录
                             </Button>
-                            <Button onClick={() => openImportModal(acc)}>导入</Button>
-                            {acc.cookie_exists && (
-                              <Button loading={exporting[key]} onClick={() => handleExport(acc)}>
-                                导出
-                              </Button>
-                            )}
-                            {acc.cookie_exists && (
-                              <Button
-                                variant="text"
-                                style={{ color: 'var(--danger)' }}
-                                onClick={() => handleDelete(acc)}
-                              >
-                                删除
-                              </Button>
-                            )}
-                            <input
-                              ref={(el) => {
-                                fileRefs.current[key] = el
-                              }}
-                              type="file"
-                              accept=".json"
-                              className="hidden"
-                              onChange={(e: ChangeEvent<HTMLInputElement>) => {
-                                const f = e.target.files?.[0]
-                                if (f) handleUpload(acc, f)
-                              }}
-                            />
-                          </div>
-                        </div>
-
-                        {/* 校验结果 */}
-                        {check && (
-                          <Alert
-                            className="mt-3"
-                            type={'error' in check ? 'error' : check.valid ? 'success' : 'warning'}
-                          >
-                            {'error' in check
-                              ? `校验失败：${check.error}`
-                              : check.valid
-                                ? `有效${check.detail ? `：${check.detail}` : ''}`
-                                : `无效${check.detail ? `：${check.detail}` : ''}`}
-                          </Alert>
-                        )}
-                      </div>
-                    )
-                  })}
-                </div>
+                          )}
+                          <Button onClick={() => openImport(platform)}>
+                            导入 Cookie
+                          </Button>
+                        </>
+                      }
+                    />
+                  </Panel>
+                ) : (
+                  <div className="space-y-3">{list.map(renderAccountCard)}</div>
+                )}
               </div>
             )
           })}
         </div>
       )}
 
-      {/* 扫码登录弹窗 */}
-      <Modal open={loginOpen} onClose={closeLoginModal} title="添加账号" width={400}>
-        {!session ? (
-          <div>
-            <div className="text-xs text-ink-3">平台</div>
-            <Segment
-              className="mt-2"
-              value={loginPlatform}
-              onChange={setLoginPlatform}
-              options={QR_PLATFORM_META.map((m) => ({
-                value: m.key,
-                label: (
-                  <span className="inline-flex items-center gap-1.5">
-                    <PlatformIcon platform={m.key} size={14} />
-                    {m.label}
-                  </span>
-                ),
-              }))}
-            />
+      <AccountsLoginModal
+        open={loginOpen}
+        platform={loginPlatform}
+        account={loginAccount}
+        lockTarget={loginLock}
+        onClose={() => setLoginOpen(false)}
+        onSuccess={load}
+      />
 
-            <div className="mt-4 text-xs text-ink-3">账号名</div>
-            <Input
-              className="mt-2"
-              value={loginAccount}
-              onChange={setLoginAccount}
-              placeholder="字母、数字、_、-，如 default"
-            />
+      <AccountsImportModal
+        open={importOpen}
+        platform={importPlatform}
+        account={importAccount}
+        lockTarget={importLock}
+        onClose={() => setImportOpen(false)}
+        onImported={load}
+      />
 
-            {loginError && (
-              <Alert type="error" className="mt-3">
-                {loginError}
-              </Alert>
-            )}
-
-            <Button
-              variant="primary"
-              full
-              icon={<QrCode size={15} />}
-              loading={loginStarting}
-              disabled={!loginAccount.trim()}
-              onClick={handleStartLogin}
-              className="mt-4"
-            >
-              开始扫码登录
-            </Button>
-          </div>
-        ) : (
-          <div className="text-center">
-            <div className="inline-flex items-center gap-1.5 text-[13px] text-ink-1">
-              <PlatformIcon platform={session.platform} size={14} />
-              {metaOf(session.platform).label}
-              <span className="text-ink-3"> / {session.account}</span>
-            </div>
-
-            {session.state === 'starting' && (
-              <div className="py-10">
-                <div className="flex justify-center">
-                  <Spinner />
-                </div>
-                <div className="mt-3 text-[13px] text-ink-3">正在打开登录页面…</div>
-              </div>
-            )}
-
-            {session.state === 'qrcode_ready' && (
-              <div className="mt-3">
-                {session.has_qr ? (
-                  <img
-                    key={session.qr_version}
-                    src={`/api/accounts/login/${session.session_id}/qr.png?v=${session.qr_version}`}
-                    alt="登录二维码"
-                    className="mx-auto h-52 w-52 rounded-lg bg-white p-2"
-                  />
-                ) : (
-                  <div className="py-10">
-                    <div className="flex justify-center">
-                      <Spinner />
-                    </div>
-                    <div className="mt-3 text-[13px] text-ink-3">二维码加载中…</div>
-                  </div>
-                )}
-                <div className="mt-3 text-[13px] text-ink-1">请用对应平台的手机 App 扫码登录</div>
-                {session.platform !== 'bilibili' && (
-                  <div className="mt-4">
-                    <div className="mb-2 text-[12px] text-ink-3">
-                      浏览器实况（2 秒刷新）：手机上确认后这里应跳转到登录后页面；若出现滑块/安全验证请告知
-                    </div>
-                    <img
-                      src={`/api/accounts/login/${session.session_id}/screenshot.png?v=${shotTick}`}
-                      alt="浏览器实况"
-                      className="mx-auto w-full max-w-md rounded-lg border border-line"
-                      onError={(e) => { (e.target as HTMLImageElement).style.visibility = 'hidden' }}
-                      onLoad={(e) => { (e.target as HTMLImageElement).style.visibility = 'visible' }}
-                    />
-                  </div>
-                )}
-              </div>
-            )}
-
-            {session.state === 'success' && (
-              <div className="py-8">
-                <CheckCircle size={40} weight="fill" className="mx-auto text-success" />
-                <div className="mt-3 text-[13px] text-success">
-                  登录成功{session.message ? `：${session.message}` : ''}
-                </div>
-              </div>
-            )}
-
-            {(session.state === 'failed' || session.state === 'timeout') && (
-              <div className="py-8">
-                <XCircle size={40} weight="fill" className="mx-auto text-danger" />
-                <div className="mt-3 text-[13px] text-danger">
-                  {session.state === 'timeout' ? '登录超时' : '登录失败'}
-                  {session.message ? `：${session.message}` : ''}
-                </div>
-                <Button
-                  variant="primary"
-                  loading={loginStarting}
-                  onClick={() => {
-                    setSession(null)
-                    handleStartLogin()
-                  }}
-                  className="mt-4"
-                >
-                  重试
-                </Button>
-              </div>
-            )}
-          </div>
-        )}
-      </Modal>
-
-      {/* 导入 cookie 字符串弹窗 */}
-      <Modal
-        open={!!importTarget}
-        onClose={closeImportModal}
-        title={
-          importTarget
-            ? `导入 cookie · ${metaOf(importTarget.platform).label} / ${importTarget.account}`
-            : '导入 cookie'
-        }
-        width={520}
-      >
-        <div className="text-xs leading-relaxed text-ink-3">
-          获取方式：浏览器登录对应平台 → F12 → 网络 → 点任意请求 → 请求头 Cookie 整段复制粘贴到下方。
-        </div>
-        <TextArea
-          className="mt-3"
-          rows={7}
-          value={importContent}
-          onChange={setImportContent}
-          placeholder={
-            '粘贴 cookie，支持三种格式：\n1. 浏览器 F12 复制的 cookie 字符串（name=val; name2=val2; …）\n2. Netscape 文本\n3. storage_state JSON'
-          }
-        />
-        {importError && (
-          <Alert type="error" className="mt-3">
-            {importError}
-          </Alert>
-        )}
-        <Button
-          variant="primary"
-          full
-          loading={importing}
-          disabled={!importContent.trim()}
-          onClick={handleImport}
-          className="mt-4"
-        >
-          确认导入
-        </Button>
-      </Modal>
-
-      {/* 导出 cookie 字符串弹窗 */}
-      <Modal
-        open={!!exportData}
-        onClose={() => setExportData(null)}
-        title={
-          exportData
-            ? `导出 cookie · ${metaOf(exportData.platform).label} / ${exportData.account}`
-            : '导出 cookie'
-        }
-        width={520}
-      >
-        <div className="text-xs leading-relaxed text-ink-3">
-          cookie 字符串已自动复制到剪贴板，也可手动选中下方内容复制。
-        </div>
-        <TextArea
-          className="mt-3"
-          rows={7}
-          value={exportData?.cookie_string ?? ''}
-          onChange={() => {}}
-          readOnly
-          onFocus={(e) => e.target.select()}
-        />
-        <Button
-          variant="primary"
-          full
-          icon={<Copy size={15} />}
-          onClick={handleCopyExport}
-          className="mt-4"
-        >
-          复制
-        </Button>
-      </Modal>
+      <AccountsExportModal data={exportData} onClose={() => setExportData(null)} />
     </div>
   )
 }

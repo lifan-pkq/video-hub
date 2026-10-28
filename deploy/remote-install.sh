@@ -13,6 +13,9 @@ fi
 install -d -m 700 "$BACKUP_DIR"
 for file in \
   /etc/nginx/sites-enabled/narratoai \
+  /etc/nginx/sites-available/video-hub \
+  /etc/nginx/sites-enabled/video-hub \
+  /etc/systemd/system/video-hub-backend.service \
   /etc/systemd/system/narratoai.service \
   /etc/systemd/system/narrato-preview.service \
   /etc/systemd/system/narrato-asr.service \
@@ -45,7 +48,7 @@ if [ ! -d "$REMOTE_DIR/narratoai/storage" ] && [ -d /opt/NarratoAI/storage ]; th
   cp -a /opt/NarratoAI/storage "$REMOTE_DIR/narratoai/storage"
 fi
 mkdir -p "$REMOTE_DIR/narratoai/storage"/{temp,tasks,json,narration_scripts,drama_analysis}
-for directory in videos scripts; do
+for directory in videos scripts bgm songs srt fonts safe_areas; do
   if [ -d "/opt/NarratoAI/resource/$directory" ]; then
     mkdir -p "$REMOTE_DIR/narratoai/resource/$directory"
     cp -an "/opt/NarratoAI/resource/$directory/." "$REMOTE_DIR/narratoai/resource/$directory/"
@@ -57,15 +60,17 @@ fi
 if [ ! -f "$REMOTE_DIR/models/faster-whisper-small/model.bin" ] && [ -f /opt/narrato-services/models/faster-whisper-small/model.bin ]; then
   cp -a /opt/narrato-services/models/faster-whisper-small "$REMOTE_DIR/models/"
 fi
+if [ ! -s "$REMOTE_DIR/models/faster-whisper-small/model.bin" ]; then
+  echo "whisper-small 模型缺失，无法提供 ASR 服务" >&2
+  exit 1
+fi
 
-python3 -m venv "$REMOTE_DIR/.venv"
-"$REMOTE_DIR/.venv/bin/pip" install --upgrade pip uv
+python3 -m venv --clear "$REMOTE_DIR/.venv"
+"$REMOTE_DIR/.venv/bin/pip" install --upgrade pip
 "$REMOTE_DIR/.venv/bin/pip" install -r "$REMOTE_DIR/backend/requirements.txt" -e "$REMOTE_DIR/publisher"
-(
-  cd "$REMOTE_DIR/narratoai"
-  UV_PROJECT_ENVIRONMENT="$REMOTE_DIR/narratoai/.venv" "$REMOTE_DIR/.venv/bin/uv" sync --frozen --no-dev
-)
-python3 -m venv "$REMOTE_DIR/services/.venv"
+python3 -m venv --clear "$REMOTE_DIR/narratoai/.venv"
+"$REMOTE_DIR/narratoai/.venv/bin/pip" install -r "$REMOTE_DIR/narratoai/requirements.txt"
+python3 -m venv --clear "$REMOTE_DIR/services/.venv"
 "$REMOTE_DIR/services/.venv/bin/pip" install -r "$REMOTE_DIR/services/requirements.txt"
 
 "$REMOTE_DIR/.venv/bin/patchright" install-deps chromium
@@ -94,6 +99,7 @@ if [ ! -f "$PW/ffmpeg-1011/INSTALLATION_COMPLETE" ]; then
   rm /tmp/video-hub-ffmpeg.zip
 fi
 
+chown narratoai:narratoai "$REMOTE_DIR/publisher"
 chown -R narratoai:narratoai \
   "$REMOTE_DIR/data" "$REMOTE_DIR/models" "$REMOTE_DIR/ms-playwright" \
   "$REMOTE_DIR/publisher/cookies" "$REMOTE_DIR/publisher/db" \
@@ -125,13 +131,61 @@ wait_for() {
   done
 }
 wait_for http://127.0.0.1:8600/health narrato-asr
+ffmpeg -y -v error -f lavfi -i anullsrc=r=16000:cl=mono -t 0.5 /tmp/video-hub-asr-smoke.wav
+curl -sf --max-time 300 \
+  -F 'file=@/tmp/video-hub-asr-smoke.wav;type=audio/wav' \
+  -F 'response_format=json' \
+  http://127.0.0.1:8600/v1/audio/transcriptions >/dev/null
+rm -f /tmp/video-hub-asr-smoke.wav
+wait_for http://127.0.0.1:8600/health narrato-asr-ready
 wait_for http://127.0.0.1:8502/health narrato-preview
 wait_for http://127.0.0.1:8501/narrato/_stcore/health narratoai
 wait_for http://127.0.0.1:8000/api/health video-hub-backend
 
+TEST_NGINX_CONF=/tmp/video-hub-nginx-check.conf
+printf 'events {}\nhttp { include /etc/nginx/mime.types; include %s; }\n' "$REMOTE_DIR/deploy/nginx-host.conf" > "$TEST_NGINX_CONF"
+nginx -t -c "$TEST_NGINX_CONF"
+rm -f "$TEST_NGINX_CONF"
+
+restore_path() {
+  local target="$1"
+  mkdir -p "$(dirname "$target")"
+  rm -f "$target"
+  if [ -e "$BACKUP_DIR$target" ] || [ -L "$BACKUP_DIR$target" ]; then
+    cp -a "$BACKUP_DIR$target" "$target"
+  fi
+}
+rollback() {
+  echo "统一切换失败，恢复旧配置" >&2
+  restore_path /etc/nginx/sites-enabled/narratoai
+  restore_path /etc/nginx/sites-enabled/video-hub
+  restore_path /etc/nginx/sites-available/video-hub
+  for unit in narratoai narrato-preview narrato-asr video-hub-backend; do
+    restore_path "/etc/systemd/system/$unit.service"
+  done
+  systemctl daemon-reload
+  systemctl restart narratoai narrato-preview narrato-asr
+  if [ ! -f /etc/systemd/system/video-hub-backend.service ]; then
+    systemctl stop video-hub-backend 2>/dev/null || true
+  else
+    systemctl restart video-hub-backend
+  fi
+  nginx -t || true
+  systemctl reload nginx || true
+}
+
 install -m 644 "$REMOTE_DIR/deploy/nginx-host.conf" /etc/nginx/sites-available/video-hub
 ln -sfn /etc/nginx/sites-available/video-hub /etc/nginx/sites-enabled/video-hub
 rm -f /etc/nginx/sites-enabled/narratoai
-nginx -t
+if ! nginx -t; then
+  rollback
+  exit 1
+fi
 systemctl reload nginx
+if ! wait_for http://localhost/api/health video-hub-public || \
+   ! wait_for http://localhost/narrato/_stcore/health narrato-public || \
+   ! wait_for http://localhost/preview/health preview-public; then
+  rollback
+  exit 1
+fi
 echo "统一入口已切换"

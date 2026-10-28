@@ -6,11 +6,15 @@ import selectors
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
 from pathlib import Path
 
 from fastapi import Response
 from fastapi.responses import FileResponse, StreamingResponse
+
+# 渲染/AI 分析并发上限（2 核服务器，防多请求同时跑 ffmpeg/whisper 打爆内存）
+render_semaphore = threading.Semaphore(2)
 
 
 def probe_video(path: Path) -> dict:
@@ -82,6 +86,12 @@ def probe_has_audio(path: Path) -> bool:
 
 
 def concat_clips(clips: list[dict], out_path: Path, on_progress=None):
+    """拼接渲染入口：信号量限并发，多请求排队执行。"""
+    with render_semaphore:
+        _concat_clips(clips, out_path, on_progress)
+
+
+def _concat_clips(clips: list[dict], out_path: Path, on_progress=None):
     """按顺序裁剪 + 拼接多个片段为单个 mp4。
 
     clips: [{"path": Path, "start": float, "end": float}]

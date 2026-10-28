@@ -10,13 +10,14 @@ from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from app.config import COVERS_DIR, TMP_DIR, VIDEOS_DIR, ensure_dirs
+from app.config import COVERS_DIR, MAX_UPLOAD_MB, TMP_DIR, VIDEOS_DIR, ensure_dirs
 from app.db import add_video, delete_video, get_video, list_videos, update_video
 from app.services.media import ensure_h264, make_cover, probe_video, range_stream
 
 router = APIRouter(prefix="/api/videos", tags=["videos"])
 
 UPLOAD_CHUNK_BYTES = 1024 * 1024
+ALLOWED_SUFFIXES = {".mp4", ".mov", ".webm", ".mkv", ".flv", ".avi"}
 
 
 def _serialize(v: dict) -> dict:
@@ -68,8 +69,8 @@ async def upload_video(file: UploadFile = File(...), title: str = ""):
     ensure_dirs()
     original_name = Path(file.filename or "video.mp4")
     suffix = original_name.suffix.lower()
-    if not re.fullmatch(r"\.[a-z0-9]{1,8}", suffix):
-        suffix = ".mp4"
+    if suffix not in ALLOWED_SUFFIXES:
+        raise HTTPException(400, f"不支持的文件类型（仅支持 {' '.join(sorted(ALLOWED_SUFFIXES))}）")
     safe_title = re.sub(r'[\\/:*?"<>|#\n\r]', "_", original_name.stem)[:80] or "video"
     final = VIDEOS_DIR / f"{uuid.uuid4().hex}{suffix}"
     cover_path = COVERS_DIR / f"{final.stem}.jpg"
@@ -82,6 +83,8 @@ async def upload_video(file: UploadFile = File(...), title: str = ""):
             size = 0
             while chunk := await file.read(UPLOAD_CHUNK_BYTES):
                 size += len(chunk)
+                if size > MAX_UPLOAD_MB * 1024 * 1024:
+                    raise HTTPException(413, f"文件超过大小上限（{MAX_UPLOAD_MB}MB）")
                 f.write(chunk)
 
         meta = await asyncio.to_thread(probe_video, tmp_path)

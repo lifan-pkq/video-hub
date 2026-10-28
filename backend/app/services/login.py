@@ -57,9 +57,14 @@ def start_login(platform: str, account: str) -> dict:
         if USE_XVFB and shutil.which("xvfb-run"):
             cmd = ["xvfb-run", "-a", *cmd]
         log_f = open(d / "process.log", "wb")
-        proc = subprocess.Popen(cmd, cwd=str(PUBLISHER_DIR),
-                                stdout=log_f, stderr=subprocess.STDOUT,
-                                stdin=subprocess.DEVNULL)
+        try:
+            proc = subprocess.Popen(cmd, cwd=str(PUBLISHER_DIR),
+                                    stdout=log_f, stderr=subprocess.STDOUT,
+                                    stdin=subprocess.DEVNULL,
+                                    start_new_session=True)  # 独立进程组：取消/超时可整树 kill（含 chromium 子进程）
+        except Exception:
+            log_f.close()
+            raise
         _sessions[session_id] = {
             "platform": platform, "account": account,
             "proc": proc, "log_f": log_f,
@@ -67,6 +72,12 @@ def start_login(platform: str, account: str) -> dict:
         }
         threading.Thread(target=_watch, args=(session_id,), daemon=True).start()
     return {"session_id": session_id, "platform": platform, "account": account}
+
+
+def _kill_tree(proc: subprocess.Popen):
+    """杀掉整个进程组（python + xvfb）并收割孤儿 chromium（chromium 会自离进程组）。"""
+    from app.services.proc import kill_tree
+    kill_tree(proc)
 
 
 def _watch(session_id: str):
@@ -77,7 +88,7 @@ def _watch(session_id: str):
     try:
         proc.wait(timeout=SESSION_TTL)
     except subprocess.TimeoutExpired:
-        proc.kill()
+        _kill_tree(proc)
         proc.wait()
         # 进程被超时杀掉但引擎没写最终状态时补写
         st = _read_status(session_id)
@@ -119,6 +130,14 @@ def qr_file(session_id: str) -> Path | None:
     return qr if qr.exists() else None
 
 
+def screenshot_file(session_id: str) -> Path | None:
+    """浏览器实况截图（扫码登录时引擎周期性保存，供前端展示页面真实状态）。"""
+    if session_id not in _sessions:
+        return None
+    shot = _session_dir(session_id) / "screenshot.png"
+    return shot if shot.exists() else None
+
+
 def cancel_login(session_id: str) -> bool:
     with _lock:
         s = _sessions.get(session_id)
@@ -126,5 +145,5 @@ def cancel_login(session_id: str) -> bool:
             return False
         proc: subprocess.Popen = s["proc"]
         if proc.poll() is None:
-            proc.kill()
+            _kill_tree(proc)
         return True

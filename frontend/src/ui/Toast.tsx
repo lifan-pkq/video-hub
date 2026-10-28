@@ -10,6 +10,8 @@ interface ToastItem {
 }
 
 let push: ((t: ToastType, text: string) => void) | null = null
+// 模块级自增 id，避免 StrictMode 双挂载重置导致 key 冲突
+let toastSeq = 0
 
 /** 全局轻提示：`toast.success('已保存')` */
 export const toast = {
@@ -31,16 +33,20 @@ export function ToastHost() {
   const [items, setItems] = useState<ToastItem[]>([])
 
   useEffect(() => {
-    let id = 0
+    const timers = new Set<number>()
     push = (type, text) => {
-      const item = { id: ++id, type, text }
+      const item = { id: ++toastSeq, type, text }
       setItems((prev) => [...prev.slice(-4), item])
-      window.setTimeout(() => {
+      const timer = window.setTimeout(() => {
+        timers.delete(timer)
         setItems((prev) => prev.filter((t) => t.id !== item.id))
       }, 3000)
+      timers.add(timer)
     }
     return () => {
       push = null
+      timers.forEach((t) => window.clearTimeout(t))
+      timers.clear()
     }
   }, [])
 

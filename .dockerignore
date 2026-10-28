@@ -27,3 +27,8 @@ narratoai/resource/videos
 services/.venv
 models
 *.md
+ms-playwright
+frontend
+.env
+**/__pycache__
+*.bak.*.tar.gz

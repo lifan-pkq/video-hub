@@ -179,6 +179,24 @@ const http = axios.create({
 
 export default http
 
+// ================= WebSocket =================
+
+/**
+ * 推导实时事件流 WebSocket 地址（ws/wss 协议自适应）。
+ * 由 axios baseURL（默认 '/api'，可为绝对 URL）+ 当前页面 host 推导，
+ * 结果形如 ws(s)://host/api/ws。
+ */
+export function getWsUrl(): string {
+  const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+  try {
+    const base = http.defaults.baseURL ?? '/api'
+    const u = new URL(base, window.location.origin)
+    return `${proto}//${u.host}${u.pathname.replace(/\/+$/, '')}/ws`
+  } catch {
+    return `${proto}//${window.location.host}/api/ws`
+  }
+}
+
 // ================= 视频库 =================
 
 export async function fetchVideos(): Promise<Video[]> {
@@ -349,6 +367,37 @@ export async function submitVerifyCode(
   return data
 }
 
+// ================= 作者作品 =================
+
+/** 作者主页解析出的单条作品 */
+export interface AuthorWork {
+  id: string
+  title: string
+  cover_url: string | null
+  url: string
+  duration: number | null
+  like_count: number | null
+  /** 发布时间戳（秒） */
+  create_time: number | null
+}
+
+/** POST /author/parse 响应 */
+export interface AuthorWorksResult {
+  author: {
+    name: string
+    avatar: string | null
+    url: string
+    platform: string
+  }
+  works: AuthorWork[]
+}
+
+/** 解析作者主页作品列表（浏览器抓取，可能耗时 30-90 秒，超时放宽到 130s；429 = 另一个抓取进行中） */
+export async function parseAuthorWorks(text: string): Promise<AuthorWorksResult> {
+  const { data } = await http.post<AuthorWorksResult>('/author/parse', { text }, { timeout: 130000 })
+  return data
+}
+
 // ================= 发布 =================
 
 export async function publishVideo(payload: PublishPayload): Promise<{ task_id: string }> {
@@ -390,6 +439,37 @@ export async function uploadCookie(
   const { data } = await http.post<{ ok: boolean; path: string; message: string }>(
     `/accounts/${platform}/${account}/cookie`,
     form,
+  )
+  return data
+}
+
+/** 导入 cookie 字符串（支持浏览器复制串 / Netscape 文本 / storage_state JSON），返回解析条数 */
+export async function importCookieString(
+  platform: string,
+  account: string,
+  content: string,
+): Promise<{ ok: boolean; count: number }> {
+  const { data } = await http.post<{ ok: boolean; count: number }>('/accounts/cookie/import', {
+    platform,
+    account,
+    content,
+  })
+  return data
+}
+
+export interface CookieExportResult {
+  platform: string
+  account: string
+  cookie_string: string
+}
+
+/** 导出账号 cookie 为字符串（无 cookie 时 404） */
+export async function exportCookieString(
+  platform: string,
+  account: string,
+): Promise<CookieExportResult> {
+  const { data } = await http.get<CookieExportResult>(
+    `/accounts/${platform}/${account}/cookie/export`,
   )
   return data
 }

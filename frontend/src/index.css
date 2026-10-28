@@ -80,7 +80,7 @@
   body {
     background-color: var(--bg);
     color: var(--ink-1);
-    font-family: 'Noto Sans SC', system-ui, sans-serif;
+    font-family: 'Noto Sans SC Variable', system-ui, sans-serif;
     font-weight: 400;
     -webkit-font-smoothing: antialiased;
   }
@@ -161,7 +161,7 @@
   /* ---------- 排版 ---------- */
 
   .font-display {
-    font-family: 'Outfit', 'Noto Sans SC', sans-serif;
+    font-family: 'Outfit', 'Noto Sans SC Variable', sans-serif;
   }
 
   .tnum {
@@ -170,7 +170,7 @@
 
   .page-title {
     margin: 0;
-    font-family: 'Outfit', 'Noto Sans SC', sans-serif;
+    font-family: 'Outfit', 'Noto Sans SC Variable', sans-serif;
     font-size: 26px;
     font-weight: 600;
     letter-spacing: -0.02em;
@@ -195,7 +195,7 @@
   }
 
   .stat-value {
-    font-family: 'Outfit', 'Noto Sans SC', sans-serif;
+    font-family: 'Outfit', 'Noto Sans SC Variable', sans-serif;
     font-variant-numeric: tabular-nums;
     font-weight: 600;
     letter-spacing: -0.02em;
@@ -589,7 +589,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    font-family: 'Outfit', 'Noto Sans SC', sans-serif;
+    font-family: 'Outfit', 'Noto Sans SC Variable', sans-serif;
     font-weight: 700;
     color: rgba(255, 255, 255, 0.92);
     text-shadow: 0 2px 12px rgba(0, 0, 0, 0.3);
@@ -751,7 +751,9 @@
   .narrate-toolbar p:not(.eyebrow) { margin-top: 3px; color: var(--ink-3); font-size: 11px; }
   .narrate-open { display: inline-flex; flex-shrink: 0; align-items: center; gap: 6px; color: var(--ink-3); font-size: 12px; }
   .narrate-open:hover { color: var(--accent); }
-  .narrate-frame { min-height: 0; width: 100%; flex: 1; border: 0; background: white; }
+  .narrate-frame-shell { position: relative; min-height: 0; flex: 1; }
+  .narrate-frame { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: white; }
+  .narrate-frame-loading { position: absolute; inset: 0; z-index: 1; background: var(--bg); }
   .narrate-state { display: flex; flex: 1; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 40px 20px; color: var(--ink-3); text-align: center; }
   .narrate-state .skeleton { width: 42px; height: 42px; border-radius: 50%; }
   .narrate-state h2 { color: var(--ink-1); font-size: 18px; }

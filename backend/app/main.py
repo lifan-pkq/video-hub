@@ -4,10 +4,11 @@ import asyncio
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.config import NARRATO_TASKS_DIR, ensure_dirs
+from app.config import ensure_dirs
 from app.db import fail_interrupted_recordings
-from app.routers import accounts, download, edit, publish, recordings, sms, stats, videos, watchers
+from app.routers import accounts, author, download, edit, events, publish, recordings, sms, stats, videos, watchers
 from app.services import narrato_import, watcher
+from app.services.events import event_hub
 
 app = FastAPI(title="Video Hub", version="1.2.0")
 
@@ -27,15 +28,17 @@ app.include_router(recordings.router)
 app.include_router(sms.router)
 app.include_router(stats.router)
 app.include_router(watchers.router)
+app.include_router(author.router)
+app.include_router(events.router)
 
 
 @app.on_event("startup")
 async def _startup():
     ensure_dirs()
+    event_hub.bind_loop()
     fail_interrupted_recordings()
     asyncio.create_task(watcher.watcher_loop())
-    if NARRATO_TASKS_DIR.is_dir():
-        asyncio.create_task(narrato_import.importer_loop())
+    asyncio.create_task(narrato_import.importer_loop())
 
 
 @app.get("/api/health")

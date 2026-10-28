@@ -108,14 +108,18 @@ export default function EditorPage() {
   useEffect(() => {
     if (draftReady || libLoading || libError) return
     const state = location.state as { videoIds?: number[]; autoAnalyze?: boolean } | null
+    const queryVideoId = Number(new URLSearchParams(location.search).get('video'))
+    const requestedIds = state?.videoIds?.length
+      ? state.videoIds
+      : Number.isInteger(queryVideoId) && queryVideoId > 0 ? [queryVideoId] : []
 
-    if (state?.videoIds?.length) {
-      const picked = state.videoIds
+    if (requestedIds.length > 0) {
+      const picked = requestedIds
         .map((id) => videos.find((video) => video.id === id))
         .filter((video): video is Video => !!video && (video.duration ?? 0) >= MIN_DUR)
       if (picked.length > 0) {
         reset({ clips: pack(picked.map(newClip)), title: '' })
-        if (state.autoAnalyze) aiPanelRef.current?.start(picked.map((video) => video.id))
+        if (state?.autoAnalyze) aiPanelRef.current?.start(picked.map((video) => video.id))
         else toast.success(`已加入 ${picked.length} 个片段`)
       } else {
         toast.warning('所选视频不存在或时长无效，未加入时间线')

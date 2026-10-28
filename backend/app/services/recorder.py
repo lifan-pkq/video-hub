@@ -261,11 +261,12 @@ def start_recording(url: str, title: str = "", quality: str = "best", fps: int =
     rec_id = add_recording(url, platform, title, filename, quality, fps)
     log_path = TMP_DIR / f"record_{rec_id}.log"
     cmd = _build_ffmpeg_cmd(stream_url, platform, out_path, fps)
+    log_f = open(log_path, "wb")
     try:
-        log_f = open(log_path, "wb")
         proc = subprocess.Popen(cmd, stdin=subprocess.PIPE,
                                 stdout=subprocess.DEVNULL, stderr=log_f)
     except Exception as e:
+        log_f.close()
         update_recording(rec_id, status="failed", error=str(e),
                          finished_at=time.strftime("%Y-%m-%d %H:%M:%S"))
         raise RuntimeError(f"ffmpeg 启动失败: {e}")
@@ -364,6 +365,10 @@ def _finish_success(rec_id: int, rec: dict) -> bool:
         return True
     finally:
         ev.set()
+        with _lock:
+            # 收尾完成信号已发出，清理防重复登记的内存结构（rec_id 单调递增，不会复用）
+            _finalize_events.pop(rec_id, None)
+            _finalized.discard(rec_id)
 
 
 def stop_recording(rec_id: int) -> bool:

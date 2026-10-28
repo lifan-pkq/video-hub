@@ -20,6 +20,10 @@ class VendorBoundaryTests(unittest.TestCase):
         for pattern in ("narratoai/config.toml", "narratoai/storage/", "services/.venv/"):
             self.assertIn(pattern, ignored)
         self.assertFalse((ROOT / "narratoai/config.toml").exists())
+    def test_main_module_imports_and_health_is_callable(self):
+        from app.main import health
+
+        self.assertEqual(health(), {"status": "ok"})
 
 
 class FrontendIntegrationTests(unittest.TestCase):

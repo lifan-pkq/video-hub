@@ -4,7 +4,7 @@ set -euo pipefail
 
 SERVER_USER="${SERVER_USER:-root}"
 SERVER_IP="${SERVER_IP:-39.105.112.189}"
-REMOTE_DIR="${REMOTE_DIR:-/opt/video-hub}"
+REMOTE_DIR="/opt/video-hub"
 PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 : "${SSHPASS:?请先设置环境变量 SSHPASS=服务器SSH密码}"
@@ -28,6 +28,9 @@ rsync -az --delete -e "$RSYNC_SSH" \
   --exclude='narratoai/.venv' --exclude='narratoai/.cache' \
   --exclude='narratoai/config.toml*' --exclude='narratoai/storage' \
   --exclude='narratoai/resource/videos' --exclude='narratoai/resource/scripts' \
+  --exclude='narratoai/resource/bgm' --exclude='narratoai/resource/songs' \
+  --exclude='narratoai/resource/srt' --exclude='narratoai/resource/fonts' \
+  --exclude='narratoai/resource/safe_areas' \
   --exclude='services/.venv' --exclude='models' --exclude='ms-playwright' \
   --exclude='**/access_token.txt' --exclude='**/sms_token.txt' --exclude='**/verify_code.txt' \
   --exclude='**/__pycache__' \

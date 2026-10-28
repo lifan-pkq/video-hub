@@ -1,4 +1,4 @@
-"""平台账号：多账号管理、cookie 校验/上传/删除、扫码登录会话。"""
+"""平台账号：多账号管理、cookie 校验/上传/导入导出、扫码登录会话。"""
 import json
 import os
 import tempfile
@@ -8,8 +8,9 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from app.config import PLATFORMS, PLATFORM_NAMES
-from app.services.cookies import cookie_path, delete_cookie, list_accounts, valid_account_name
-from app.services.login import cancel_login, get_login, qr_file, start_login
+from app.services.cookies import (cookie_path, delete_cookie, export_cookie_string,
+                                  import_cookie_string, list_accounts, valid_account_name)
+from app.services.login import cancel_login, get_login, qr_file, screenshot_file, start_login
 from app.services.publisher import check_platform
 
 router = APIRouter(prefix="/api/accounts", tags=["accounts"])
@@ -101,6 +102,38 @@ async def remove_account(platform: str, account: str):
     return {"ok": True, "message": f"{PLATFORM_NAMES[platform]}({account}) 已删除"}
 
 
+# ---------- cookie 字符串导入/导出（免上传文件） ----------
+
+class CookieImportRequest(BaseModel):
+    platform: str
+    account: str
+    content: str
+
+
+@router.post("/cookie/import")
+async def import_cookie(req: CookieImportRequest):
+    """直接粘贴 cookie 字符串导入（自动识别 请求头字符串/Netscape 文本/storage_state JSON）。"""
+    _check_platform_account(req.platform, req.account)
+    try:
+        path = import_cookie_string(req.platform, req.account, req.content)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    count = len(json.loads(path.read_text(encoding="utf-8")).get("cookies", []))
+    return {"ok": True, "count": count,
+            "message": f"{PLATFORM_NAMES[req.platform]}({req.account}) cookie 已导入（{count} 条），建议立即校验"}
+
+
+@router.get("/{platform}/{account}/cookie/export")
+async def export_cookie(platform: str, account: str):
+    """导出该账号 cookie 为请求头字符串，方便复制到别的设备/工具使用。"""
+    _check_platform_account(platform, account)
+    try:
+        cookie_string = export_cookie_string(platform, account)
+    except FileNotFoundError:
+        raise HTTPException(404, "该账号还没有 cookie")
+    return {"platform": platform, "account": account, "cookie_string": cookie_string}
+
+
 # ---------- 扫码登录 ----------
 
 class LoginRequest(BaseModel):
@@ -140,6 +173,16 @@ async def login_qr(session_id: str):
     head = qr.read_bytes()[:128].lstrip()
     media = "image/svg+xml" if head.startswith(b"<") else "image/png"
     return FileResponse(str(qr), media_type=media,
+                        headers={"Cache-Control": "no-store"})
+
+
+@router.get("/login/{session_id}/screenshot.png")
+async def login_screenshot(session_id: str):
+    """浏览器实况截图（扫码登录期间引擎周期性保存）。"""
+    shot = screenshot_file(session_id)
+    if not shot:
+        raise HTTPException(404, "暂无截图")
+    return FileResponse(str(shot), media_type="image/png",
                         headers={"Cache-Control": "no-store"})
 
 

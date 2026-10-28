@@ -58,7 +58,7 @@ export default function CommandPalette({ open, onClose }: Props) {
       subtitle: `视频 · ${platformLabel(v.source_platform)}`,
       keywords: v.title,
       action: () => {
-        navigate(`/videos?q=${encodeURIComponent(v.title)}`)
+        navigate(`/library?q=${encodeURIComponent(v.title)}`)
         onClose()
       },
     }))

@@ -89,6 +89,8 @@ def _transcribe(path: str, language: str | None):
 
 @app.get("/health")
 def health():
+    if _model_error is not None:
+        raise HTTPException(status_code=503, detail=_model_error)
     return {
         "status": "ok" if _model is not None else "model-not-loaded",
         "service": "narrato-asr",

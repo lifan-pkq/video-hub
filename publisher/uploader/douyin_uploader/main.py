@@ -92,13 +92,13 @@ async def cookie_auth(account_file):
     return False
 
 
-async def douyin_setup(account_file, handle=False, return_detail=False, qrcode_callback=None, headless: bool = LOCAL_CHROME_HEADLESS, cdp_url: str | None = None):
+async def douyin_setup(account_file, handle=False, return_detail=False, qrcode_callback=None, headless: bool = LOCAL_CHROME_HEADLESS, cdp_url: str | None = None, screenshot_path: str | None = None, use_stealth: bool = True):
     if not os.path.exists(account_file) or not await cookie_auth(account_file):
         if not handle:
             result = _build_login_result(False, "cookie_invalid", "cookie文件不存在或已失效", account_file)
             return result if return_detail else False
         douyin_logger.info(_msg("🥹", "cookie 失效了，准备打开浏览器重新登录"))
-        result = await douyin_cookie_gen(account_file, qrcode_callback=qrcode_callback, headless=headless, cdp_url=cdp_url)
+        result = await douyin_cookie_gen(account_file, qrcode_callback=qrcode_callback, headless=headless, cdp_url=cdp_url, screenshot_path=screenshot_path, use_stealth=use_stealth)
         return result if return_detail else result["success"]
 
     result = _build_login_result(True, "cookie_valid", "cookie有效", account_file)
@@ -189,27 +189,52 @@ async def _is_douyin_login_completed(page: Page) -> bool:
     return True
 
 
-async def _wait_for_douyin_login(page: Page, account_file: str, qrcode_info: dict, qrcode_callback=None, poll_interval: int = 3, max_checks: int = 100) -> dict:
+async def _wait_for_douyin_login(page: Page, account_file: str, qrcode_info: dict, qrcode_callback=None, poll_interval: int = 3, max_checks: int = 100, screenshot_path: str | None = None) -> dict:
     qrcode_path = Path(qrcode_info["image_path"]) if qrcode_info.get("image_path") else None
     original_url = page.url
+    last_url = page.url
     saw_2fa = False
-    for _ in range(max_checks):
+    for i in range(max_checks):
+        # 浏览器实况截图：供 web 端展示页面真实状态（扫码确认/安全验证/二维码失效）
+        if screenshot_path:
+            try:
+                await page.screenshot(path=screenshot_path, timeout=3000)
+            except Exception:
+                pass
+
+        # 登录完成判定：① URL 跳转判定 ② 更可靠的 cookie 判定（sessionid 到位即登录成功，
+        # 覆盖扫码后跳安全验证页/首页等 URL 不符合预期的情况）
         if await _is_douyin_login_completed(page):
             douyin_logger.info(_msg("🥳", f"扫码成功，已经跳转到登录后页面: {page.url}"))
             return _build_login_result(True, "success", "抖音扫码登录成功", account_file, qrcode_info, page.url)
+        try:
+            cookies = await page.context.cookies()
+            if any(c.get("name") == "sessionid" and c.get("value") for c in cookies):
+                douyin_logger.info(_msg("🥳", f"检测到 sessionid cookie 已写入，登录成功: {page.url}"))
+                return _build_login_result(True, "success", "抖音扫码登录成功", account_file, qrcode_info, page.url)
+        except Exception:
+            pass
+
+        # 记录页面跳转轨迹，便于排查扫码后卡在哪个环节
+        if page.url != last_url:
+            douyin_logger.info(_msg("🔀", f"页面跳转: {last_url} -> {page.url}"))
+            last_url = page.url
 
         # URL 变化 + sessionid 未到位 → 二验流程，继续等
-        if page.url != original_url and not await _is_douyin_login_completed(page):
+        if page.url != original_url:
             sms_input = page.locator('input[placeholder*="验证码"], input[type="tel"], input[placeholder*="短信"], input[placeholder*="手机号"]')
-            if await sms_input.count() > 0:
-                if not saw_2fa:
-                    douyin_logger.warning(_msg("⚠️", f"检测到抖音短信/安全二次验证，请在弹出的浏览器中手动输入。等待 sessionid ({i}/{max_checks})"))
-                    saw_2fa = True
+            if await sms_input.count() > 0 and not saw_2fa:
+                douyin_logger.warning(_msg("⚠️", f"检测到抖音短信/安全二次验证，请在弹出的浏览器中手动输入。等待 sessionid ({i}/{max_checks})"))
+                saw_2fa = True
             await asyncio.sleep(poll_interval)
             continue
 
         expired_box = page.get_by_text("二维码失效", exact=True).locator("..").first
-        if await expired_box.count() and await expired_box.is_visible():
+        try:
+            expired_visible = await expired_box.count() and await expired_box.is_visible()
+        except Exception:
+            expired_visible = False
+        if expired_visible:
             douyin_logger.warning(_msg("😵", "二维码失效了，小人马上去刷新"))
             await expired_box.click()
             await asyncio.sleep(1)
@@ -228,6 +253,8 @@ async def douyin_cookie_gen(
     max_checks: int = 60,
     headless: bool = LOCAL_CHROME_HEADLESS,
     cdp_url: str | None = None,
+    screenshot_path: str | None = None,
+    use_stealth: bool = True,
 ):
     async with async_playwright() as playwright:
         if cdp_url:
@@ -238,7 +265,11 @@ async def douyin_cookie_gen(
             browser = await playwright.chromium.launch(headless=headless, channel="chromium")
             context = await browser.new_context()
             should_close_context = True
-        context = await set_init_script(context)
+        # 注意：抖音创作者中心能识别 stealth.min.js 的特征并把页面容器撑成 4000px 宽
+        # （登录卡被挤出可视区，页面留白，且大概率伴随风控导致扫码确认不生效）。
+        # patchright 本身已处理 webdriver/CDP 痕迹，扫码登录场景下应关闭 stealth。
+        if use_stealth:
+            context = await set_init_script(context)
         qrcode_path = None
         result = _build_login_result(False, "failed", "抖音登录失败", account_file)
         try:
@@ -254,6 +285,7 @@ async def douyin_cookie_gen(
                 qrcode_callback=qrcode_callback,
                 poll_interval=poll_interval,
                 max_checks=max_checks,
+                screenshot_path=screenshot_path,
             )
             if result["success"]:
                 await asyncio.sleep(2)

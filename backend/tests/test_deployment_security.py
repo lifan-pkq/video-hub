@@ -79,6 +79,31 @@ class HostDeploymentTests(unittest.TestCase):
         self.assertNotIn("rm -rf /opt/NarratoAI", script)
         self.assertIn("nginx -t", script)
 
+    def test_narrato_proxy_preserves_base_path(self):
+        config = (ROOT / "deploy/nginx-host.conf").read_text()
+        self.assertIn("proxy_pass http://127.0.0.1:8501;", config)
+        self.assertNotIn("proxy_pass http://127.0.0.1:8501/;", config)
+
+    def test_all_writable_narrato_resources_survive_code_sync(self):
+        script = (ROOT / "deploy.sh").read_text()
+        installer = (ROOT / "deploy/remote-install.sh").read_text()
+        for directory in ("videos", "scripts", "bgm", "songs", "srt", "fonts", "safe_areas"):
+            self.assertIn(f"--exclude='narratoai/resource/{directory}'", script)
+            self.assertIn(directory, installer)
+
+    def test_service_user_can_write_publisher_runtime_file(self):
+        installer = (ROOT / "deploy/remote-install.sh").read_text()
+        self.assertIn('chown narratoai:narratoai "$REMOTE_DIR/publisher"', installer)
+
+    def test_existing_unified_stack_is_included_in_backups(self):
+        installer = (ROOT / "deploy/remote-install.sh").read_text()
+        for path in (
+            "/etc/nginx/sites-available/video-hub",
+            "/etc/nginx/sites-enabled/video-hub",
+            "/etc/systemd/system/video-hub-backend.service",
+        ):
+            self.assertIn(path, installer)
+
 
 if __name__ == "__main__":
     unittest.main()

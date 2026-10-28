@@ -49,8 +49,8 @@ async def download_batch(req: BatchDownloadRequest):
     texts = [t.strip() for t in req.texts if t.strip()]
     if not texts:
         raise HTTPException(400, "至少提供一条链接")
-    if len(texts) > 20:
-        raise HTTPException(400, "单次最多 20 条")
+    if len(texts) > 100:
+        raise HTTPException(400, "单次最多 100 条")
     task_ids = []
     for i, text in enumerate(texts):
         task = task_manager.create("download", f"[{i + 1}/{len(texts)}] {text[:56]}")
@@ -70,6 +70,18 @@ def get_task(task_id: str):
     if not t:
         raise HTTPException(404, "任务不存在")
     return t.to_dict()
+
+
+@router.post("/tasks/{task_id}/cancel")
+def cancel_task(task_id: str):
+    """取消进行中/排队中的任务（下载线程在下一个进度回调处中断）。"""
+    t = task_manager.get(task_id)
+    if not t:
+        raise HTTPException(404, "任务不存在")
+    if t.status not in ("pending", "running"):
+        raise HTTPException(400, "任务已结束，无法取消")
+    task_manager.cancel(task_id)
+    return {"ok": True, "task": t.to_dict(with_logs=False)}
 
 
 class VerifyCodeRequest(BaseModel):

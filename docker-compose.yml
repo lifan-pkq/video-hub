@@ -4,7 +4,16 @@ services:
       context: .
       dockerfile: backend/Dockerfile
     container_name: video-hub-backend
+    init: true
     restart: unless-stopped
+    shm_size: 512m
+    mem_limit: 1400m
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
     volumes:
       - ./data:/app/data
       - ./publisher/cookies:/opt/publisher/cookies

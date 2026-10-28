@@ -9,7 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@fontsource/noto-sans-sc": "^5.3.0",
+    "@fontsource-variable/noto-sans-sc": "^5.2.5",
     "@fontsource/outfit": "^5.3.0",
     "@phosphor-icons/react": "^2.1.10",
     "@xzdarcy/react-timeline-editor": "^1.0.0",

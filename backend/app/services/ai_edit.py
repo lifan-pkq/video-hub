@@ -14,6 +14,7 @@ from pathlib import Path
 import requests
 
 from app.config import AI_API_KEY, AI_BASE_URL, AI_MODEL, ASR_URL, TMP_DIR, WHISPER_MODEL
+from app.services.media import render_semaphore
 
 # whisper 模型全局单例（首次加载需下载模型文件，之后常驻内存）
 _model = None
@@ -69,7 +70,8 @@ def transcribe(video_path: Path, log=print) -> list[dict]:
         out = transcribe_remote(video_path, ASR_URL, log=log)
     else:
         model = _get_model()
-        segments, info = model.transcribe(str(video_path), language="zh", vad_filter=True)
+        with render_semaphore:
+            segments, info = model.transcribe(str(video_path), language="zh", vad_filter=True)
         out = []
         for seg in segments:
             text = seg.text.strip()

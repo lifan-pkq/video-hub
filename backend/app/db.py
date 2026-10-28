@@ -37,6 +37,10 @@ def _init_schema(conn: sqlite3.Connection):
             source_url TEXT,
             created_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS narrato_imports (
+            task_id TEXT PRIMARY KEY,
+            video_id INTEGER NOT NULL
+        );
         CREATE TABLE IF NOT EXISTS publish_records (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             task_id TEXT NOT NULL,
@@ -107,6 +111,32 @@ def add_video(**fields) -> dict:
         conn.commit()
         row = conn.execute("SELECT * FROM videos WHERE id=?", (cur.lastrowid,)).fetchone()
         return dict(row)
+
+
+def add_narrato_video(task_id: str, **fields) -> dict:
+    """视频记录与 NarratoAI 导入台账在同一事务中提交。"""
+    fields.setdefault("created_at", datetime.now().isoformat(timespec="seconds"))
+    keys = ",".join(fields.keys())
+    marks = ",".join("?" for _ in fields)
+    with _lock:
+        conn = _get_conn()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            existing = conn.execute(
+                "SELECT video_id FROM narrato_imports WHERE task_id=?", (task_id,)
+            ).fetchone()
+            if existing:
+                row = conn.execute("SELECT * FROM videos WHERE id=?", (existing["video_id"],)).fetchone()
+                conn.commit()
+                return dict(row)
+            cur = conn.execute(f"INSERT INTO videos ({keys}) VALUES ({marks})", list(fields.values()))
+            conn.execute("INSERT INTO narrato_imports (task_id, video_id) VALUES (?, ?)", (task_id, cur.lastrowid))
+            conn.commit()
+            row = conn.execute("SELECT * FROM videos WHERE id=?", (cur.lastrowid,)).fetchone()
+            return dict(row)
+        except Exception:
+            conn.rollback()
+            raise
 
 
 def get_video(video_id: int) -> dict | None:

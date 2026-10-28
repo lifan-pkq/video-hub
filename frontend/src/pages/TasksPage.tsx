@@ -1,23 +1,16 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import {
-  CaretDown,
-  ClockCounterClockwise,
-  DownloadSimple,
-  PaperPlaneTilt,
-} from '@phosphor-icons/react'
-import {
+import { ClockCounterClockwise, DownloadSimple } from '@phosphor-icons/react'
+import http, {
   errorMessage,
   fetchTask,
-  formatRelative,
-  platformLabel,
+  fetchTasks,
   type Task,
   type TaskSummary,
 } from '../api'
-import { Alert, Button, EmptyState, PageHeader, toast } from '../ui'
-import StatusBadge from '../components/StatusBadge'
-import TaskLogs from '../components/TaskLogs'
-import { useTaskCenter } from '../context/TaskCenter'
+import { useEvents, type EventMsg } from '../events'
+import { Button, EmptyState, PageHeader, Segment, confirmDialog, toast } from '../ui'
+import TasksCard, { TaskRowSkeleton } from '../components/TasksCard'
 
 type Filter = 'all' | 'running' | 'done' | 'failed'
 
@@ -28,12 +21,6 @@ const FILTERS: { key: Filter; label: string }[] = [
   { key: 'failed', label: '失败' },
 ]
 
-const TYPE_LABEL: Record<TaskSummary['type'], string> = {
-  download: '视频下载',
-  publish: '视频发布',
-  edit: '剪辑拼接',
-}
-
 function matchFilter(t: TaskSummary, f: Filter): boolean {
   if (f === 'running') return t.status === 'pending' || t.status === 'running'
   if (f === 'done') return t.status === 'success' || t.status === 'partial'
@@ -41,205 +28,209 @@ function matchFilter(t: TaskSummary, f: Filter): boolean {
   return true
 }
 
-/** 两行加载骨架：首行全宽、末行 60% */
-function RowSkeleton() {
-  return (
-    <div className="space-y-3 py-1">
-      {['100%', '60%'].map((w, i) => (
-        <div key={i} className="skeleton" style={{ width: w, height: 14 }} />
-      ))}
-    </div>
-  )
+/** 兜底全量刷新间隔（实时事件由 useEvents 驱动，此处仅防丢帧） */
+const FALLBACK_INTERVAL = 60_000
+
+/**
+ * 取消任务：api.ts 暂无该函数，按契约约定用 http 实例就地请求。
+ * 后端 POST /api/tasks/{id}/cancel（若后端未实现会 toast 报错，不影响列表）。
+ */
+async function cancelTask(taskId: string): Promise<{ ok: boolean }> {
+  const { data } = await http.post<{ ok: boolean }>(`/tasks/${taskId}/cancel`)
+  return data
 }
 
 export default function TasksPage() {
-  const { summaries: tasks, loading, error, refreshTasks, openVerification } = useTaskCenter()
+  const [tasks, setTasks] = useState<TaskSummary[]>([])
+  const [loading, setLoading] = useState<boolean>(true)
   const [filter, setFilter] = useState<Filter>('all')
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [detail, setDetail] = useState<Task | null>(null)
-  const expandedIdRef = useRef<string | null>(null)
-  expandedIdRef.current = expandedId
+  const [cancellingId, setCancellingId] = useState<string | null>(null)
 
+  // 进行中任务耗时每秒跳动
+  const [now, setNow] = useState(() => Date.now())
+  const hasRunning = tasks.some((t) => t.status === 'pending' || t.status === 'running')
   useEffect(() => {
-    if (!expandedId) return
+    if (!hasRunning) return
+    const timer = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(timer)
+  }, [hasRunning])
+
+  // ================= 实时事件驱动 =================
+
+  const onEvent = useCallback((msg: EventMsg) => {
+    if (msg.type === 'snapshot') {
+      setTasks(msg.tasks)
+      setLoading(false)
+    } else if (msg.type === 'task_updated') {
+      const task = msg.task
+      setTasks((prev) => {
+        const idx = prev.findIndex((t) => t.id === task.id)
+        if (idx >= 0) {
+          const next = [...prev]
+          next[idx] = task
+          return next
+        }
+        return [task, ...prev]
+      })
+    }
+  }, [])
+  useEvents(onEvent)
+
+  // 60s 兜底刷新：防止 WS / 降级轮询丢帧；也保证首屏在 snapshot 到达前有数据
+  useEffect(() => {
     let dead = false
-    let first = true
-    let timer = 0
-    const taskId = expandedId
     const tick = async () => {
       try {
-        const next = await fetchTask(taskId)
-        if (!dead && expandedIdRef.current === taskId) setDetail(next)
-      } catch (cause) {
-        if (first && !dead && expandedIdRef.current === taskId) {
-          toast.error(`加载任务详情失败：${errorMessage(cause)}`)
+        const list = await fetchTasks()
+        if (!dead) {
+          setTasks(list)
+          setLoading(false)
         }
-      } finally {
-        first = false
-        if (!dead) timer = window.setTimeout(tick, 3000)
+      } catch {
+        // 静默，下一轮重试
       }
     }
     void tick()
+    const timer = window.setInterval(tick, FALLBACK_INTERVAL)
     return () => {
       dead = true
-      window.clearTimeout(timer)
+      window.clearInterval(timer)
     }
-  }, [expandedId])
+  }, [])
+
+  // ================= 展开日志 =================
+
+  const expandedTask = useMemo(
+    () => (expandedId ? tasks.find((t) => t.id === expandedId) ?? null : null),
+    [tasks, expandedId],
+  )
+
+  // 展开时拉详情（含日志）；任务状态/进度变化时同步刷新详情
+  useEffect(() => {
+    if (!expandedId) {
+      setDetail(null)
+      return
+    }
+    let dead = false
+    fetchTask(expandedId)
+      .then((d) => {
+        if (!dead) setDetail(d)
+      })
+      .catch((e) => {
+        if (!dead) toast.error(`加载任务详情失败：${errorMessage(e)}`)
+      })
+    return () => {
+      dead = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [expandedId, expandedTask?.status, expandedTask?.progress])
 
   const toggle = (t: TaskSummary) => {
-    setExpandedId(expandedId === t.id ? null : t.id)
     setDetail(null)
+    setExpandedId((prev) => (prev === t.id ? null : t.id))
   }
 
+  // ================= 取消任务 =================
+
+  const handleCancel = async (t: TaskSummary) => {
+    const ok = await confirmDialog({
+      title: '取消任务',
+      content: `确定要取消「${t.title}」吗？`,
+      okText: '确认取消',
+      cancelText: '再想想',
+      danger: true,
+    })
+    if (!ok) return
+    setCancellingId(t.id)
+    try {
+      await cancelTask(t.id)
+      toast.success('已请求取消')
+    } catch (e) {
+      toast.error(`取消失败：${errorMessage(e)}`)
+    } finally {
+      setCancellingId(null)
+    }
+  }
+
+  // ================= 派生数据 =================
+
+  const counts = useMemo(() => {
+    const c: Record<Filter, number> = { all: tasks.length, running: 0, done: 0, failed: 0 }
+    for (const t of tasks) {
+      if (matchFilter(t, 'running')) c.running += 1
+      else if (matchFilter(t, 'done')) c.done += 1
+      else if (matchFilter(t, 'failed')) c.failed += 1
+    }
+    return c
+  }, [tasks])
+
   const filtered = tasks.filter((t) => matchFilter(t, filter))
-  const expandedDetail = detail?.id === expandedId ? detail : null
 
   return (
     <div>
-      <PageHeader title="任务中心" desc="下载与发布任务的实时状态，每 3 秒自动刷新" />
+      <PageHeader title="任务中心" desc="下载、发布与剪辑任务的实时状态（事件流驱动）" />
 
-      {/* 过滤 */}
-      <div className="mb-4 flex items-center gap-2">
-        {FILTERS.map((f) => {
-          const active = filter === f.key
-          return (
-            <button
-              key={f.key}
-              type="button"
-              onClick={() => setFilter(f.key)}
-              className={`rounded-full px-3.5 py-1.5 text-[13px] transition-colors ${
-                active
-                  ? 'bg-accent-soft font-medium text-accent'
-                  : 'text-ink-3 hover:bg-fill hover:text-ink-1'
-              }`}
-            >
-              {f.label}
-            </button>
-          )
-        })}
+      {/* 分组筛选 Tab */}
+      <div className="mb-4 overflow-x-auto">
+        <Segment
+          value={filter}
+          onChange={(v) => setFilter(v as Filter)}
+          options={FILTERS.map((f) => ({
+            value: f.key,
+            label: (
+              <>
+                {f.label} <span className="tnum text-xs">{counts[f.key]}</span>
+              </>
+            ),
+          }))}
+          className="min-w-[320px] sm:w-[420px]"
+        />
       </div>
 
       {loading ? (
         <div className="space-y-3">
           {[0, 1, 2].map((i) => (
             <div key={i} className="vh-card p-4">
-              <RowSkeleton />
+              <TaskRowSkeleton />
             </div>
           ))}
         </div>
-      ) : error && tasks.length === 0 ? (
-        <Alert type="error">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <span>任务加载失败：{error}</span>
-            <Button size="sm" onClick={() => void refreshTasks()}>重试</Button>
-          </div>
-        </Alert>
-      ) : filtered.length === 0 ? (
+      ) : tasks.length === 0 ? (
         <div className="vh-card">
           <EmptyState
             icon={<ClockCounterClockwise size={26} />}
             title="暂无任务"
-            desc="从视频下载或发布视频页发起任务后，会出现在这里"
+            desc="从导入向导下载视频或发布视频后，任务会实时出现在这里"
             action={
-              <Link to="/download">
-                <Button variant="primary">去下载</Button>
+              <Link to="/library/import">
+                <Button variant="primary" icon={<DownloadSimple size={15} />}>
+                  去下载视频
+                </Button>
               </Link>
             }
           />
         </div>
+      ) : filtered.length === 0 ? (
+        <div className="vh-card">
+          <EmptyState title="该分组暂无任务" desc="切换到其他分组看看" />
+        </div>
       ) : (
         <div className="space-y-3">
-          {filtered.map((t, i) => {
-            const expanded = expandedId === t.id
-            return (
-              <div
-                key={t.id}
-                className="vh-card enter-item px-4 py-3"
-                style={{ animationDelay: `${Math.min(i * 40, 300)}ms` }}
-              >
-                <div
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => toggle(t)}
-                  onKeyDown={(e: KeyboardEvent<HTMLDivElement>) => {
-                    if (e.key === 'Enter') toggle(t)
-                  }}
-                  className="flex cursor-pointer items-center gap-3"
-                >
-                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-fill text-ink-2">
-                    {t.type === 'download' ? (
-                      <DownloadSimple size={16} />
-                    ) : (
-                      <PaperPlaneTilt size={16} />
-                    )}
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate text-[14px] text-ink-1">{t.title}</div>
-                    <div className="mt-0.5 text-xs text-ink-4">
-                      {TYPE_LABEL[t.type]} · {formatRelative(t.created_at)} · 进度{' '}
-                      <span className="tnum">{Math.round(t.progress)}%</span>
-                      {t.needs_verify && <span className="ml-2 text-accent">等待短信验证码</span>}
-                    </div>
-                  </div>
-                  {t.needs_verify && (
-                    <Button
-                      size="sm"
-                      variant="primary"
-                      onClick={(event) => {
-                        event.stopPropagation()
-                        openVerification(t.id)
-                      }}
-                      onKeyDown={(event) => event.stopPropagation()}
-                    >
-                      待验证
-                    </Button>
-                  )}
-                  <StatusBadge status={t.status} />
-                  <span
-                    className={`shrink-0 text-ink-4 transition-transform duration-200 ${
-                      expanded ? 'rotate-180' : ''
-                    }`}
-                  >
-                    <CaretDown size={14} />
-                  </span>
-                </div>
-
-                {expanded && (
-                  <div className="border-t border-line-soft mt-3 pt-3">
-                    {!expandedDetail ? (
-                      <RowSkeleton />
-                    ) : (
-                      <div className="space-y-3">
-                        {expandedDetail.result.targets &&
-                          Object.keys(expandedDetail.result.targets).length > 0 && (
-                            <div className="space-y-1.5">
-                              {Object.entries(expandedDetail.result.targets).map(([key, r]) => {
-                                const [platform, account] = key.split(':')
-                                return (
-                                  <div key={key} className="flex items-center gap-2 text-[13px]">
-                                    <span className="text-ink-2">
-                                      {platformLabel(platform)} / {account}
-                                    </span>
-                                    <StatusBadge status={r.status} />
-                                    {r.message && (
-                                      <span className="truncate text-xs text-ink-4">{r.message}</span>
-                                    )}
-                                  </div>
-                                )
-                              })}
-                            </div>
-                          )}
-                        <TaskLogs logs={expandedDetail.logs} />
-                        {expandedDetail.logs.length === 0 && (
-                          <p className="text-xs text-ink-4">暂无日志输出</p>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            )
-          })}
+          {filtered.map((t, i) => (
+            <div key={t.id} className="enter-item" style={{ animationDelay: `${Math.min(i * 40, 300)}ms` }}>
+              <TasksCard
+                task={t}
+                now={now}
+                expanded={expandedId === t.id}
+                detail={expandedId === t.id ? detail : null}
+                cancelling={cancellingId === t.id}
+                onToggle={toggle}
+                onCancel={handleCancel}
+              />
+            </div>
+          ))}
         </div>
       )}
     </div>

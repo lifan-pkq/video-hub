@@ -90,10 +90,26 @@ async def _run_sau(task, platform: str, args: list[str]) -> tuple[int, str]:
     try:
         code = await asyncio.wait_for(consume(), timeout=PUBLISH_TIMEOUT)
     except asyncio.TimeoutError:
-        await _terminate_process_group(proc)
+        _kill_sau_tree(proc)
+        await proc.wait()
         task.log(f"[{PLATFORM_NAMES.get(platform, platform)}] 执行超时，已终止")
         return -1, "\n".join(output)
     return code, "\n".join(output)
+
+
+def _kill_sau_tree(proc):
+    """杀 asyncio 子进程进程组并收割孤儿浏览器（proc 是 asyncio Process，取 pid 操作）。"""
+    import os
+    import signal
+    from app.services.proc import reap_orphan_browsers
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+    except (ProcessLookupError, PermissionError, OSError):
+        try:
+            proc.terminate()
+        except ProcessLookupError:
+            pass
+    reap_orphan_browsers()
 
 
 async def check_platform(platform: str, account: str = PUBLISH_ACCOUNT) -> dict:

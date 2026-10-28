@@ -6,6 +6,7 @@ type ServiceStatus = 'loading' | 'ready' | 'error'
 
 export default function NarratePage() {
   const [status, setStatus] = useState<ServiceStatus>('loading')
+  const [frameLoaded, setFrameLoaded] = useState(false)
   const [attempt, setAttempt] = useState(0)
 
   useEffect(() => {
@@ -13,9 +14,11 @@ export default function NarratePage() {
     const controller = new AbortController()
     const timeout = window.setTimeout(() => controller.abort(), 10000)
     setStatus('loading')
+    setFrameLoaded(false)
     fetch('/narrato/_stcore/health', { signal: controller.signal })
-      .then((response) => {
-        if (!response.ok) throw new Error(`HTTP ${response.status}`)
+      .then(async (response) => {
+        const body = (await response.text()).trim()
+        if (!response.ok || body !== 'ok') throw new Error(`HTTP ${response.status}`)
         if (active) setStatus('ready')
       })
       .catch(() => {
@@ -28,6 +31,12 @@ export default function NarratePage() {
       controller.abort()
     }
   }, [attempt])
+
+  useEffect(() => {
+    if (status !== 'ready' || frameLoaded) return
+    const timeout = window.setTimeout(() => setStatus('error'), 30000)
+    return () => window.clearTimeout(timeout)
+  }, [frameLoaded, status])
 
   return (
     <section className="narrate-page" aria-label="AI 解说工作台">
@@ -56,7 +65,10 @@ export default function NarratePage() {
         </div>
       )}
       {status === 'ready' && (
-        <iframe className="narrate-frame" src="/narrato/" title="NarratoAI AI 解说工作台" />
+        <div className="narrate-frame-shell">
+          {!frameLoaded && <div className="narrate-state narrate-frame-loading" role="status"><p>正在加载 NarratoAI 工作台…</p></div>}
+          <iframe className="narrate-frame" src="/narrato/" title="NarratoAI AI 解说工作台" onLoad={() => setFrameLoaded(true)} />
+        </div>
       )}
     </section>
   )

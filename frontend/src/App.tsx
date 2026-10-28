@@ -10,6 +10,8 @@ import VerificationDialog from './components/VerificationDialog'
 import { TaskCenterProvider, useTaskCenter } from './context/TaskCenter'
 
 const DashboardPage = lazy(() => import('./pages/DashboardPage'))
+const WorkbenchPage = lazy(() => import('./pages/WorkbenchPage'))
+const ImportWizardPage = lazy(() => import('./pages/ImportWizardPage'))
 const VideosPage = lazy(() => import('./pages/VideosPage'))
 const EditorPage = lazy(() => import('./pages/EditorPage'))
 const DownloadPage = lazy(() => import('./pages/DownloadPage'))
@@ -94,7 +96,10 @@ function AppContent() {
             <Suspense fallback={<PageLoader />}>
               <Routes location={location}>
                 <Route path="/" element={<DashboardPage />} />
+                <Route path="/workbench" element={<WorkbenchPage />} />
                 <Route path="/videos" element={<VideosPage />} />
+                <Route path="/library" element={<VideosPage />} />
+                <Route path="/library/import" element={<ImportWizardPage />} />
                 <Route path="/edit" element={<EditorPage />} />
                 <Route path="/narrate" element={<NarratePage />} />
                 <Route path="/download" element={<DownloadPage />} />

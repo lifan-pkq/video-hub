@@ -29,8 +29,8 @@ export default {
         warning: { DEFAULT: 'var(--warning)', soft: 'var(--warning-soft)' },
       },
       fontFamily: {
-        sans: ['"Noto Sans SC"', 'system-ui', 'sans-serif'],
-        display: ['Outfit', '"Noto Sans SC"', 'sans-serif'],
+        sans: ['"Noto Sans SC Variable"', 'system-ui', 'sans-serif'],
+        display: ['Outfit', '"Noto Sans SC Variable"', 'sans-serif'],
         mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'Consolas', 'monospace'],
       },
       boxShadow: {

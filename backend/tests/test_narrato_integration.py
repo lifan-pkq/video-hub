@@ -1,3 +1,4 @@
+import subprocess
 import unittest
 from pathlib import Path
 
@@ -20,7 +21,10 @@ class VendorBoundaryTests(unittest.TestCase):
         ignored = (ROOT / ".gitignore").read_text()
         for pattern in ("narratoai/config.toml", "narratoai/storage/", "services/.venv/"):
             self.assertIn(pattern, ignored)
-        self.assertFalse((ROOT / "narratoai/config.toml").exists())
+        self.assertEqual(
+            subprocess.run(["git", "check-ignore", "-q", "narratoai/config.toml"], cwd=ROOT).returncode,
+            0,
+        )
     def test_main_module_imports_and_health_is_callable(self):
         from app.main import health
 

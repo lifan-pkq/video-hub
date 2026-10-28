@@ -48,7 +48,7 @@ if [ ! -d "$REMOTE_DIR/narratoai/storage" ] && [ -d /opt/NarratoAI/storage ]; th
   cp -a /opt/NarratoAI/storage "$REMOTE_DIR/narratoai/storage"
 fi
 mkdir -p "$REMOTE_DIR/narratoai/storage"/{temp,tasks,json,narration_scripts,drama_analysis}
-for directory in videos scripts bgm songs srt fonts safe_areas; do
+for directory in videos scripts bgm songs srt fonts safe_areas tts_reference_audio; do
   if [ -d "/opt/NarratoAI/resource/$directory" ]; then
     mkdir -p "$REMOTE_DIR/narratoai/resource/$directory"
     cp -an "/opt/NarratoAI/resource/$directory/." "$REMOTE_DIR/narratoai/resource/$directory/"

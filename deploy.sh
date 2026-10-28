@@ -30,7 +30,7 @@ rsync -az --delete -e "$RSYNC_SSH" \
   --exclude='narratoai/resource/videos' --exclude='narratoai/resource/scripts' \
   --exclude='narratoai/resource/bgm' --exclude='narratoai/resource/songs' \
   --exclude='narratoai/resource/srt' --exclude='narratoai/resource/fonts' \
-  --exclude='narratoai/resource/safe_areas' \
+  --exclude='narratoai/resource/safe_areas' --exclude='narratoai/resource/tts_reference_audio' \
   --exclude='services/.venv' --exclude='models' --exclude='ms-playwright' \
   --exclude='**/access_token.txt' --exclude='**/sms_token.txt' --exclude='**/verify_code.txt' \
   --exclude='**/__pycache__' \

@@ -87,7 +87,7 @@ class HostDeploymentTests(unittest.TestCase):
     def test_all_writable_narrato_resources_survive_code_sync(self):
         script = (ROOT / "deploy.sh").read_text()
         installer = (ROOT / "deploy/remote-install.sh").read_text()
-        for directory in ("videos", "scripts", "bgm", "songs", "srt", "fonts", "safe_areas"):
+        for directory in ("videos", "scripts", "bgm", "songs", "srt", "fonts", "safe_areas", "tts_reference_audio"):
             self.assertIn(f"--exclude='narratoai/resource/{directory}'", script)
             self.assertIn(directory, installer)
 

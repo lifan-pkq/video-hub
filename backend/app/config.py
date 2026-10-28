@@ -1,6 +1,5 @@
 """全局配置：所有路径都可通过环境变量覆盖，方便本地与 Docker 部署。"""
 import os
-import secrets
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent  # backend/
@@ -13,6 +12,10 @@ TMP_DIR = DATA_DIR / "tmp"
 DB_PATH = DATA_DIR / "video_hub.db"
 # 直播录制输出目录
 RECORDINGS_DIR = DATA_DIR / "recordings"
+DOUYIN_LIVE_RECORDER_DIR = Path(os.environ.get(
+    "VIDEO_HUB_DLR_DIR", BASE_DIR.parent.parent / "DouyinLiveRecorder")).resolve()
+DOUYIN_LIVE_RECORDER_PYTHON = Path(os.environ.get(
+    "VIDEO_HUB_DLR_PYTHON", DOUYIN_LIVE_RECORDER_DIR / ".venv" / "bin" / "python"))
 # 扫码登录会话的临时目录（二维码图片、状态文件）
 LOGIN_DIR = TMP_DIR / "login"
 
@@ -48,24 +51,11 @@ AI_API_KEY = os.environ.get("VIDEO_HUB_AI_API_KEY", "")
 AI_MODEL = os.environ.get("VIDEO_HUB_AI_MODEL", "mimo-v2.5")
 # 语音转文字模型（faster-whisper，本地运行，small 兼顾中文效果与速度）
 WHISPER_MODEL = os.environ.get("VIDEO_HUB_WHISPER_MODEL", "small")
-
-
-def _load_sms_token() -> str:
-    """短信转发接口的密钥：环境变量优先，否则生成一次并持久化到数据目录。"""
-    env = os.environ.get("VIDEO_HUB_SMS_TOKEN")
-    if env:
-        return env
-    f = DATA_DIR / "sms_token.txt"
-    if f.exists():
-        return f.read_text().strip()
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    token = secrets.token_hex(16)
-    f.write_text(token)
-    return token
-
-
-# 手机短信转发 App（SmsForwarder）调用 /api/sms-code 时携带的密钥
-SMS_TOKEN = _load_sms_token()
+# 配置共享 ASR 后不再在 Video Hub 进程内加载 whisper 模型
+ASR_URL = os.environ.get("VIDEO_HUB_ASR_URL", "").strip()
+NARRATO_TASKS_DIR = Path(os.environ.get(
+    "VIDEO_HUB_NARRATO_TASKS_DIR", BASE_DIR.parent / "narratoai" / "storage" / "tasks"
+)).resolve()
 
 
 def ensure_dirs():

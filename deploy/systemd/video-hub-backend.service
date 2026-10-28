@@ -1,0 +1,28 @@
+[Unit]
+Description=Video Hub FastAPI Backend
+After=network-online.target narrato-asr.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=narratoai
+Group=narratoai
+WorkingDirectory=/opt/video-hub/backend
+Environment=PYTHONUNBUFFERED=1
+Environment=VIDEO_HUB_DATA_DIR=/opt/video-hub/data
+Environment=VIDEO_HUB_PUBLISHER_DIR=/opt/video-hub/publisher
+Environment=VIDEO_HUB_SAU_BIN=/opt/video-hub/.venv/bin/sau
+Environment=VIDEO_HUB_SAU_PYTHON=/opt/video-hub/.venv/bin/python
+Environment=VIDEO_HUB_COOKIES_DIR=/opt/video-hub/publisher/cookies
+Environment=VIDEO_HUB_ASR_URL=http://127.0.0.1:8600/v1/audio/transcriptions
+Environment=VIDEO_HUB_NARRATO_TASKS_DIR=/opt/video-hub/narratoai/storage/tasks
+Environment=VIDEO_HUB_XVFB=1
+Environment=PLAYWRIGHT_BROWSERS_PATH=/opt/video-hub/ms-playwright
+EnvironmentFile=-/opt/video-hub/.env
+ExecStart=/opt/video-hub/.venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

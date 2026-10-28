@@ -1,0 +1,24 @@
+[Unit]
+Description=NarratoAI Local ASR Service (faster-whisper)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=narratoai
+Group=narratoai
+WorkingDirectory=/opt/video-hub/services/asr
+Environment=PYTHONUNBUFFERED=1
+Environment=ASR_MODEL=/opt/video-hub/models/faster-whisper-small
+Environment=ASR_CPU_THREADS=2
+Environment=HF_ENDPOINT=https://hf-mirror.com
+Environment=HF_HUB_DISABLE_XET=1
+Environment=HF_HOME=/opt/video-hub/models/huggingface
+ExecStart=/opt/video-hub/services/.venv/bin/uvicorn main:app --host 127.0.0.1 --port 8600 --workers 1 --timeout-keep-alive 75
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+MemoryMax=1.5G
+
+[Install]
+WantedBy=multi-user.target

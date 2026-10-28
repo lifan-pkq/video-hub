@@ -1,0 +1,19 @@
+[Unit]
+Description=NarratoAI Streamlit Web UI
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=narratoai
+Group=narratoai
+WorkingDirectory=/opt/video-hub/narratoai
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/opt/video-hub/narratoai
+ExecStart=/opt/video-hub/narratoai/.venv/bin/python -m streamlit run webui.py --server.address=127.0.0.1 --server.port=8501 --server.baseUrlPath=narrato --server.maxUploadSize=2048 --server.enableCORS=false --server.enableXsrfProtection=false --browser.gatherUsageStats=false
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

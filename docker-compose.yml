@@ -8,7 +8,8 @@ services:
     volumes:
       - ./data:/app/data
       - ./publisher/cookies:/opt/publisher/cookies
-      - ./ms-playwright:/root/.cache/ms-playwright
+      - ./ms-playwright:/root/.cache/ms-playwright:ro
+      - ./narratoai/storage:/app/narrato/storage:ro
     networks:
       - video-hub-net
     environment:
@@ -17,17 +18,24 @@ services:
       VIDEO_HUB_AI_API_KEY: ${VIDEO_HUB_AI_API_KEY:-}
       VIDEO_HUB_AI_MODEL: ${VIDEO_HUB_AI_MODEL:-mimo-v2.5}
       VIDEO_HUB_WHISPER_MODEL: ${VIDEO_HUB_WHISPER_MODEL:-small}
+      VIDEO_HUB_ASR_URL: ${VIDEO_HUB_ASR_URL:-}
+      VIDEO_HUB_NARRATO_TASKS_DIR: ${VIDEO_HUB_NARRATO_TASKS_DIR:-/app/narrato/storage/tasks}
       # whisper 模型下载走国内镜像；缓存挂到 data 卷持久化；xet 与镜像站不兼容需禁用
       HF_ENDPOINT: ${HF_ENDPOINT:-https://hf-mirror.com}
       HF_HUB_CACHE: /app/data/.hf_cache
       HF_HUB_DISABLE_XET: "1"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   web:
     image: nginx:alpine
     container_name: video-hub-web
     restart: unless-stopped
     ports:
-      - "80:80"
+      - "127.0.0.1:80:80"
     volumes:
       - ./frontend/dist:/usr/share/nginx/html:ro
       - ./deploy/nginx.conf:/etc/nginx/conf.d/default.conf:ro
@@ -35,6 +43,11 @@ services:
       - backend
     networks:
       - video-hub-net
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 networks:
   video-hub-net:

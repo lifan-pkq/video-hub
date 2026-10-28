@@ -1,0 +1,19 @@
+[Unit]
+Description=NarratoAI Subtitle Preview Service
+After=network-online.target narratoai.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=narratoai
+Group=narratoai
+WorkingDirectory=/opt/video-hub/services/subtitle-preview
+Environment=PYTHONUNBUFFERED=1
+Environment=NARRATOAI_ROOT=/opt/video-hub/narratoai
+ExecStart=/opt/video-hub/services/.venv/bin/uvicorn main:app --host 127.0.0.1 --port 8502 --workers 1 --timeout-keep-alive 75
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

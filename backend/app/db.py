@@ -121,6 +121,15 @@ def get_video_by_filename(filename: str) -> dict | None:
         return dict(row) if row else None
 
 
+def get_video_by_source(source_platform: str, source_url: str) -> dict | None:
+    with _lock:
+        row = _get_conn().execute(
+            "SELECT * FROM videos WHERE source_platform=? AND source_url=?",
+            (source_platform, source_url),
+        ).fetchone()
+        return dict(row) if row else None
+
+
 def list_videos() -> list[dict]:
     with _lock:
         rows = _get_conn().execute("SELECT * FROM videos ORDER BY id DESC").fetchall()

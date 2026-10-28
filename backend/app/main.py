@@ -4,10 +4,10 @@ import asyncio
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.config import ensure_dirs
+from app.config import NARRATO_TASKS_DIR, ensure_dirs
 from app.db import fail_interrupted_recordings
 from app.routers import accounts, download, edit, publish, recordings, sms, stats, videos, watchers
-from app.services import watcher
+from app.services import narrato_import, watcher
 
 app = FastAPI(title="Video Hub", version="1.2.0")
 
@@ -32,10 +32,10 @@ app.include_router(watchers.router)
 @app.on_event("startup")
 async def _startup():
     ensure_dirs()
-    # ffmpeg 子进程不跨服务重启存活，此前 recording 状态的标记为失败
     fail_interrupted_recordings()
-    # 主播监控轮询（自动录制）
     asyncio.create_task(watcher.watcher_loop())
+    if NARRATO_TASKS_DIR.is_dir():
+        asyncio.create_task(narrato_import.importer_loop())
 
 
 @app.get("/api/health")

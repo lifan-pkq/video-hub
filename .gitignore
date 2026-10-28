@@ -17,6 +17,15 @@ publisher/logs/
 publisher/media/
 publisher/db/
 
+# NarratoAI 与共享服务运行数据
+narratoai/config.toml*
+narratoai/storage/
+narratoai/.cache/
+narratoai/resource/scripts/
+narratoai/resource/videos/
+services/.venv/
+models/
+
 # 系统
 .DS_Store
 

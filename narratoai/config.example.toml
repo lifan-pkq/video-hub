@@ -1,0 +1,358 @@
+[app]
+    project_version="0.8.4"
+
+    # LLM API 超时配置（秒）
+    llm_vision_timeout = 120  # 视觉模型基础超时时间
+    llm_text_timeout = 180    # 文本模型基础超时时间（解说文案生成等复杂任务需要更长时间）
+    llm_max_retries = 3       # API 重试次数
+    subtitle_translate_batch_size = 20   # 字幕翻译每批处理的字幕条数
+    subtitle_translate_max_workers = 3   # 字幕翻译最大并发批次数
+
+    ##########################################
+    # 🚀 LLM 配置 - 使用 OpenAI 兼容统一接口
+    ##########################################
+    # 统一使用 OpenAI 兼容协议（/v1/chat/completions）
+    # 支持接入 OpenAI、DeepSeek、Gemini 兼容网关、Qwen 网关、SiliconFlow、OpenRouter 等。
+
+    # ===== 视觉模型配置 =====
+    vision_llm_provider = "openai"
+
+    # 模型格式：provider/model_name
+    # 常用视觉模型示例：
+    #   - Gemini: gemini/gemini-2.0-flash-lite (推荐，速度快成本低)
+    #   - Gemini: gemini/gemini-1.5-pro (高精度)
+    #   - OpenAI: gpt-4o, gpt-4o-mini
+    #   - Qwen: qwen/qwen2.5-vl-32b-instruct
+    #   - SiliconFlow: siliconflow/Qwen/Qwen2.5-VL-32B-Instruct
+    vision_openai_model_name = "Qwen/Qwen3.5-122B-A10B"
+    vision_openai_api_key = ""  # 填入对应 provider 的 API key
+    vision_openai_base_url = "https://api.siliconflow.cn/v1"  # 可选：自定义 API base URL；界面会提示 API key 将发送到对应端点
+    vision_openai_temperature = 1.0
+    vision_openai_top_p = 0.95
+    vision_openai_max_tokens = 65536
+    vision_openai_thinking_level = "auto"  # auto/off/low/medium/high
+
+    # ===== 可选：TwelveLabs Pegasus 视频理解 =====
+    # 将 vision_llm_provider 改为 "twelvelabs" 即可启用（默认仍为 openai，不影响现有行为）。
+    # Pegasus 是原生的视频理解模型，会把每批关键帧拼成短片后整体理解，更擅长把握镜头内的
+    # 动作、时序与高光片段，从而生成更贴合画面的解说。需要本地可用的 ffmpeg。
+    # 免费 API Key 获取地址：https://twelvelabs.io （有较充裕的免费额度）
+    # vision_llm_provider = "twelvelabs"
+    vision_twelvelabs_api_key = ""        # 填入 TwelveLabs API Key
+    vision_twelvelabs_model_name = "pegasus1.5"  # pegasus1.5 / pegasus1.2
+    vision_twelvelabs_max_tokens = 1024   # Pegasus 1.5 有效区间 512-98304
+
+    # ===== 文本模型配置 =====
+    text_llm_provider = "openai"
+
+    # 常用文本模型示例：
+    #   - DeepSeek: deepseek/deepseek-chat (推荐，性价比高)
+    #   - DeepSeek: deepseek/deepseek-reasoner (推理能力强)
+    #   - Gemini: gemini/gemini-2.0-flash (速度快)
+    #   - OpenAI: gpt-4o, gpt-4o-mini, gpt-4-turbo
+    #   - Qwen: qwen/qwen-plus, qwen/qwen-turbo
+    #   - SiliconFlow: siliconflow/deepseek-ai/DeepSeek-R1
+    #   - Moonshot: moonshot/moonshot-v1-8k
+    text_openai_model_name = "Pro/zai-org/GLM-5"  # 高推理模型：剧情分析、文案生成、脚本匹配
+    text_openai_fast_model_name = ""  # 高效率模型：字幕翻译、字幕校准；留空时回退到高推理模型
+    text_openai_api_key = ""  # 填入对应 provider 的 API key
+    text_openai_base_url = "https://api.siliconflow.cn/v1"  # 可选：自定义 API base URL；界面会提示 API key 将发送到对应端点
+    text_openai_temperature = 1.0
+    text_openai_top_p = 0.95
+    text_openai_max_tokens = 65536
+    text_openai_thinking_level = "auto"  # auto/off/low/medium/high
+
+    # ===== Tavily 联网搜索配置 =====
+    # 用于短剧剧情理解前，按短剧名称检索公开剧情/人物/分集信息
+    tavily_api_key = ""  # 获取地址：https://app.tavily.com
+    tavily_search_depth = "basic"  # basic / advanced / fast / ultra-fast
+    tavily_max_results = 5
+
+    # ===== 可选：Sonilo AI 配乐（BGM）/ AI 音效（SFX）=====
+    # 配乐：在 WebUI 背景音乐来源中选择 "AI 生成配乐（Sonilo）" 即可启用（默认关闭，不影响现有 BGM 逻辑）。
+    # 启用后会将合成完成的视频（未加 BGM）上传到 Sonilo API，根据画面内容与剪辑节奏生成配乐；
+    # 生成的音乐已获授权、可商用（以条款为准）。视频时长上限 6 分钟，生成失败时自动回退到随机背景音乐。
+    # 音效：在 WebUI 音频设置中勾选 "AI 音效（Sonilo）" 即可启用（默认关闭）。
+    # 启用后会将合成完成的视频上传到 Sonilo API，根据画面内容生成音效，并混在现有音轨之下（解说不受影响）；
+    # 生成的音效为免版税素材。视频时长上限 3 分钟，生成失败时自动跳过音效。
+    sonilo_api_key = ""  # 获取地址：https://sonilo.com（配乐与音效共用）
+    # sonilo_base_url = "https://api.sonilo.com"
+    # sonilo_timeout_seconds = 600  # 生成接口读超时 / 音效任务等待上限（秒）
+    # sonilo_bgm_prompt = ""        # 可选：配乐风格提示，留空则完全根据画面生成
+    # sonilo_sfx_prompt = ""        # 可选：音效风格提示，留空则完全根据画面生成
+    # sonilo_sfx_volume = 0.6       # 音效混入原声之下的音量，范围 (0, 2]，默认 0.6
+
+    # ===== API Keys 参考 =====
+    # 主流 LLM Providers API Key 获取地址：
+    #
+    # OpenAI:       https://platform.openai.com/api-keys
+    # Gemini:       https://makersuite.google.com/app/apikey
+    # DeepSeek:     https://platform.deepseek.com/api_keys
+    # Qwen (阿里):  https://bailian.console.aliyun.com/?tab=model#/api-key
+    # SiliconFlow:  https://cloud.siliconflow.cn/account/ak (手机号注册)
+    # Moonshot:     https://platform.moonshot.cn/console/api-keys
+    # Anthropic:    https://console.anthropic.com/settings/keys
+    # Cohere:       https://dashboard.cohere.com/api-keys
+    # Together AI:  https://api.together.xyz/settings/api-keys
+
+    ##########################################
+    # 🔧 高级配置（可选）
+    ##########################################
+
+    # WebUI 界面是否显示配置项
+    hide_config = true
+
+    # FFmpeg 引擎路径（可选）
+    # 为空时使用系统 PATH；也可以在系统设置中通过下拉框选择整合包或本机 ffmpeg。
+    ffmpeg_path = ""
+
+    # 官方 OpenAI 默认端点（可选）：
+    # text_openai_base_url = "https://api.openai.com/v1"
+
+##########################################
+# TTS (文本转语音) 配置
+##########################################
+
+[azure]
+    # Azure TTS 配置
+    # 获取密钥：https://portal.azure.com
+    speech_key = ""
+    speech_region = ""
+
+[tencent]
+    # 腾讯云 TTS 配置
+    # 访问 https://console.cloud.tencent.com/cam/capi 获取密钥
+    secret_id = ""
+    secret_key = ""
+    region = "ap-beijing"  # 地域配置
+
+[soulvoice]
+    # SoulVoice TTS API 配置
+    api_key = ""
+    voice_uri = "speech:mcg3fdnx:clzkyf4vy00e5qr6hywum4u84:bzznlkuhcjzpbosexitr"
+    api_url = "https://tts.scsmtech.cn/tts"
+    model = "FunAudioLLM/CosyVoice2-0.5B"
+
+[tts_qwen]
+    # 通义千问 Qwen3 TTS 配置
+    # 访问 https://bailian.console.aliyun.com/?tab=model#/api-key 获取你的 API 密钥
+    api_key = ""
+    model_name = "qwen3-tts-flash"
+
+[fun_asr]
+    # Fun-ASR 字幕转录配置
+    # backend = "local" 使用本地 FunASR-Pack API；backend = "firered" 使用本地 FireRedASR2-AED-Pack API；backend = "bailian" 使用阿里百炼在线 fun-asr
+    auto_transcribe_enabled = false
+    backend = "local"
+    # 支持填写服务根地址、完整 /asr 地址，或 OpenAI-compatible /v1 地址
+    api_url = "http://127.0.0.1:7860"
+    firered_api_url = "http://127.0.0.1:7867"
+    hotword = ""
+    enable_spk = false
+    # 使用阿里百炼在线 fun-asr 时，访问 https://bailian.console.aliyun.com/?tab=model#/api-key 获取 API Key
+    api_key = ""
+    model = "fun-asr"
+
+[indextts]
+    # IndexTTS-1.5 语音克隆配置
+    # 这是一个开源的零样本语音克隆项目，需要自行部署
+    # 项目地址：https://github.com/index-tts/index-tts
+    # 默认 API 地址（本地部署）
+    api_url = "http://127.0.0.1:8081/tts"
+
+    # 默认参考音频（可选）
+    reference_audio_source = "resource"
+    # reference_audio = "/path/to/reference_audio.wav"
+
+    # 推理模式：普通推理 / 快速推理
+    infer_mode = "普通推理"
+
+    # 高级参数
+    temperature = 1.0
+    top_p = 0.8
+    top_k = 30
+    do_sample = true
+    num_beams = 3
+    repetition_penalty = 10.0
+
+[indextts_macos]
+    # IndexTTS-1.5 macOS MLX Pack 语音克隆配置（仅适用于 Apple Silicon）
+    # 参考音频会通过 POST /v1/audio/speech/upload 上传
+    api_url = "http://127.0.0.1:7866"
+    reference_audio_source = "resource"
+    # reference_audio = "/path/to/reference_audio.wav"
+
+    speed = 1.0
+    # seed = 42
+    max_mel_tokens = 800
+    max_text_tokens_per_segment = 120
+    interval_silence = 200
+    temperature = 1.0
+    top_p = 0.8
+    top_k = 30
+    repetition_penalty = 10.0
+    segment_overlap_ms = 50
+
+[indextts2]
+    # IndexTTS-2 MLX Pack 语音克隆配置
+    # 参考音频会通过 POST /v1/audio/speech/upload 上传；可填写服务根地址或完整接口地址
+    api_url = "http://127.0.0.1:7860"
+
+    # 默认参考音频（可选），音色列表复用 IndexTTS-1.5 的资源目录
+    reference_audio_source = "resource"
+    # reference_audio = "/path/to/reference_audio.wav"
+
+    # 留空时保留参考音频情绪；支持单个情绪或混合权重，例如 happy:0.7,calm:0.3
+    emotion = ""
+    emo_alpha = 0.6
+    speed = 1.0
+    # 可选：设置固定随机种子以复现生成结果
+    # seed = 20260713
+
+    # 高级生成参数
+    max_text_tokens_per_segment = 120
+    interval_silence = 200
+    temperature = 0.8
+    top_p = 0.8
+    top_k = 30
+    repetition_penalty = 10.0
+    max_mel_tokens = 1500
+    diffusion_steps = 25
+    cfg_rate = 0.7
+    segment_overlap_ms = 50
+
+[omnivoice]
+    # OmniVoice-Pack 语音合成配置
+    # 支持 OmniVoice-Pack FastAPI 接口：POST /tts
+    api_url = "http://127.0.0.1:7866/tts"
+    language = "zh"
+
+    # 生成模式：auto / voice_design / voice_clone
+    mode = "auto"
+    instruct = ""
+
+    # voice_clone 模式下使用，音色列表复用 IndexTTS-1.5 的资源目录
+    reference_audio_source = "resource"
+    reference_audio = ""
+    ref_text = ""
+
+    # 高级生成参数
+    num_step = 32
+    guidance_scale = 2.0
+    speed = 1.0
+    duration = ""
+    denoise = true
+    postprocess_output = true
+    preprocess_prompt = true
+
+[voxcpm_05b]
+    # VoxCPM-0.5B-Pack 本地语音合成/参考音频克隆配置
+    # 启动整合包后，可填写服务根地址或完整 /tts 地址
+    api_url = "http://127.0.0.1:7864"
+    reference_audio_source = "resource"
+    reference_audio = ""
+    prompt_text = ""
+    cfg_value = 2.0
+    inference_timesteps = 10
+    max_length = 4096
+    normalize = true
+    denoise = false
+
+[voxcpm_2b]
+    # VoxCPM-2B-Pack 本地语音合成、音色设计与参考音频克隆
+    api_url = "http://127.0.0.1:7863"
+    mode = "design"
+    control = ""
+    reference_audio_source = "resource"
+    reference_audio = ""
+    prompt_text = ""
+    cfg_value = 2.0
+    inference_timesteps = 10
+    normalize = true
+    denoise = false
+    output_48k = true
+    context_aware = true
+    streaming = false
+
+[doubaotts]
+    # 豆包语音 TTS 配置
+    # 新版配置优先填写 API Key；旧版 appid/token 配置仍兼容
+    # 申请流程：
+    # 1. 打开火山引擎豆包语音控制台
+    # 2. 进入 API Key 管理并创建 API Key
+    # 3. 确认已开通豆包语音合成服务
+    api_key = ""
+
+    # 旧版配置（兼容保留）
+    ak = ""
+    sk = ""
+    appid = ""
+    token = ""
+    cluster = "volcano_tts"
+    
+    # 高级参数
+    volume = 1.0
+    pitch = 1.0
+    silence_duration = 0.125
+
+[ui]
+    # TTS引擎选择 (indextts, indextts2, omnivoice, edge_tts, qwen3_tts, tencent_tts, doubaotts, azure_speech)
+    tts_engine = "indextts"
+
+    # Edge TTS 配置
+    edge_voice_name = "zh-CN-XiaoyiNeural-Female"
+    edge_volume = 80
+    edge_rate = 1.0
+    edge_pitch = 0
+
+    # Azure Speech Services 配置
+    azure_voice_name = "zh-CN-XiaoyiNeural-Female"
+    azure_volume = 80
+    azure_rate = 1.0
+    azure_pitch = 0
+    
+    # 豆包语音 TTS 配置
+    doubaotts_voice_type = "BV700_V2_streaming"
+    doubaotts_rate = 1.0
+
+    # 字幕遮罩配置：用于在烧录新字幕前遮盖原视频自带字幕
+    subtitle_mask_enabled = false
+    subtitle_mask_landscape_x_percent = 10
+    subtitle_mask_landscape_y_percent = 78
+    subtitle_mask_landscape_width_percent = 80
+    subtitle_mask_landscape_height_percent = 14
+    subtitle_mask_landscape_blur_radius = 18
+    subtitle_mask_landscape_opacity_percent = 82
+    subtitle_mask_portrait_x_percent = 8
+    subtitle_mask_portrait_y_percent = 79
+    subtitle_mask_portrait_width_percent = 84
+    subtitle_mask_portrait_height_percent = 16
+    subtitle_mask_portrait_blur_radius = 26
+    subtitle_mask_portrait_opacity_percent = 84
+    subtitle_position_landscape_y_percent = 85
+    subtitle_position_portrait_y_percent = 82
+
+##########################################
+# 代理和网络配置
+##########################################
+
+[proxy]
+    # HTTP/HTTPS 代理配置（如需要）
+    # clash 默认地址：http://127.0.0.1:7890
+    http = ""
+    https = ""
+    enabled = false
+
+##########################################
+# 视频处理配置
+##########################################
+
+[frames]
+    # 提取关键帧的间隔时间（秒）
+    frame_interval_input = 3
+
+    # 大模型单次处理的关键帧数量
+    vision_batch_size = 10
+
+    # 视觉批处理最大并发批次数（OpenAI 兼容 provider）
+    vision_max_concurrency = 2

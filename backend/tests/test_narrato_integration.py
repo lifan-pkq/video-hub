@@ -9,6 +9,7 @@ class VendorBoundaryTests(unittest.TestCase):
     def test_expected_service_sources_exist(self):
         for relative in (
             "narratoai/webui.py",
+            "narratoai/app/models/schema.py",
             "narratoai/LICENSE",
             "services/subtitle-preview/main.py",
             "services/asr/main.py",

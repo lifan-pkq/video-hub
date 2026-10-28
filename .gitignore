@@ -24,7 +24,7 @@ narratoai/.cache/
 narratoai/resource/scripts/
 narratoai/resource/videos/
 services/.venv/
-models/
+/models/
 
 # 系统
 .DS_Store

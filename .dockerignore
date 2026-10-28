@@ -25,7 +25,7 @@ narratoai/.cache
 narratoai/resource/scripts
 narratoai/resource/videos
 services/.venv
-models
+/models
 *.md
 ms-playwright
 frontend

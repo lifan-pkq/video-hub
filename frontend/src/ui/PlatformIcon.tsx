@@ -4,8 +4,8 @@ const BRAND: Record<string, { char: string; bg: string; fg: string }> = {
   xiaohongshu: { char: '红', bg: '#ff2442', fg: '#ffffff' },
   kuaishou: { char: '快', bg: '#ff7e00', fg: '#ffffff' },
   bilibili: { char: 'B', bg: '#00a1d6', fg: '#ffffff' },
-  local: { char: '本', bg: 'var(--color-fill-3)', fg: 'var(--color-text-2)' },
-  direct: { char: '链', bg: 'var(--color-fill-3)', fg: 'var(--color-text-2)' },
+  local: { char: '本', bg: 'var(--fill-deep)', fg: 'var(--ink-2)' },
+  direct: { char: '链', bg: 'var(--fill-deep)', fg: 'var(--ink-2)' },
 }
 
 interface Props {
@@ -17,7 +17,7 @@ export default function PlatformIcon({ platform, size = 22 }: Props) {
   let key = platform ?? 'local'
   // 直播录制来源沿用原平台品牌色
   if (key.startsWith('live_')) key = key.slice(5)
-  const b = BRAND[key] ?? { char: (key[0] ?? '?').toUpperCase(), bg: 'var(--color-fill-3)', fg: 'var(--color-text-2)' }
+  const b = BRAND[key] ?? { char: (key[0] ?? '?').toUpperCase(), bg: 'var(--fill-deep)', fg: 'var(--ink-2)' }
   return (
     <span
       aria-hidden

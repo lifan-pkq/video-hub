@@ -22,21 +22,20 @@ import {
   errorMessage,
   fetchAccounts,
   fetchPublishRecords,
-  fetchTask,
   fetchVideos,
   formatDuration,
   formatTime,
   PLATFORMS,
   platformLabel,
   publishVideo,
-  submitVerifyCode,
   type Account,
   type PublishRecord,
-  type Task,
   type Video,
 } from '../api'
 import StatusBadge from '../components/StatusBadge'
 import TaskLogs from '../components/TaskLogs'
+import RequestState from '../ui/RequestState'
+import { useTaskCenter } from '../context/TaskCenter'
 
 const TITLE_MAX = 55
 const FINISHED = ['success', 'failed', 'partial']
@@ -66,6 +65,8 @@ export default function PublishPage() {
   const [searchParams] = useSearchParams()
 
   const [videos, setVideos] = useState<Video[]>([])
+  const [sourceLoading, setSourceLoading] = useState(true)
+  const [sourceError, setSourceError] = useState<string | null>(null)
   const [selectedId, setSelectedId] = useState<number | null>(null)
   /** 视频网格搜索关键词（client-side 按标题过滤） */
   const [videoQuery, setVideoQuery] = useState('')
@@ -80,23 +81,8 @@ export default function PublishPage() {
   const [schedule, setSchedule] = useState<string>('')
 
   const [publishing, setPublishing] = useState(false)
-  const [task, setTask] = useState<Task | null>(null)
-  const timerRef = useRef<number | null>(null)
-
-  // 短信验证弹窗
-  const [verifyOpen, setVerifyOpen] = useState(false)
-  const [verifyCode, setVerifyCode] = useState('')
-  const [verifyBusy, setVerifyBusy] = useState(false)
-  /** waiting = 已提交等待引擎验证；input = 等待用户输入 */
-  const [verifyPhase, setVerifyPhase] = useState<'input' | 'waiting'>('input')
-  const [verifyRejected, setVerifyRejected] = useState(false)
-  /** 用户主动关闭过本次验证弹窗（needs_verify 持续为 true 时不再自动弹出） */
-  const verifyDismissedRef = useRef(false)
-  /** 已提交验证码，等待引擎消费 */
-  const verifySubmittedRef = useRef(false)
-  /** 提交后观察到 needs_verify 变过 false（引擎已取走验证码） */
-  const verifyConsumedRef = useRef(false)
-  const verifySubmittedAtRef = useRef(0)
+  const { task, trackTask } = useTaskCenter()
+  const previousTaskRef = useRef<{ id: string; status: string } | null>(null)
 
   const [records, setRecords] = useState<PublishRecord[]>([])
   const [logRecord, setLogRecord] = useState<PublishRecord | null>(null)
@@ -115,145 +101,53 @@ export default function PublishPage() {
     }
   }, [])
 
-  // 加载视频列表并处理预选
-  useEffect(() => {
-    fetchVideos()
-      .then((list) => {
-        setVideos(list)
-        const stateId = (location.state as { videoId?: number } | null)?.videoId
-        const queryId = searchParams.get('videoId')
-        const preselect = stateId ?? (queryId ? Number(queryId) : null)
-        if (preselect && list.some((v) => v.id === preselect)) {
-          setSelectedId(preselect)
-          const v = list.find((x) => x.id === preselect)
-          if (v && !title) setTitle(v.title.slice(0, TITLE_MAX))
-        }
-      })
-      .catch(() => {})
-    loadRecords()
-    // 加载可用账号（仅有 cookie 的账号可发布）
-    fetchAccounts()
-      .then((list) => setAccounts(list.filter((a) => a.cookie_exists)))
-      .catch(() => {})
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  const loadSources = useCallback(async () => {
+    setSourceLoading(true)
+    setSourceError(null)
+    try {
+      const [videoList, accountList] = await Promise.all([fetchVideos(), fetchAccounts()])
+      setVideos(videoList)
+      setAccounts(accountList.filter((account) => account.cookie_exists))
+      const stateId = (location.state as { videoId?: number } | null)?.videoId
+      const queryId = searchParams.get('videoId')
+      const preselect = stateId ?? (queryId ? Number(queryId) : null)
+      const selected = videoList.find((video) => video.id === preselect)
+      if (selected) {
+        setSelectedId(selected.id)
+        setTitle((current) => current || selected.title.slice(0, TITLE_MAX))
+      }
+    } catch (reason) {
+      setSourceError(errorMessage(reason))
+    } finally {
+      setSourceLoading(false)
+    }
+  }, [location.state, searchParams])
 
   useEffect(() => {
-    return () => {
-      if (timerRef.current) window.clearInterval(timerRef.current)
-    }
-  }, [])
+    void loadSources()
+    void loadRecords()
+  }, [loadRecords, loadSources])
 
   const selectedVideo = videos.find((v) => v.id === selectedId) ?? null
+  const taskId = task?.id
+  const taskStatus = task?.status
 
-  // 重置短信验证状态机（新任务 / 任务结束时调用）
-  const resetVerify = useCallback(() => {
-    verifyDismissedRef.current = false
-    verifySubmittedRef.current = false
-    verifyConsumedRef.current = false
-    setVerifyOpen(false)
-    setVerifyCode('')
-    setVerifyPhase('input')
-    setVerifyRejected(false)
-  }, [])
-
-  // 每次拿到最新任务对象时同步验证弹窗状态（轮询期间持续生效）
-  const syncVerify = useCallback(
-    (t: Task) => {
-      if (FINISHED.includes(t.status)) {
-        resetVerify()
-        return
-      }
-      if (t.needs_verify) {
-        if (verifySubmittedRef.current) {
-          if (verifyConsumedRef.current) {
-            // 提交后 false → true：上次验证码未通过或已过期
-            verifySubmittedRef.current = false
-            verifyConsumedRef.current = false
-            setVerifyPhase('input')
-            setVerifyRejected(true)
-            setVerifyCode('')
-          } else if (Date.now() - verifySubmittedAtRef.current > 30000) {
-            // 兜底：30 秒仍未被消费（可能漏采 false 窗口），允许重新输入
-            verifySubmittedRef.current = false
-            setVerifyPhase('input')
-            setVerifyRejected(true)
-          }
-          // 否则保持「已提交，等待引擎验证…」
-        }
-        if (!verifyDismissedRef.current) setVerifyOpen(true)
-      } else {
-        if (verifySubmittedRef.current) {
-          // 引擎已取走验证码（false 窗口）
-          verifySubmittedRef.current = false
-          verifyConsumedRef.current = true
-        } else if (!verifyConsumedRef.current) {
-          // 无验证需求：重置忽略标记，确保弹窗关闭
-          verifyDismissedRef.current = false
-          setVerifyOpen(false)
-          return
-        }
-        // needs_verify 变 false：本次验证已通过，关闭弹窗
-        verifyConsumedRef.current = false
-        verifyDismissedRef.current = false
-        setVerifyOpen(false)
-        setVerifyPhase('input')
-        setVerifyRejected(false)
-      }
-    },
-    [resetVerify],
-  )
-
-  const applyTask = useCallback(
-    (t: Task) => {
-      setTask(t)
-      syncVerify(t)
-    },
-    [syncVerify],
-  )
-
-  const handleVerifySubmit = async () => {
-    const code = verifyCode.trim()
-    if (!/^\d{4,8}$/.test(code)) {
-      toast.warning('请输入 4-8 位数字验证码')
+  useEffect(() => {
+    if (!taskId || !taskStatus) {
+      previousTaskRef.current = null
       return
     }
-    if (!task || verifyBusy) return
-    setVerifyBusy(true)
-    try {
-      await submitVerifyCode(task.id, code)
-      verifySubmittedRef.current = true
-      verifyConsumedRef.current = false
-      verifySubmittedAtRef.current = Date.now()
-      setVerifyPhase('waiting')
-      setVerifyRejected(false)
-      setVerifyCode('')
-    } catch (e) {
-      toast.error(`提交失败：${errorMessage(e)}`)
-    } finally {
-      setVerifyBusy(false)
-    }
-  }
-
-  const startPolling = (taskId: string) => {
-    if (timerRef.current) window.clearInterval(timerRef.current)
-    timerRef.current = window.setInterval(async () => {
-      try {
-        const t = await fetchTask(taskId)
-        applyTask(t)
-        if (FINISHED.includes(t.status)) {
-          if (timerRef.current) window.clearInterval(timerRef.current)
-          timerRef.current = null
-          loadRecords()
-          if (t.status === 'success') toast.success('全部账号发布成功')
-          else if (t.status === 'partial') toast.warning('部分账号发布失败，请查看结果')
-          else toast.error('发布失败，请查看结果与日志')
-        }
-      } catch {
-        // 轮询失败静默重试
+    const previous = previousTaskRef.current
+    if (FINISHED.includes(taskStatus)) {
+      void loadRecords()
+      if (previous?.id === taskId && previous.status !== taskStatus) {
+        if (taskStatus === 'success') toast.success('全部账号发布成功')
+        else if (taskStatus === 'partial') toast.warning('部分账号发布失败，请查看结果')
+        else toast.error('发布失败，请查看结果与日志')
       }
-    }, 1500)
-  }
+    }
+    previousTaskRef.current = { id: taskId, status: taskStatus }
+  }, [loadRecords, taskId, taskStatus])
 
   const addTag = () => {
     const t = tagInput.trim().replace(/^#/, '')
@@ -279,10 +173,16 @@ export default function PublishPage() {
       toast.warning('请至少选择一个账号')
       return
     }
+    if (targets.some((key) => key.startsWith('xiaohongshu:')) && title.trim().length > 20) {
+      toast.warning('选择小红书账号时，标题最长 20 字')
+      return
+    }
+    if (schedule && new Date(schedule).getTime() <= Date.now()) {
+      toast.warning('定时发布时间必须晚于当前时间')
+      return
+    }
 
     setPublishing(true)
-    setTask(null)
-    resetVerify()
     try {
       const { task_id } = await publishVideo({
         video_id: selectedVideo.id,
@@ -295,10 +195,7 @@ export default function PublishPage() {
         tags,
         schedule: schedule || null,
       })
-      const t = await fetchTask(task_id)
-      applyTask(t)
-      if (!FINISHED.includes(t.status)) startPolling(task_id)
-      else loadRecords()
+      trackTask(task_id)
     } catch (e) {
       toast.error(`创建发布任务失败：${errorMessage(e)}`)
     } finally {
@@ -362,6 +259,7 @@ export default function PublishPage() {
   return (
     <div>
       <PageHeader title="发布视频" desc="选择视频，填写发布信息，一键分发到多个平台账号" />
+      <RequestState error={sourceError} hasData={videos.length > 0} loading={sourceLoading} onRetry={() => void loadSources()} className="mb-4" />
 
       <div className="grid gap-4 lg:grid-cols-2">
         {/* 左：视频选择 */}
@@ -378,8 +276,10 @@ export default function PublishPage() {
             />
           }
         >
-          {videos.length === 0 ? (
-            <EmptyState
+          {sourceLoading && videos.length === 0 ? (
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">{[0, 1, 2].map((item) => <div key={item} className="skeleton aspect-video" />)}</div>
+          ) : videos.length === 0 ? (
+            !sourceError && <EmptyState
               icon={<VideoCamera size={28} />}
               title="暂无视频"
               desc="请先到视频库上传或下载视频，再回来选择发布"
@@ -389,13 +289,15 @@ export default function PublishPage() {
           ) : (
             <div className="grid max-h-[560px] grid-cols-2 gap-3 overflow-y-auto pr-1 sm:grid-cols-3">
               {filteredVideos.map((v, i) => (
-                <div
+                <button
                   key={v.id}
+                  type="button"
+                  aria-pressed={selectedId === v.id}
                   onClick={() => {
                     setSelectedId(v.id)
                     if (!title) setTitle(v.title.slice(0, TITLE_MAX))
                   }}
-                  className={`enter-item cursor-pointer overflow-hidden rounded-lg ring-2 transition-all ${
+                  className={`enter-item cursor-pointer overflow-hidden rounded-lg text-left ring-2 transition-all ${
                     selectedId === v.id ? 'ring-accent' : 'ring-transparent hover:ring-line'
                   }`}
                   style={{ animationDelay: `${Math.min(i * 50, 400)}ms` }}
@@ -415,7 +317,7 @@ export default function PublishPage() {
                   <span className="block truncate px-1.5 py-1 text-xs text-ink-3" title={v.title}>
                     {v.title}
                   </span>
-                </div>
+                </button>
               ))}
             </div>
           )}
@@ -725,59 +627,6 @@ export default function PublishPage() {
           </div>
         )}
       </Panel>
-
-      {/* 短信验证弹窗（遮罩不可点关闭，轮询期间保持刷新） */}
-      <Modal
-        title="抖音需要短信验证"
-        open={verifyOpen}
-        maskClosable={false}
-        onClose={() => {
-          // 用户暂不操作：本轮 needs_verify 持续期间不再自动弹出
-          verifyDismissedRef.current = true
-          setVerifyOpen(false)
-        }}
-        width={420}
-        footer={
-          verifyPhase === 'input' ? (
-            <Button
-              variant="primary"
-              full
-              loading={verifyBusy}
-              disabled={!verifyCode.trim()}
-              onClick={handleVerifySubmit}
-            >
-              提交验证码
-            </Button>
-          ) : null
-        }
-      >
-        <p className="text-[13px] leading-relaxed text-ink-3">
-          验证码已发送到你的手机，请输入短信中的 6 位数字。提交后引擎会自动填入并继续发布。
-        </p>
-        {verifyRejected && (
-          <Alert type="warning" className="mt-3">
-            上次提交的验证码未通过或已过期，请重新获取后再输入
-          </Alert>
-        )}
-        {verifyPhase === 'waiting' ? (
-          <Alert type="info" className="mt-3">
-            已提交，等待引擎验证…
-          </Alert>
-        ) : (
-          <Input
-            value={verifyCode}
-            onChange={(v: string) => setVerifyCode(v.replace(/\D/g, '').slice(0, 8))}
-            maxLength={8}
-            placeholder="输入验证码"
-            inputMode="numeric"
-            onKeyDown={(e: KeyboardEvent<HTMLInputElement>) => {
-              if (e.key === 'Enter') handleVerifySubmit()
-            }}
-            className="tnum mt-3"
-            autoFocus
-          />
-        )}
-      </Modal>
 
       {/* 日志弹窗 */}
       <Modal

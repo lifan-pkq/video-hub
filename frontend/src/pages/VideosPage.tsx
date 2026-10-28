@@ -14,6 +14,7 @@ import {
   type Video,
 } from '../api'
 import VideoCard from '../components/VideoCard'
+import RequestState from '../ui/RequestState'
 import {
   Button,
   Checkbox,
@@ -48,6 +49,8 @@ export default function VideosPage() {
   const [searchParams] = useSearchParams()
   const [videos, setVideos] = useState<Video[]>([])
   const [loading, setLoading] = useState(true)
+  const [hasData, setHasData] = useState(false)
+  const [loadError, setLoadError] = useState<string | null>(null)
 
   const [playing, setPlaying] = useState<Video | null>(null)
 
@@ -82,10 +85,13 @@ export default function VideosPage() {
   const [trimming, setTrimming] = useState(false)
 
   const load = useCallback(async () => {
+    setLoading(true)
     try {
       setVideos(await fetchVideos())
+      setHasData(true)
+      setLoadError(null)
     } catch (e) {
-      toast.error(`加载失败：${errorMessage(e)}`)
+      setLoadError(errorMessage(e))
     } finally {
       setLoading(false)
     }
@@ -388,13 +394,14 @@ export default function VideosPage() {
       )}
 
       {/* 内容 */}
-      {loading ? (
+      <RequestState error={loadError} hasData={hasData} loading={loading} onRetry={load} className="mb-4" />
+      {loading && !hasData ? (
         <div className={GRID_CLASS}>
           {Array.from({ length: 12 }).map((_, i) => (
             <div key={i} className="skeleton aspect-[3/4] w-full rounded-2xl" />
           ))}
         </div>
-      ) : videos.length === 0 ? (
+      ) : !hasData ? null : videos.length === 0 ? (
         <Panel pad="none">
           <EmptyState
             icon={<VideoCamera size={26} />}

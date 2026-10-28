@@ -22,5 +22,17 @@ class VendorBoundaryTests(unittest.TestCase):
         self.assertFalse((ROOT / "narratoai/config.toml").exists())
 
 
+class FrontendIntegrationTests(unittest.TestCase):
+    def test_narrate_route_navigation_and_source_label(self):
+        app = (ROOT / "frontend/src/App.tsx").read_text()
+        nav = (ROOT / "frontend/src/nav.ts").read_text()
+        api = (ROOT / "frontend/src/api.ts").read_text()
+        self.assertIn('path="/narrate"', app)
+        self.assertIn("/narrate", nav)
+        self.assertIn("AI 解说", nav)
+        self.assertIn("制作", nav)
+        self.assertIn("narrato", api)
+
+
 if __name__ == "__main__":
     unittest.main()

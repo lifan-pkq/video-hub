@@ -1,4 +1,4 @@
-import { useEffect, useState, type KeyboardEvent } from 'react'
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { Link } from 'react-router-dom'
 import {
   CaretDown,
@@ -9,15 +9,15 @@ import {
 import {
   errorMessage,
   fetchTask,
-  fetchTasks,
   formatRelative,
   platformLabel,
   type Task,
   type TaskSummary,
 } from '../api'
-import { Button, EmptyState, PageHeader, toast } from '../ui'
+import { Alert, Button, EmptyState, PageHeader, toast } from '../ui'
 import StatusBadge from '../components/StatusBadge'
 import TaskLogs from '../components/TaskLogs'
+import { useTaskCenter } from '../context/TaskCenter'
 
 type Filter = 'all' | 'running' | 'done' | 'failed'
 
@@ -53,57 +53,46 @@ function RowSkeleton() {
 }
 
 export default function TasksPage() {
-  const [tasks, setTasks] = useState<TaskSummary[]>([])
-  const [loading, setLoading] = useState<boolean>(true)
+  const { summaries: tasks, loading, error, refreshTasks, openVerification } = useTaskCenter()
   const [filter, setFilter] = useState<Filter>('all')
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [detail, setDetail] = useState<Task | null>(null)
+  const expandedIdRef = useRef<string | null>(null)
+  expandedIdRef.current = expandedId
 
-  // 每 3 秒轮询任务列表；有展开行时同步刷新该任务详情（含日志）
   useEffect(() => {
+    if (!expandedId) return
     let dead = false
+    let first = true
+    let timer = 0
+    const taskId = expandedId
     const tick = async () => {
       try {
-        const list = await fetchTasks()
-        if (!dead) setTasks(list)
-      } catch {
-        // 轮询失败静默重试
-      }
-      if (expandedId) {
-        try {
-          const d = await fetchTask(expandedId)
-          if (!dead) setDetail(d)
-        } catch {
-          // 轮询失败静默重试
+        const next = await fetchTask(taskId)
+        if (!dead && expandedIdRef.current === taskId) setDetail(next)
+      } catch (cause) {
+        if (first && !dead && expandedIdRef.current === taskId) {
+          toast.error(`加载任务详情失败：${errorMessage(cause)}`)
         }
+      } finally {
+        first = false
+        if (!dead) timer = window.setTimeout(tick, 3000)
       }
-      if (!dead) setLoading(false)
     }
-    tick()
-    const timer = window.setInterval(tick, 3000)
+    void tick()
     return () => {
       dead = true
-      window.clearInterval(timer)
+      window.clearTimeout(timer)
     }
   }, [expandedId])
 
-  // 展开/收起；展开时立即拉一次详情
-  const toggle = async (t: TaskSummary) => {
-    if (expandedId === t.id) {
-      setExpandedId(null)
-      setDetail(null)
-      return
-    }
-    setExpandedId(t.id)
+  const toggle = (t: TaskSummary) => {
+    setExpandedId(expandedId === t.id ? null : t.id)
     setDetail(null)
-    try {
-      setDetail(await fetchTask(t.id))
-    } catch (e) {
-      toast.error(`加载任务详情失败：${errorMessage(e)}`)
-    }
   }
 
   const filtered = tasks.filter((t) => matchFilter(t, filter))
+  const expandedDetail = detail?.id === expandedId ? detail : null
 
   return (
     <div>
@@ -138,6 +127,13 @@ export default function TasksPage() {
             </div>
           ))}
         </div>
+      ) : error && tasks.length === 0 ? (
+        <Alert type="error">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <span>任务加载失败：{error}</span>
+            <Button size="sm" onClick={() => void refreshTasks()}>重试</Button>
+          </div>
+        </Alert>
       ) : filtered.length === 0 ? (
         <div className="vh-card">
           <EmptyState
@@ -185,6 +181,19 @@ export default function TasksPage() {
                       {t.needs_verify && <span className="ml-2 text-accent">等待短信验证码</span>}
                     </div>
                   </div>
+                  {t.needs_verify && (
+                    <Button
+                      size="sm"
+                      variant="primary"
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        openVerification(t.id)
+                      }}
+                      onKeyDown={(event) => event.stopPropagation()}
+                    >
+                      待验证
+                    </Button>
+                  )}
                   <StatusBadge status={t.status} />
                   <span
                     className={`shrink-0 text-ink-4 transition-transform duration-200 ${
@@ -197,14 +206,14 @@ export default function TasksPage() {
 
                 {expanded && (
                   <div className="border-t border-line-soft mt-3 pt-3">
-                    {!detail ? (
+                    {!expandedDetail ? (
                       <RowSkeleton />
                     ) : (
                       <div className="space-y-3">
-                        {detail.result.targets &&
-                          Object.keys(detail.result.targets).length > 0 && (
+                        {expandedDetail.result.targets &&
+                          Object.keys(expandedDetail.result.targets).length > 0 && (
                             <div className="space-y-1.5">
-                              {Object.entries(detail.result.targets).map(([key, r]) => {
+                              {Object.entries(expandedDetail.result.targets).map(([key, r]) => {
                                 const [platform, account] = key.split(':')
                                 return (
                                   <div key={key} className="flex items-center gap-2 text-[13px]">
@@ -220,8 +229,8 @@ export default function TasksPage() {
                               })}
                             </div>
                           )}
-                        <TaskLogs logs={detail.logs} />
-                        {detail.logs.length === 0 && (
+                        <TaskLogs logs={expandedDetail.logs} />
+                        {expandedDetail.logs.length === 0 && (
                           <p className="text-xs text-ink-4">暂无日志输出</p>
                         )}
                       </div>

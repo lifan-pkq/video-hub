@@ -1,199 +1,139 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { Route, Routes, useLocation, useNavigate } from 'react-router-dom'
-import { Command as CommandIcon } from '@phosphor-icons/react'
-import { fetchTasks } from './api'
+import { Suspense, lazy, useEffect, useRef, useState } from 'react'
+import { NavLink, Route, Routes, useLocation } from 'react-router-dom'
+import { ClockCounterClockwise, List, MagnifyingGlass, Video, X } from '@phosphor-icons/react'
 import { useTheme } from './theme'
-import { NAV_ITEMS } from './nav'
+import { MOBILE_NAV, NAV_GROUPS, NAV_ITEMS } from './nav'
 import { ConfirmHost, ToastHost } from './ui'
 import ThemeToggle from './components/ThemeToggle'
 import CommandPalette from './components/CommandPalette'
-import DashboardPage from './pages/DashboardPage'
-import VideosPage from './pages/VideosPage'
-import EditorPage from './pages/EditorPage'
-import DownloadPage from './pages/DownloadPage'
-import RecordPage from './pages/RecordPage'
-import PublishPage from './pages/PublishPage'
-import TasksPage from './pages/TasksPage'
-import AccountsPage from './pages/AccountsPage'
-import NotFoundPage from './pages/NotFoundPage'
+import VerificationDialog from './components/VerificationDialog'
+import { TaskCenterProvider, useTaskCenter } from './context/TaskCenter'
 
-function Logo() {
-  return (
-    <span
-      className="flex h-8 w-8 items-center justify-center rounded-[10px]"
-      style={{ background: 'linear-gradient(135deg, var(--accent-hover), var(--accent-active))' }}
-    >
-      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden>
-        <path d="M8 5.5v13l11-6.5-11-6.5z" fill="#fff" />
-      </svg>
-    </span>
-  )
+const DashboardPage = lazy(() => import('./pages/DashboardPage'))
+const VideosPage = lazy(() => import('./pages/VideosPage'))
+const EditorPage = lazy(() => import('./pages/EditorPage'))
+const DownloadPage = lazy(() => import('./pages/DownloadPage'))
+const RecordPage = lazy(() => import('./pages/RecordPage'))
+const PublishPage = lazy(() => import('./pages/PublishPage'))
+const TasksPage = lazy(() => import('./pages/TasksPage'))
+const AccountsPage = lazy(() => import('./pages/AccountsPage'))
+const NarratePage = lazy(() => import('./pages/NarratePage'))
+const NotFoundPage = lazy(() => import('./pages/NotFoundPage'))
+
+function PageLoader() {
+  return <div className="page-loader" role="status"><span className="skeleton" /><span className="skeleton" /><span className="skeleton" /></div>
 }
 
-export default function App() {
+function AppContent() {
   const location = useLocation()
-  const navigate = useNavigate()
   useTheme()
-  const [scrolled, setScrolled] = useState(false)
+  const { runningTasks } = useTaskCenter()
   const [paletteOpen, setPaletteOpen] = useState(false)
-  const [runningTasks, setRunningTasks] = useState(0)
-  const timerRef = useRef<number | null>(null)
+  const [moreOpen, setMoreOpen] = useState(false)
+  const mainRef = useRef<HTMLElement>(null)
+  const activeItem = NAV_ITEMS.find((item) => item.to === '/' ? location.pathname === '/' : location.pathname.startsWith(item.to))
 
-  // Cmd/Ctrl+K 打开命令面板
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
-        e.preventDefault()
-        setPaletteOpen((v) => !v)
+    const onKey = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault()
+        setPaletteOpen((open) => !open)
       }
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
   }, [])
 
-  // 滚动时顶栏加阴影
   useEffect(() => {
-    const onScroll = () =>
-      setScrolled(document.documentElement.scrollTop > 8 || (document.getElementById('main')?.scrollTop ?? 0) > 8)
-    onScroll()
-    window.addEventListener('scroll', onScroll, true)
-    return () => window.removeEventListener('scroll', onScroll, true)
-  }, [])
-
-  // 轮询进行中任务数（任务中心角标）
-  useEffect(() => {
-    let dead = false
-    const tick = async () => {
-      try {
-        const tasks = await fetchTasks()
-        if (!dead) setRunningTasks(tasks.filter((t) => t.status === 'pending' || t.status === 'running').length)
-      } catch {
-        // 静默重试
-      }
-    }
-    tick()
-    timerRef.current = window.setInterval(tick, 5000)
-    return () => {
-      dead = true
-      if (timerRef.current) window.clearInterval(timerRef.current)
-    }
-  }, [])
-
-  const isActive = useCallback(
-    (to: string) => (to === '/' ? location.pathname === '/' : location.pathname.startsWith(to)),
-    [location.pathname],
-  )
+    mainRef.current?.scrollTo({ top: 0 })
+    setMoreOpen(false)
+  }, [location.pathname])
 
   return (
-    <div className="flex h-full flex-col">
-      <a href="#main" className="skip-link">
-        跳到主内容
-      </a>
+    <div className="app-shell">
+      <a href="#main" className="skip-link">跳到主内容</a>
+      <aside className="sidebar">
+        <NavLink to="/" className="sidebar-brand" aria-label="Video Hub 工作台概览">
+          <span className="brand-mark"><Video size={19} weight="fill" /></span>
+          <span><strong>Video Hub</strong><small>视频创作工作台</small></span>
+        </NavLink>
+        <button className="sidebar-search" type="button" onClick={() => setPaletteOpen(true)}>
+          <MagnifyingGlass size={16} /><span>搜索与跳转</span><kbd>⌘ K</kbd>
+        </button>
+        <nav className="sidebar-nav" aria-label="主导航">
+          {NAV_GROUPS.map((group) => (
+            <div className="nav-group" key={group}>
+              <p>{group}</p>
+              {NAV_ITEMS.filter((item) => item.group === group).map((item) => {
+                const Icon = item.icon
+                return <NavLink key={item.to} to={item.to} end={item.to === '/'} className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}>
+                  <Icon size={18} /><span>{item.label}</span>
+                  {item.to === '/tasks' && runningTasks > 0 && <b className="tnum">{runningTasks}</b>}
+                </NavLink>
+              })}
+            </div>
+          ))}
+        </nav>
+        <div className="sidebar-footer"><span className="status-dot" />本地数据 · 私密工作区</div>
+      </aside>
 
-      {/* 顶部悬浮栏 */}
-      <header className={`topbar ${scrolled ? 'scrolled' : ''}`}>
-        <div className="mx-auto flex h-14 max-w-[1360px] items-center gap-3 px-4 lg:px-6">
-          <button
-            type="button"
-            onClick={() => navigate('/')}
-            className="flex shrink-0 items-center gap-2.5 rounded-lg pr-1"
-            aria-label="回到仪表盘"
-          >
-            <Logo />
-            <span className="font-display hidden text-[15px] font-semibold tracking-tight text-ink-1 sm:block">
-              Video Hub
-            </span>
-          </button>
-
-          {/* 桌面胶囊导航 */}
-          <nav className="nav-pill-wrap mx-auto hidden lg:flex" aria-label="主导航">
-            {NAV_ITEMS.map((item) => {
-              const Icon = item.icon
-              const active = isActive(item.to)
-              return (
-                <button
-                  key={item.to}
-                  type="button"
-                  onClick={() => navigate(item.to)}
-                  className={`nav-pill ${active ? 'active' : ''}`}
-                  aria-current={active ? 'page' : undefined}
-                >
-                  <Icon size={14} weight={active ? 'fill' : 'regular'} />
-                  {item.label}
-                  {item.to === '/tasks' && runningTasks > 0 && (
-                    <span className="tnum flex h-4 min-w-4 items-center justify-center rounded-full bg-accent px-1 text-[10px] font-medium text-white">
-                      {runningTasks}
-                    </span>
-                  )}
-                </button>
-              )
-            })}
-          </nav>
-
-          <div className="ml-auto flex shrink-0 items-center gap-1.5 lg:ml-0">
-            {/* 命令面板入口 */}
-            <button
-              type="button"
-              onClick={() => setPaletteOpen(true)}
-              className="hidden h-8 items-center gap-2 rounded-[10px] border border-line bg-fill px-2.5 text-xs text-ink-3 transition-colors hover:text-ink-1 sm:flex"
-            >
-              <CommandIcon size={13} />
-              <span>K</span>
-              <span className="text-ink-4">搜索 / 跳转</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setPaletteOpen(true)}
-              className="flex h-8 w-8 items-center justify-center rounded-[10px] border border-line bg-fill text-ink-3 transition-colors hover:text-ink-1 sm:hidden"
-              aria-label="搜索"
-            >
-              <CommandIcon size={14} />
-            </button>
+      <div className="workspace">
+        <header className="workspace-header">
+          <NavLink to="/" className="mobile-brand" aria-label="工作台概览"><span className="brand-mark"><Video size={17} weight="fill" /></span><strong>Video Hub</strong></NavLink>
+          <div className="header-context"><span>工作区</span><i>/</i><strong>{activeItem?.label ?? '页面未找到'}</strong></div>
+          <div className="header-actions">
+            <button className="header-search" type="button" onClick={() => setPaletteOpen(true)}><MagnifyingGlass size={17} /><span>搜索素材或页面</span><kbd>⌘ K</kbd></button>
+            <button className="icon-button mobile-search" type="button" aria-label="搜索" onClick={() => setPaletteOpen(true)}><MagnifyingGlass size={18} /></button>
+            <NavLink to="/tasks" className="icon-button task-button" aria-label={`任务中心，${runningTasks} 个进行中`}><ClockCounterClockwise size={18} />{runningTasks > 0 && <b>{runningTasks}</b>}</NavLink>
             <ThemeToggle />
           </div>
-        </div>
-      </header>
+        </header>
 
-      {/* 主内容 */}
-      <main id="main" className="min-h-0 flex-1 overflow-y-auto">
-        <div key={location.pathname} className="page-in mx-auto max-w-[1360px] px-4 pb-24 pt-6 lg:px-6 lg:pb-10">
-          <Routes location={location}>
-            <Route path="/" element={<DashboardPage />} />
-            <Route path="/videos" element={<VideosPage />} />
-            <Route path="/edit" element={<EditorPage />} />
-            <Route path="/download" element={<DownloadPage />} />
-            <Route path="/record" element={<RecordPage />} />
-            <Route path="/publish" element={<PublishPage />} />
-            <Route path="/tasks" element={<TasksPage />} />
-            <Route path="/accounts" element={<AccountsPage />} />
-            <Route path="*" element={<NotFoundPage />} />
-          </Routes>
-        </div>
-      </main>
+        <main id="main" ref={mainRef} className="workspace-main" tabIndex={-1}>
+          <div key={location.pathname} className={`page-in page-container ${location.pathname === '/narrate' ? 'narrate-container' : ''}`}>
+            <Suspense fallback={<PageLoader />}>
+              <Routes location={location}>
+                <Route path="/" element={<DashboardPage />} />
+                <Route path="/videos" element={<VideosPage />} />
+                <Route path="/edit" element={<EditorPage />} />
+                <Route path="/narrate" element={<NarratePage />} />
+                <Route path="/download" element={<DownloadPage />} />
+                <Route path="/record" element={<RecordPage />} />
+                <Route path="/publish" element={<PublishPage />} />
+                <Route path="/tasks" element={<TasksPage />} />
+                <Route path="/accounts" element={<AccountsPage />} />
+                <Route path="*" element={<NotFoundPage />} />
+              </Routes>
+            </Suspense>
+          </div>
+        </main>
+      </div>
 
-      {/* 移动端底部 Dock */}
-      <nav className="dock lg:hidden" aria-label="主导航">
-        {NAV_ITEMS.map((item) => {
+      <nav className="dock" aria-label="移动端主导航">
+        {MOBILE_NAV.map((item) => {
           const Icon = item.icon
-          const active = isActive(item.to)
-          return (
-            <button
-              key={item.to}
-              type="button"
-              onClick={() => navigate(item.to)}
-              className={`dock-item ${active ? 'active' : ''}`}
-              aria-current={active ? 'page' : undefined}
-              aria-label={item.label}
-            >
-              <Icon size={18} weight={active ? 'fill' : 'regular'} />
-            </button>
-          )
+          return <NavLink key={item.to} to={item.to} end={item.to === '/'} className={({ isActive }) => `dock-item ${isActive ? 'active' : ''}`}><Icon size={20} /><span>{item.shortLabel}</span></NavLink>
         })}
+        <button type="button" className={`dock-item ${moreOpen ? 'active' : ''}`} onClick={() => setMoreOpen(true)} aria-label="更多页面"><List size={20} /><span>更多</span></button>
       </nav>
 
+      {moreOpen && <div className="mobile-more-backdrop" onClick={() => setMoreOpen(false)}>
+        <section className="mobile-more" role="dialog" aria-modal="true" aria-label="更多页面" onClick={(event) => event.stopPropagation()}>
+          <header><div><p className="eyebrow">WORKSPACE</p><h2>前往其他页面</h2></div><button className="icon-button" onClick={() => setMoreOpen(false)} aria-label="关闭"><X size={20} /></button></header>
+          <div className="mobile-more-grid">{NAV_ITEMS.map((item) => { const Icon = item.icon; return <NavLink key={item.to} to={item.to} end={item.to === '/'}><Icon size={21} /><span>{item.label}</span>{item.to === '/tasks' && runningTasks > 0 && <b>{runningTasks}</b>}</NavLink> })}</div>
+        </section>
+      </div>}
       <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
-      <ToastHost />
-      <ConfirmHost />
+      <ToastHost /><ConfirmHost />
     </div>
+  )
+}
+
+export default function App() {
+  return (
+    <TaskCenterProvider>
+      <AppContent />
+      <VerificationDialog />
+    </TaskCenterProvider>
   )
 }

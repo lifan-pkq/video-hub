@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   Broadcast,
   Eye,
@@ -44,13 +44,13 @@ import {
   PageHeader,
   Panel,
   PlatformIcon,
-  Segment,
   Select,
   Switch,
   Tag,
   toast,
 } from '../ui'
 import type { TagColor } from '../ui/Tag'
+import RequestState from '../ui/RequestState'
 
 const STATUS_TAG: Record<RecordingStatus, { label: string; color: TagColor }> = {
   recording: { label: '录制中', color: 'red' },
@@ -101,6 +101,8 @@ export default function RecordPage() {
   const [recordings, setRecordings] = useState<Recording[]>([])
   const [watchers, setWatchers] = useState<Watcher[]>([])
   const [loading, setLoading] = useState(true)
+  const [hasData, setHasData] = useState(false)
+  const [loadError, setLoadError] = useState<string | null>(null)
 
   // 新建录制表单
   const [url, setUrl] = useState('')
@@ -108,6 +110,8 @@ export default function RecordPage() {
   const [quality, setQuality] = useState('best')
   const [fps, setFps] = useState(0)
   const [starting, setStarting] = useState(false)
+  const [stoppingIds, setStoppingIds] = useState<Set<number>>(new Set())
+  const stopRequestedIdsRef = useRef<Set<number>>(new Set())
   const [formError, setFormError] = useState<string | null>(null)
 
   // 边录边看
@@ -125,7 +129,6 @@ export default function RecordPage() {
 
   // 添加监控
   const [watchOpen, setWatchOpen] = useState(false)
-  const [watchPlatform, setWatchPlatform] = useState('douyin')
   const [watchUrl, setWatchUrl] = useState('')
   const [watchName, setWatchName] = useState('')
   const [watchQuality, setWatchQuality] = useState('best')
@@ -133,12 +136,15 @@ export default function RecordPage() {
   const [watchBusy, setWatchBusy] = useState(false)
 
   const load = useCallback(async () => {
+    setLoading(true)
     try {
       const [recs, ws] = await Promise.all([fetchRecordings(), fetchWatchers()])
       setRecordings(recs)
       setWatchers(ws)
+      setHasData(true)
+      setLoadError(null)
     } catch (e) {
-      toast.error(`加载失败：${errorMessage(e)}`)
+      setLoadError(errorMessage(e))
     } finally {
       setLoading(false)
     }
@@ -166,7 +172,9 @@ export default function RecordPage() {
           }
         }),
       )
-      const fresh = updates.filter((r): r is Recording => r !== null)
+      const fresh = updates.filter(
+        (r): r is Recording => r !== null && !stopRequestedIdsRef.current.has(r.id),
+      )
       if (fresh.length === 0) return
       setRecordings((prev) => {
         const map = new Map(fresh.map((r) => [r.id, r]))
@@ -213,13 +221,16 @@ export default function RecordPage() {
       setTitle('')
       toast.success(`已开始录制「${rec.title || rec.url}」`)
     } catch (e) {
-      setFormError(errorMessage(e))
+      const message = errorMessage(e)
+      setFormError(message)
+      toast.error(message)
     } finally {
       setStarting(false)
     }
   }
 
   const handleStop = async (r: Recording) => {
+    if (stoppingIds.has(r.id)) return
     const ok = await confirmDialog({
       title: '停止录制',
       content: `确定要停止录制「${r.title || r.url}」吗？已录制的内容会保留并入库。`,
@@ -228,12 +239,21 @@ export default function RecordPage() {
       danger: true,
     })
     if (!ok) return
+    stopRequestedIdsRef.current.add(r.id)
+    setStoppingIds((prev) => new Set(prev).add(r.id))
     try {
       const rec = await stopRecording(r.id)
       setRecordings((prev) => prev.map((x) => (x.id === rec.id ? rec : x)))
       toast.success('已停止录制')
     } catch (e) {
+      stopRequestedIdsRef.current.delete(r.id)
       toast.error(`停止失败：${errorMessage(e)}`)
+    } finally {
+      setStoppingIds((prev) => {
+        const next = new Set(prev)
+        next.delete(r.id)
+        return next
+      })
     }
   }
 
@@ -330,6 +350,8 @@ export default function RecordPage() {
         }
       />
 
+      <RequestState error={loadError} hasData={hasData} loading={loading} onRetry={load} className="mb-4" />
+
       {/* 新建录制 */}
       <Panel title="新建录制">
         <div className="flex flex-col gap-3 lg:flex-row">
@@ -362,7 +384,7 @@ export default function RecordPage() {
       </Panel>
 
       {/* 自动录制（主播监控） */}
-      {(watchers.length > 0 || !loading) && (
+      {(watchers.length > 0 || (hasData && !loading)) && (
         <div className="mt-6">
           <Panel
             title="自动录制"
@@ -481,9 +503,10 @@ export default function RecordPage() {
                     <Button
                       variant="danger"
                       icon={<StopCircle size={15} />}
+                      loading={stoppingIds.has(r.id)}
                       onClick={() => handleStop(r)}
                     >
-                      停止录制
+                      {stoppingIds.has(r.id) ? '停止中…' : '停止录制'}
                     </Button>
                   </div>
                 </div>
@@ -495,7 +518,7 @@ export default function RecordPage() {
 
       {/* 录制历史 */}
       <div className="mt-6">
-        {loading ? (
+        {loading && !hasData ? (
           <Panel title="录制历史">
             <div className="space-y-2.5">
               {[0, 1, 2, 3].map((i) => (
@@ -503,7 +526,7 @@ export default function RecordPage() {
               ))}
             </div>
           </Panel>
-        ) : history.length === 0 ? (
+        ) : !hasData ? null : history.length === 0 ? (
           <Panel pad="none">
             <EmptyState
               icon={<Broadcast size={28} />}
@@ -693,22 +716,11 @@ export default function RecordPage() {
       >
         <div className="space-y-4">
           <div>
-            <div className="mb-1.5 text-[13px] text-ink-2">平台</div>
-            <Segment
-              value={watchPlatform}
-              onChange={setWatchPlatform}
-              options={[
-                { value: 'douyin', label: <span className="inline-flex items-center gap-1"><PlatformIcon platform="douyin" size={14} />抖音</span> },
-                { value: 'bilibili', label: <span className="inline-flex items-center gap-1"><PlatformIcon platform="bilibili" size={14} />哔哩哔哩</span> },
-              ]}
-            />
-          </div>
-          <div>
             <div className="mb-1.5 text-[13px] text-ink-2">直播间链接</div>
             <Input
               value={watchUrl}
               onChange={setWatchUrl}
-              placeholder={watchPlatform === 'douyin' ? 'https://live.douyin.com/…' : 'https://live.bilibili.com/… 或 b23.tv 短链'}
+              placeholder="粘贴直播间链接或短链，自动识别平台"
               allowClear
             />
           </div>

@@ -29,9 +29,9 @@ import {
   PlatformIcon,
   Progress,
   StatCard,
-  toast,
 } from '../ui'
 import StatusBadge from '../components/StatusBadge'
+import RequestState from '../ui/RequestState'
 
 /** 日期问候：8月22日 星期六 */
 function todayText(): string {
@@ -186,7 +186,7 @@ function PublishDonut({ records }: { records: PublishRecord[] }) {
     if (Number.isNaN(t) || t < since) continue
     if (r.status === 'success') success++
     else if (r.status === 'partial') partial++
-    else failed++
+    else if (r.status === 'failed') failed++
   }
   const total = success + partial + failed
   if (total === 0) {
@@ -260,24 +260,27 @@ export default function DashboardPage() {
   const [videos, setVideos] = useState<Video[]>([])
   const [tasks, setTasks] = useState<TaskSummary[]>([])
   const [records, setRecords] = useState<PublishRecord[]>([])
-  const [loading, setLoading] = useState<boolean>(true)
+  const [loading, setLoading] = useState(true)
+  const [hasData, setHasData] = useState(false)
+  const [loadError, setLoadError] = useState<string | null>(null)
 
-  // silent=true 时用于轮询：失败静默重试，避免后台抖动时刷屏
-  // 发布记录失败时返回 null，保留旧数据（静默容错）
-  const load = useCallback(async (silent = false) => {
+  const load = useCallback(async () => {
+    setLoading(true)
     try {
       const [s, v, t, r] = await Promise.all([
         fetchStats(),
         fetchVideos(),
         fetchTasks(),
-        fetchPublishRecords().catch(() => null),
+        fetchPublishRecords(),
       ])
       setStats(s)
       setVideos(v)
       setTasks(t)
-      if (r) setRecords(r)
+      setRecords(r)
+      setHasData(true)
+      setLoadError(null)
     } catch (e) {
-      if (!silent) toast.error(`加载失败：${errorMessage(e)}`)
+      setLoadError(errorMessage(e))
     } finally {
       setLoading(false)
     }
@@ -291,16 +294,19 @@ export default function DashboardPage() {
   const polling = !!stats && (stats.tasks.running > 0 || stats.recordings.active > 0)
   useEffect(() => {
     if (!polling) return
-    const timer = window.setInterval(() => load(true), 5000)
+    const timer = window.setInterval(() => load(), 5000)
     return () => window.clearInterval(timer)
   }, [polling, load])
 
   const activeTasks = tasks.filter((t) => t.status === 'pending' || t.status === 'running')
   const recentVideos = videos.slice(0, 8)
-  const successRate =
-    stats && stats.publish.total > 0
-      ? `${Math.round((stats.publish.success / stats.publish.total) * 100)}%`
-      : '-'
+  const finishedRecords = records.filter(
+    (r) => r.status === 'success' || r.status === 'partial' || r.status === 'failed',
+  )
+  const publishSuccesses = finishedRecords.filter((r) => r.status === 'success').length
+  const successRate = finishedRecords.length > 0
+    ? `${Math.round((publishSuccesses / finishedRecords.length) * 100)}%`
+    : '-'
 
   const trend = useMemo(() => buildTrend(records), [records])
   const trendTotal = trend.reduce((sum, d) => sum + d.count, 0)
@@ -348,7 +354,7 @@ export default function DashboardPage() {
           value: <span className="tnum">{successRate}</span>,
           sub: (
             <>
-              累计 <span className="tnum">{stats.publish.total}</span> 次
+              累计 <span className="tnum">{finishedRecords.length}</span> 次
             </>
           ),
           icon: <PaperPlaneTilt size={18} />,
@@ -382,7 +388,9 @@ export default function DashboardPage() {
         }
       />
 
-      <div className="bento-grid">
+      <RequestState error={loadError} hasData={hasData} loading={loading} onRetry={load} className="mb-4" />
+      {hasData || loading ? (
+        <div className="bento-grid">
         {/* 发布趋势（大格） */}
         <div className="bento-2x2 enter-item">
           <Panel
@@ -396,7 +404,7 @@ export default function DashboardPage() {
               </>
             }
           >
-            {loading ? (
+            {loading && !hasData ? (
               <PanelSkeleton />
             ) : trendTotal === 0 ? (
               <div className="flex flex-1 items-center justify-center">
@@ -415,7 +423,7 @@ export default function DashboardPage() {
         </div>
 
         {/* 统计卡 ×4 */}
-        {loading || !stats
+        {(loading && !hasData) || !stats
           ? [0, 1, 2, 3].map((i) => (
               <div key={i} className="vh-card p-5">
                 <div className="skeleton" style={{ width: '40%', height: 13 }} />
@@ -449,7 +457,7 @@ export default function DashboardPage() {
               </>
             }
           >
-            {loading ? <PanelSkeleton /> : <PublishDonut records={records} />}
+            {loading && !hasData ? <PanelSkeleton /> : <PublishDonut records={records} />}
           </Panel>
         </div>
 
@@ -464,7 +472,7 @@ export default function DashboardPage() {
               </Link>
             }
           >
-            {loading ? (
+            {loading && !hasData ? (
               <PanelSkeleton />
             ) : activeTasks.length === 0 ? (
               <p className="py-6 text-center text-[13px] text-ink-3">暂无进行中的任务</p>
@@ -527,7 +535,7 @@ export default function DashboardPage() {
               </Link>
             }
           >
-            {loading ? (
+            {loading && !hasData ? (
               <PanelSkeleton />
             ) : recentVideos.length === 0 ? (
               <EmptyState
@@ -574,7 +582,8 @@ export default function DashboardPage() {
             )}
           </Panel>
         </div>
-      </div>
+        </div>
+      ) : null}
     </div>
   )
 }

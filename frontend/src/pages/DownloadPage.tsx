@@ -26,6 +26,8 @@ export default function DownloadPage() {
   const [parsing, setParsing] = useState(false)
   const [parseError, setParseError] = useState<string | null>(null)
   const [preview, setPreview] = useState<ParseResult | null>(null)
+  const [parsedText, setParsedText] = useState<string | null>(null)
+  const parseRequestRef = useRef(0)
 
   const [task, setTask] = useState<Task | null>(null)
   const [starting, setStarting] = useState(false)
@@ -94,25 +96,31 @@ export default function DownloadPage() {
   }
 
   const handleParse = async () => {
-    if (!text.trim()) return
+    const input = text.trim()
+    if (!input) return
+    const requestId = ++parseRequestRef.current
     setParsing(true)
     setParseError(null)
     setPreview(null)
+    setParsedText(null)
     setTask(null)
     try {
-      setPreview(await parseDownload(text.trim()))
+      const result = await parseDownload(input)
+      if (requestId !== parseRequestRef.current) return
+      setParsedText(input)
+      setPreview(result)
     } catch (e) {
-      setParseError(errorMessage(e))
+      if (requestId === parseRequestRef.current) setParseError(errorMessage(e))
     } finally {
-      setParsing(false)
+      if (requestId === parseRequestRef.current) setParsing(false)
     }
   }
 
   const handleDownload = async () => {
-    if (!text.trim()) return
+    if (!preview || !parsedText) return
     setStarting(true)
     try {
-      const { task_id } = await createDownload(text.trim())
+      const { task_id } = await createDownload(parsedText)
       const t = await fetchTask(task_id)
       setTask(t)
       if (!FINISHED.includes(t.status)) startPolling(task_id)
@@ -167,7 +175,14 @@ export default function DownloadPage() {
             <>
               <TextArea
                 value={text}
-                onChange={setText}
+                onChange={(value) => {
+                  parseRequestRef.current += 1
+                  setText(value)
+                  setParsing(false)
+                  setPreview(null)
+                  setParsedText(null)
+                  setParseError(null)
+                }}
                 rows={4}
                 placeholder={'粘贴抖音分享口令 / 链接，例如：\n7.94 复制打开抖音，看看【xxx的作品】... https://v.douyin.com/xxxx/'}
               />

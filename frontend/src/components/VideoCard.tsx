@@ -75,8 +75,17 @@ export default function VideoCard({
 
   return (
     <div
+      role="button"
+      tabIndex={0}
+      aria-label={selecting ? `选择 ${video.title}` : `播放 ${video.title}`}
       className={`poster-card ${selected ? 'selected' : ''} ${selecting ? 'selecting' : ''}`}
       onClick={selecting ? () => onToggleSelect?.(video) : () => onPlay(video)}
+      onKeyDown={(e) => {
+        if (e.target !== e.currentTarget || (e.key !== 'Enter' && e.key !== ' ')) return
+        e.preventDefault()
+        if (selecting) onToggleSelect?.(video)
+        else onPlay(video)
+      }}
     >
       {/* 封面 / 无封面占位 */}
       {video.cover_url ? (

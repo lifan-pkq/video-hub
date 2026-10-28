@@ -45,7 +45,12 @@ export function ToastHost() {
   }, [])
 
   return (
-    <div className="pointer-events-none fixed left-1/2 top-5 z-[200] flex -translate-x-1/2 flex-col items-center gap-2">
+    <div
+      role="status"
+      aria-live="polite"
+      aria-atomic="false"
+      className="pointer-events-none fixed left-1/2 top-5 z-[200] flex -translate-x-1/2 flex-col items-center gap-2"
+    >
       {items.map((t) => {
         const Icon = META[t.type].icon
         return (

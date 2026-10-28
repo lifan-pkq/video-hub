@@ -79,6 +79,10 @@ export default function CommandPalette({ open, onClose }: Props) {
     } else if (e.key === 'Enter') {
       e.preventDefault()
       items[active]?.action()
+    } else if (e.key === 'Escape') {
+      e.preventDefault()
+      e.stopPropagation()
+      onClose()
     }
   }
 
@@ -95,6 +99,9 @@ export default function CommandPalette({ open, onClose }: Props) {
     <div className="fixed inset-0 z-[100] flex items-start justify-center p-4 pt-[14vh]" onClick={onClose}>
       <div className="fade-in absolute inset-0" style={{ backgroundColor: 'var(--mask)' }} />
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="命令面板"
         className="modal-in relative w-full max-w-xl overflow-hidden rounded-2xl border border-line bg-card shadow-pop"
         onClick={(e) => e.stopPropagation()}
         onKeyDown={onKeyDown}

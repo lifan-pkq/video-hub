@@ -16,6 +16,7 @@ import {
   type CheckResult,
   type LoginSession,
 } from '../api'
+import RequestState from '../ui/RequestState'
 import {
   Alert,
   Button,
@@ -62,6 +63,8 @@ function CookieBadge({ tone, text }: { tone: 'gray' | 'danger' | 'success'; text
 export default function AccountsPage() {
   const [accounts, setAccounts] = useState<Account[]>([])
   const [loading, setLoading] = useState(true)
+  const [hasData, setHasData] = useState(false)
+  const [loadError, setLoadError] = useState<string | null>(null)
 
   const [checking, setChecking] = useState<Record<string, boolean>>({})
   const [checkResults, setCheckResults] = useState<Record<string, CheckResult | { error: string }>>({})
@@ -77,14 +80,18 @@ export default function AccountsPage() {
   const [loginStarting, setLoginStarting] = useState(false)
   const [session, setSession] = useState<LoginSession | null>(null)
   const pollRef = useRef<number | null>(null)
+  const successTimerRef = useRef<number | null>(null)
   const sessionRef = useRef<LoginSession | null>(null)
   sessionRef.current = session
 
   const load = useCallback(async () => {
+    setLoading(true)
     try {
       setAccounts(await fetchAccounts())
+      setHasData(true)
+      setLoadError(null)
     } catch (e) {
-      toast.error(`加载失败：${errorMessage(e)}`)
+      setLoadError(errorMessage(e))
     } finally {
       setLoading(false)
     }
@@ -98,6 +105,7 @@ export default function AccountsPage() {
   useEffect(() => {
     return () => {
       if (pollRef.current) window.clearInterval(pollRef.current)
+      if (successTimerRef.current) window.clearTimeout(successTimerRef.current)
     }
   }, [])
 
@@ -108,17 +116,28 @@ export default function AccountsPage() {
     }
   }
 
+  const clearSuccessTimer = () => {
+    if (successTimerRef.current) {
+      window.clearTimeout(successTimerRef.current)
+      successTimerRef.current = null
+    }
+  }
+
   const startPolling = (sessionId: string) => {
     stopPolling()
     pollRef.current = window.setInterval(async () => {
       try {
         const s = await fetchLoginStatus(sessionId)
+        if (sessionRef.current?.session_id !== sessionId) return
         setSession(s)
         if (s.done || s.state === 'success' || s.state === 'failed' || s.state === 'timeout') {
           stopPolling()
           if (s.state === 'success') {
             // 稍等片刻让用户看到成功提示，然后自动关闭并刷新列表
-            window.setTimeout(() => {
+            clearSuccessTimer()
+            successTimerRef.current = window.setTimeout(() => {
+              successTimerRef.current = null
+              if (sessionRef.current?.session_id !== sessionId) return
               setLoginOpen(false)
               setSession(null)
               toast.success('登录成功，账号已添加')
@@ -138,6 +157,7 @@ export default function AccountsPage() {
       setLoginError('账号名只能包含字母、数字、下划线和短横线')
       return
     }
+    clearSuccessTimer()
     setLoginError(null)
     setLoginStarting(true)
     try {
@@ -154,6 +174,7 @@ export default function AccountsPage() {
 
   const closeLoginModal = () => {
     stopPolling()
+    clearSuccessTimer()
     const s = sessionRef.current
     // 非成功状态关闭时取消登录会话
     if (s && s.state !== 'success') {
@@ -165,6 +186,8 @@ export default function AccountsPage() {
   }
 
   const openLoginModal = (platform = 'douyin', account = '') => {
+    stopPolling()
+    clearSuccessTimer()
     setLoginPlatform(platform)
     setLoginAccount(account)
     setLoginError(null)
@@ -252,7 +275,8 @@ export default function AccountsPage() {
         }
       />
 
-      {loading ? (
+      <RequestState error={loadError} hasData={hasData} loading={loading} onRetry={load} className="mb-4" />
+      {loading && !hasData ? (
         <div className="space-y-3">
           {[0, 1, 2].map((i) => (
             <Panel key={i} pad="sm">
@@ -263,7 +287,7 @@ export default function AccountsPage() {
             </Panel>
           ))}
         </div>
-      ) : accounts.length === 0 ? (
+      ) : !hasData ? null : accounts.length === 0 ? (
         <Panel pad="none">
           <EmptyState
             icon={<UserCircle size={28} />}

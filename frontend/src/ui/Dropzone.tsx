@@ -29,10 +29,15 @@ export default function Dropzone({ accept, disabled, uploading, progress, tip, o
     <div>
       <div
         role="button"
-        tabIndex={0}
+        tabIndex={disabled || uploading ? -1 : 0}
         aria-label="上传文件"
+        aria-disabled={disabled || uploading}
         onClick={() => !disabled && !uploading && inputRef.current?.click()}
-        onKeyDown={(e) => e.key === 'Enter' && inputRef.current?.click()}
+        onKeyDown={(e) => {
+          if (e.key !== 'Enter' && e.key !== ' ') return
+          e.preventDefault()
+          if (!disabled && !uploading) inputRef.current?.click()
+        }}
         onDragOver={(e) => {
           e.preventDefault()
           if (!disabled && !uploading) setOver(true)

@@ -256,15 +256,37 @@ export async function analyzeVideos(
   return data
 }
 
+export type AiSuggestionKind = 'intro' | 'outro' | 'ad' | 'silence' | 'repeat'
+
+export interface AiSuggestion {
+  id?: string
+  video_id?: number
+  start: number
+  end: number
+  kind: AiSuggestionKind
+  reason: string
+  source?: string
+}
+
+export interface AiAnalysisError {
+  video_id?: number
+  type?: string
+  stage?: string
+  message: string
+}
+
 /** 单个视频的 AI 分析结果 */
 export interface AiVideoAnalysis {
+  id?: string
   video_id: number
   title: string
   duration: number
+  source?: string
   /** 建议剪除的区间 */
-  waste: { start: number; end: number; kind: 'intro' | 'outro' | 'ad'; reason: string }[]
+  waste: AiSuggestion[]
   /** 保留区间（waste 的补集） */
   keep: { start: number; end: number }[]
+  errors?: (AiAnalysisError | string)[]
 }
 
 // ================= 仪表盘统计 =================
@@ -552,6 +574,7 @@ export function platformLabel(key: string | null | undefined): string {
   if (key === 'direct') return '直链'
   if (key === 'unknown') return '未知'
   if (key === 'edited') return '剪辑合成'
+  if (key === 'narrato') return 'AI 解说'
   // 直播录制入库的来源：live_douyin / live_bilibili / live_direct …
   if (key.startsWith('live_')) return `直播·${platformLabel(key.slice(5))}`
   return PLATFORMS.find((p) => p.key === key)?.label ?? key

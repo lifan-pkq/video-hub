@@ -111,8 +111,8 @@ cd frontend && npm run build
 SSHPASS='服务器密码' ./deploy.sh
 ```
 
-脚本默认部署到 `root@39.105.112.189:/opt/video-hub`，可用 `SERVER_USER`、`SERVER_IP`、
-`REMOTE_DIR` 覆盖。它执行本地测试和前端构建，同步源码，安装 venv/Chromium 依赖，
+脚本默认部署到 `root@39.105.112.189:/opt/video-hub`，可用 `SERVER_USER`、`SERVER_IP` 覆盖。
+它执行本地测试和前端构建，同步源码，安装 venv/Chromium 依赖，
 启动 `video-hub-backend`、`narratoai`、`narrato-preview`、`narrato-asr`，健康检查通过后
 切换 Nginx 主入口。密码不会写入脚本。
 

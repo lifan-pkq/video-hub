@@ -66,10 +66,14 @@ if [ ! -s "$REMOTE_DIR/models/faster-whisper-small/model.bin" ]; then
 fi
 
 python3 -m venv --clear "$REMOTE_DIR/.venv"
-"$REMOTE_DIR/.venv/bin/pip" install --upgrade pip
+"$REMOTE_DIR/.venv/bin/pip" install --upgrade pip uv
 "$REMOTE_DIR/.venv/bin/pip" install -r "$REMOTE_DIR/backend/requirements.txt" -e "$REMOTE_DIR/publisher"
+(
+  cd "$REMOTE_DIR/narratoai"
+  "$REMOTE_DIR/.venv/bin/uv" export --frozen --format requirements-txt --no-dev --no-hashes -o /tmp/narrato-lock-requirements.txt
+)
 python3 -m venv --clear "$REMOTE_DIR/narratoai/.venv"
-"$REMOTE_DIR/narratoai/.venv/bin/pip" install -r "$REMOTE_DIR/narratoai/requirements.txt"
+"$REMOTE_DIR/narratoai/.venv/bin/pip" install -r /tmp/narrato-lock-requirements.txt
 python3 -m venv --clear "$REMOTE_DIR/services/.venv"
 "$REMOTE_DIR/services/.venv/bin/pip" install -r "$REMOTE_DIR/services/requirements.txt"
 

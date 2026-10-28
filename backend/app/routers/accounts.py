@@ -1,14 +1,20 @@
 """平台账号：多账号管理、cookie 校验/上传/删除、扫码登录会话。"""
+import json
+import os
+import tempfile
+
 from fastapi import APIRouter, HTTPException, UploadFile, File
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from app.config import PLATFORMS, PLATFORM_NAMES
-from app.services.cookies import cookie_path, delete_cookie, list_accounts, save_cookie, valid_account_name
+from app.services.cookies import cookie_path, delete_cookie, list_accounts, valid_account_name
 from app.services.login import cancel_login, get_login, qr_file, start_login
 from app.services.publisher import check_platform
 
 router = APIRouter(prefix="/api/accounts", tags=["accounts"])
+
+COOKIE_CHUNK_BYTES = 64 * 1024
 
 
 def _check_platform_account(platform: str, account: str):
@@ -40,33 +46,50 @@ async def check_one(platform: str, account: str):
     return await check_platform(platform, account)
 
 
+def _replace_cookie(path, content: bytes):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    tmp_path = path.parent / tmp_name
+    try:
+        with os.fdopen(fd, "wb") as f:
+            os.fchmod(f.fileno(), 0o600)
+            f.write(content)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, path)
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+
 @router.post("/{platform}/{account}/cookie")
 async def upload_cookie(platform: str, account: str, file: UploadFile = File(...)):
     """上传 playwright storage_state JSON 作为该平台该账号的 cookie（B站例外：需 biliup 格式）。"""
     _check_platform_account(platform, account)
-    content = await file.read()
-    if platform == "bilibili":
-        # biliup 上传依赖 cookie_info + token_info（含 access_token），
-        # playwright storage_state 格式用不了，引导用户扫码登录
-        try:
-            import json as _json
-            data = _json.loads(content.decode("utf-8"))
-        except Exception:
-            raise HTTPException(400, "文件不是合法 JSON")
-        if "cookie_info" not in data:
-            raise HTTPException(400, "哔哩哔哩不支持 playwright 格式的 cookie 文件，请直接用「扫码登录」添加账号")
-        path = cookie_path(platform, account)
-        path.write_bytes(content)
-        return {"ok": True, "path": str(path),
-                "message": f"{PLATFORM_NAMES[platform]}({account}) cookie 已更新"}
+    content = bytearray()
     try:
-        path = save_cookie(platform, content, account)
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    except Exception:
+        while chunk := await file.read(COOKIE_CHUNK_BYTES):
+            content.extend(chunk)
+    finally:
+        await file.close()
+    try:
+        data = json.loads(content.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as e:
+        raise HTTPException(400, "文件不是合法 JSON") from e
+    if not isinstance(data, dict):
         raise HTTPException(400, "文件不是合法 JSON")
-    return {"ok": True, "path": str(path),
-            "message": f"{PLATFORM_NAMES[platform]}({account}) cookie 已更新，建议立即校验"}
+    if platform == "bilibili" and "cookie_info" not in data:
+        raise HTTPException(400, "哔哩哔哩不支持 playwright 格式的 cookie 文件，请直接用「扫码登录」添加账号")
+    if platform != "bilibili" and "cookies" not in data:
+        raise HTTPException(400, "不是合法的 playwright storage_state 文件（缺少 cookies 字段）")
+
+    path = cookie_path(platform, account)
+    _replace_cookie(path, bytes(content))
+    netscape = path.with_suffix(".netscape.txt")
+    netscape.unlink(missing_ok=True)
+    message = f"{PLATFORM_NAMES[platform]}({account}) cookie 已更新"
+    if platform != "bilibili":
+        message += "，建议立即校验"
+    return {"ok": True, "path": str(path), "message": message}
 
 
 @router.delete("/{platform}/{account}")

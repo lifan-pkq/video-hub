@@ -31,11 +31,18 @@ class PublishRequest(BaseModel):
     def _check_targets(cls, v):
         if not v:
             raise ValueError("至少选择一个发布账号")
+        if len(v) > 16:
+            raise ValueError("最多选择 16 个发布账号")
+        seen = set()
         for t in v:
             if t.platform not in PLATFORMS:
                 raise ValueError(f"不支持的平台: {t.platform}")
             if not valid_account_name(t.account):
                 raise ValueError(f"非法账号名: {t.account}")
+            key = (t.platform, t.account)
+            if key in seen:
+                raise ValueError(f"重复的发布账号: {t.platform}:{t.account}")
+            seen.add(key)
         return v
 
     @field_validator("title")

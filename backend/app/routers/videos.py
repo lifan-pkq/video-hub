@@ -1,16 +1,22 @@
 """视频库：列表/详情/播放流（支持 Range）/封面上传导入/重命名/删除。"""
+import asyncio
+import os
 import re
+import tempfile
+import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from app.config import COVERS_DIR, VIDEOS_DIR, ensure_dirs
+from app.config import COVERS_DIR, TMP_DIR, VIDEOS_DIR, ensure_dirs
 from app.db import add_video, delete_video, get_video, list_videos, update_video
-from app.services.media import make_cover, probe_video, range_stream
+from app.services.media import ensure_h264, make_cover, probe_video, range_stream
 
 router = APIRouter(prefix="/api/videos", tags=["videos"])
+
+UPLOAD_CHUNK_BYTES = 1024 * 1024
 
 
 def _serialize(v: dict) -> dict:
@@ -60,33 +66,54 @@ def get_cover(video_id: int):
 async def upload_video(file: UploadFile = File(...), title: str = ""):
     """从本地上传一个视频导入视频库。"""
     ensure_dirs()
-    suffix = Path(file.filename or "video.mp4").suffix or ".mp4"
-    safe = re.sub(r'[\\/:*?"<>|#\n\r]', "_", Path(file.filename or "video").stem)[:80] or "video"
-    final = VIDEOS_DIR / f"{safe}{suffix}"
-    n = 1
-    while final.exists():
-        final = VIDEOS_DIR / f"{safe}_{n}{suffix}"
-        n += 1
-    size = 0
-    with open(final, "wb") as f:
-        while chunk := await file.read(1024 * 1024):
-            f.write(chunk)
-            size += len(chunk)
-    meta = probe_video(final)
-    cover_name = final.stem + ".jpg"
-    cover = cover_name if make_cover(final, COVERS_DIR / cover_name) else None
-    video = add_video(
-        title=title.strip() or final.stem,
-        filename=final.name,
-        size=size,
-        duration=meta.get("duration"),
-        width=meta.get("width"),
-        height=meta.get("height"),
-        cover=cover,
-        source_platform="local",
-        source_url=None,
-    )
-    return _serialize(video)
+    original_name = Path(file.filename or "video.mp4")
+    suffix = original_name.suffix.lower()
+    if not re.fullmatch(r"\.[a-z0-9]{1,8}", suffix):
+        suffix = ".mp4"
+    safe_title = re.sub(r'[\\/:*?"<>|#\n\r]', "_", original_name.stem)[:80] or "video"
+    final = VIDEOS_DIR / f"{uuid.uuid4().hex}{suffix}"
+    cover_path = COVERS_DIR / f"{final.stem}.jpg"
+    tmp_path = None
+    completed = False
+    try:
+        with tempfile.NamedTemporaryFile(
+                prefix="upload-", suffix=suffix, dir=TMP_DIR, delete=False) as f:
+            tmp_path = Path(f.name)
+            size = 0
+            while chunk := await file.read(UPLOAD_CHUNK_BYTES):
+                size += len(chunk)
+                f.write(chunk)
+
+        meta = await asyncio.to_thread(probe_video, tmp_path)
+        if not any(meta.get(key) is not None for key in ("codec", "width", "height")):
+            raise HTTPException(400, "文件不包含有效视频流")
+        if meta.get("codec") != "h264":
+            converted = await asyncio.to_thread(ensure_h264, tmp_path)
+            if not converted:
+                raise RuntimeError("非 H.264 视频转码失败，请检查 ffmpeg 是否可用")
+        cover = cover_path.name if await asyncio.to_thread(make_cover, tmp_path, cover_path) else None
+        os.replace(tmp_path, final)
+        video = add_video(
+            title=title.strip() or safe_title,
+            filename=final.name,
+            size=size,
+            duration=meta.get("duration"),
+            width=meta.get("width"),
+            height=meta.get("height"),
+            cover=cover,
+            source_platform="local",
+            source_url=None,
+        )
+        completed = True
+        return _serialize(video)
+    finally:
+        await file.close()
+        if tmp_path is not None:
+            tmp_path.unlink(missing_ok=True)
+            tmp_path.with_suffix(".h264tmp.mp4").unlink(missing_ok=True)
+        if not completed:
+            final.unlink(missing_ok=True)
+            cover_path.unlink(missing_ok=True)
 
 
 @router.delete("/{video_id}")

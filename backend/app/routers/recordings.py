@@ -5,6 +5,7 @@ import time
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
+from app.config import COVERS_DIR
 from app.db import delete_recording, get_recording, list_recordings, update_recording
 from app.services import recorder
 from app.services.media import range_stream
@@ -48,6 +49,8 @@ async def start(req: RecordRequest):
     try:
         rec = await asyncio.to_thread(
             recorder.start_recording, req.url, req.title.strip(), req.quality, req.fps)
+    except recorder.LiveOfflineError as e:
+        raise HTTPException(400, str(e)) from e
     except Exception as e:
         raise HTTPException(400, f"录制启动失败: {e}")
     return _enrich(rec)
@@ -124,6 +127,8 @@ def remove(rec_id: int, delete_file: bool = False):
             from app.db import delete_video, get_video
             v = get_video(rec["video_id"])
             if v:
+                if v.get("cover"):
+                    (COVERS_DIR / v["cover"]).unlink(missing_ok=True)
                 delete_video(rec["video_id"])
     delete_recording(rec_id)
     return {"ok": True}

@@ -5,7 +5,10 @@
 - 每次发布同时落库 publish_records，供历史查询
 """
 import asyncio
+import os
+import re
 import shutil
+import signal
 
 from app.config import (BILI_TID, PLATFORM_NAMES, PLATFORMS, PUBLISH_ACCOUNT, PUBLISH_TIMEOUT,
                         PUBLISHER_DIR, SAU_BIN, USE_XVFB)
@@ -36,39 +39,58 @@ def _build_cmd(platform: str, args: list[str]) -> list[str]:
     return cmd
 
 
+def _sanitize_log(text: str) -> str:
+    text = re.sub(r"(https?://[^\s?]+)\?[^\s]*", r"\1?<redacted>", text)
+    text = re.sub(r"(验证码(?:是|为|[:：])?\s*)[A-Za-z0-9-]{4,}", r"\1<redacted>", text)
+    return re.sub(r"(?i)(--(?:verify[-_]?code|code)(?:=|\s+))\S+", r"\1<redacted>", text)
+
+
+async def _terminate_process_group(proc):
+    if proc.returncode is None:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        except OSError:
+            proc.kill()
+    await proc.wait()
+
+
 async def _run_sau(task, platform: str, args: list[str]) -> tuple[int, str]:
     """运行 sau 子进程，实时把输出写入任务日志，返回 (退出码, 全部输出)。"""
     cmd = _build_cmd(platform, args)
-    task.log(f"$ {' '.join(cmd)}")
+    task.log(f"$ {_sanitize_log(' '.join(cmd))}")
     proc = await asyncio.create_subprocess_exec(
         *cmd,
         cwd=str(PUBLISHER_DIR),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
+        start_new_session=True,
     )
     output: list[str] = []
-    assert proc.stdout is not None
-    async for raw in proc.stdout:
-        line = raw.decode("utf-8", errors="replace").rstrip()
-        # 去掉 ANSI 颜色码，前端显示更干净
-        import re
-        line = re.sub(r"\x1b\[[0-9;]*m", "", line)
-        if line.strip():
-            output.append(line)
-            # 抖音短信验证状态跟踪：引擎弹出验证 → 通知前端弹窗；填完 → 关闭弹窗
-            if "等待验证码输入" in line or "已点击「获取验证码」" in line:
-                task.needs_verify = True
-            elif "验证码未通过" in line:
-                # 上一个码被抖音拒绝，引擎已自动重发短信，提示用户输入新码
-                task.needs_verify = True
-            elif "验证码已填入输入框" in line or "验证码处理完成" in line:
-                task.needs_verify = False
-            task.log(f"[{PLATFORM_NAMES.get(platform, platform)}] {line}")
+
+    async def consume() -> int:
+        assert proc.stdout is not None
+        async for raw in proc.stdout:
+            line = raw.decode("utf-8", errors="replace").rstrip()
+            line = re.sub(r"\x1b\[[0-9;]*m", "", line)
+            if line.strip():
+                output.append(_sanitize_log(line))
+                # 抖音短信验证状态跟踪：引擎弹出验证 → 通知前端弹窗；填完 → 关闭弹窗
+                if "等待验证码输入" in line or "已点击「获取验证码」" in line:
+                    task.needs_verify = True
+                elif "验证码未通过" in line:
+                    # 上一个码被抖音拒绝，引擎已自动重发短信，提示用户输入新码
+                    task.needs_verify = True
+                elif "验证码已填入输入框" in line or "验证码处理完成" in line:
+                    task.needs_verify = False
+                task.log(f"[{PLATFORM_NAMES.get(platform, platform)}] {_sanitize_log(line)}")
+        return await proc.wait()
+
     try:
-        code = await asyncio.wait_for(proc.wait(), timeout=PUBLISH_TIMEOUT)
+        code = await asyncio.wait_for(consume(), timeout=PUBLISH_TIMEOUT)
     except asyncio.TimeoutError:
-        proc.kill()
-        await proc.wait()
+        await _terminate_process_group(proc)
         task.log(f"[{PLATFORM_NAMES.get(platform, platform)}] 执行超时，已终止")
         return -1, "\n".join(output)
     return code, "\n".join(output)
@@ -85,6 +107,7 @@ async def check_platform(platform: str, account: str = PUBLISH_ACCOUNT) -> dict:
         proc = await asyncio.create_subprocess_exec(
             *cmd, cwd=str(PUBLISHER_DIR),
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+            start_new_session=True,
         )
         out, _ = await asyncio.wait_for(proc.communicate(), timeout=180)
         text = out.decode("utf-8", errors="replace")
@@ -92,9 +115,10 @@ async def check_platform(platform: str, account: str = PUBLISH_ACCOUNT) -> dict:
         return {"platform": platform, "account": account, "valid": valid,
                 "detail": "cookie 有效" if valid else "cookie 无效或已失效"}
     except asyncio.TimeoutError:
+        await _terminate_process_group(proc)
         return {"platform": platform, "account": account, "valid": False, "detail": "校验超时"}
     except Exception as e:
-        return {"platform": platform, "account": account, "valid": False, "detail": str(e)}
+        return {"platform": platform, "account": account, "valid": False, "detail": _sanitize_log(str(e))}
 
 
 async def run_publish(task, video: dict, video_path, targets: list[dict],

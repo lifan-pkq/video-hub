@@ -2,6 +2,7 @@
 
 另含 AI 智能剪辑分析（whisper 转写 + LLM 标废片段）与拆分导出。
 """
+import hashlib
 import re
 import subprocess
 import threading
@@ -12,7 +13,17 @@ from pydantic import BaseModel
 
 from app.config import COVERS_DIR, VIDEOS_DIR, ensure_dirs
 from app.db import add_video, get_video
-from app.services.ai_edit import KIND_DESCS, analyze_transcript, keep_segments, transcribe
+from app.services.ai_edit import (
+    AIResponseError,
+    AIServiceError,
+    DEFAULT_LLM_KINDS,
+    KIND_DESCS,
+    analyze_transcript,
+    clean_intervals,
+    keep_segments,
+    transcribe,
+)
+from app.services.audio_analysis import detect_silence
 from app.services.media import concat_clips, make_cover, probe_video
 from app.services.tasks import task_manager
 
@@ -157,7 +168,7 @@ def _render(task, sources: list[dict], title: str, split_parts: int = 1):
 
 class AnalyzeRequest(BaseModel):
     video_ids: list[int]
-    """要识别的废片类型：intro 开头 / outro 结尾 / ad 广告"""
+    """要识别的废片类型：intro 开头 / outro 结尾 / ad 广告 / silence 静音 / repeat 重复"""
     kinds: list[str] = ["intro", "outro", "ad"]
     """用户自定义剪辑要求（原样拼进 prompt）"""
     custom_prompt: str = ""
@@ -165,12 +176,12 @@ class AnalyzeRequest(BaseModel):
 
 @router.post("/analyze")
 def analyze_video(req: AnalyzeRequest):
-    """AI 分析（whisper 转写 + LLM 标废片段），支持多个视频，异步任务，结果在 task.result。"""
+    """AI 分析（本地静音/转写 + LLM 标废片段），支持多个视频，结果在 task.result。"""
     if not req.video_ids:
         raise HTTPException(400, "未指定视频")
     if len(req.video_ids) > 20:
         raise HTTPException(400, "一次最多分析 20 个视频")
-    kinds = [k for k in req.kinds if k in KIND_DESCS] or list(KIND_DESCS)
+    kinds = [k for k in req.kinds if k in KIND_DESCS] or list(DEFAULT_LLM_KINDS)
     items = []
     for vid in req.video_ids:
         v = get_video(vid)
@@ -189,27 +200,91 @@ def analyze_video(req: AnalyzeRequest):
 def _analyze(task, items: list[tuple[dict, Path]], kinds: list[str], custom_prompt: str):
     task.status = "running"
     analyses = []
+    errors = []
+    successful_steps = 0
+    current_video_id = None
     try:
         for i, (video, path) in enumerate(items, 1):
+            current_video_id = video["id"]
             task.log(f"[{i}/{len(items)}] 分析「{video['title']}」…")
-            segs = transcribe(path, log=task.log)
             duration = video.get("duration") or (probe_video(path).get("duration") or 0)
-            waste = analyze_transcript(segs, duration, kinds=kinds, custom_prompt=custom_prompt, log=task.log)
-            if not waste:
-                task.log(f"「{video['title']}」未发现可剪区间")
-            else:
-                for w in waste:
-                    task.log(f"「{video['title']}」建议剪除 {w['start']:.1f}s-{w['end']:.1f}s（{w['kind']}：{w['reason']}）")
-            analyses.append({
+            waste = []
+            video_errors = []
+
+            def fail(error_type: str, exc: Exception):
+                error = {"video_id": video["id"], "type": error_type, "message": str(exc)}
+                video_errors.append(error)
+                errors.append(error)
+                task.log(f"「{video['title']}」{error_type} 错误：{exc}")
+
+            if "silence" in kinds:
+                try:
+                    waste.extend(detect_silence(path, log=task.log))
+                    successful_steps += 1
+                except Exception as exc:
+                    fail("audio", exc)
+
+            llm_kinds = [kind for kind in kinds if kind != "silence"]
+            if llm_kinds:
+                try:
+                    segments = transcribe(path, log=task.log)
+                except Exception as exc:
+                    fail("transcription", exc)
+                else:
+                    try:
+                        waste.extend(analyze_transcript(
+                            segments, duration, kinds=llm_kinds,
+                            custom_prompt=custom_prompt, log=task.log,
+                        ))
+                        successful_steps += 1
+                    except AIResponseError as exc:
+                        fail("parse", exc)
+                    except AIServiceError as exc:
+                        fail("ai", exc)
+                    except Exception as exc:
+                        fail("ai", exc)
+
+            cleaned = clean_intervals(waste, duration, kinds=kinds)
+            enriched = []
+            for item in cleaned:
+                source = item.get("source") or "llm"
+                fingerprint = (
+                    f"{video['id']}:{item['kind']}:{item['start']:.2f}:"
+                    f"{item['end']:.2f}:{source}"
+                ).encode("utf-8")
+                enriched.append({
+                    **item,
+                    "id": "suggestion-" + hashlib.sha256(fingerprint).hexdigest()[:20],
+                    "video_id": video["id"],
+                    "source": source,
+                })
+            analysis = {
                 "video_id": video["id"],
                 "title": video["title"],
                 "duration": duration,
-                "waste": waste,
-                "keep": keep_segments(waste, duration),
-            })
+                "waste": enriched,
+                "keep": keep_segments(enriched, duration),
+            }
+            if video_errors:
+                analysis["errors"] = video_errors
+            analyses.append(analysis)
+
+            if not enriched and not video_errors:
+                task.log(f"「{video['title']}」未发现可剪区间")
+            for item in enriched:
+                task.log(
+                    f"「{video['title']}」建议剪除 {item['start']:.1f}s-{item['end']:.1f}s"
+                    f"（{item['kind']}：{item['reason']}）"
+                )
             task.progress = i / len(items) * 100
-        task.result = {"analyses": analyses}
-        task.finish("success")
-    except Exception as e:
-        task.log(f"分析失败：{e}")
-        task.finish("failed")
+    except Exception as exc:
+        errors.append({"video_id": current_video_id, "type": "internal", "message": str(exc)})
+        task.log(f"分析失败：{exc}")
+    finally:
+        task.result = {"analyses": analyses, "errors": errors}
+        if not errors:
+            task.finish("success")
+        elif successful_steps:
+            task.finish("partial")
+        else:
+            task.finish("failed")

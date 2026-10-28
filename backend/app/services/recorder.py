@@ -1,6 +1,6 @@
 """直播录制：解析直播流地址（抖音/B站/yt-dlp 兜底）+ ffmpeg 子进程录制。
 
-- 抖音：抓直播间页面，优先 _SSR_HYDRATED_DATA 里的 flv/hls 地址，正则兜底（无需 cookie）
+- 抖音：优先通过 DouyinLiveRecorder 接口取流，直播间页面解析兜底
 - B 站：公开 API 取流地址；其他平台/直接流地址：yt-dlp 解析或直通
 - 录制用 ffmpeg -c copy（零转码直接写 mp4），stdin 写 q 优雅停止（保证 moov 完整）
 - 录制完成自动入库视频库（探测时长/分辨率 + 生成封面）
@@ -12,6 +12,7 @@ import subprocess
 import threading
 import time
 import urllib.request
+import uuid
 from pathlib import Path
 
 from app.config import COVERS_DIR, RECORDINGS_DIR, TMP_DIR, VIDEOS_DIR
@@ -40,6 +41,11 @@ YTDLP_FORMAT = {
     "medium": "best[height<=720]/best",
     "low": "best[height<=480]/best",
 }
+
+
+class LiveOfflineError(RuntimeError):
+    pass
+
 
 _lock = threading.Lock()
 _procs: dict[int, subprocess.Popen] = {}     # rec_id -> ffmpeg 进程
@@ -74,7 +80,47 @@ def _http_get(url: str, referer: str | None = None, timeout: int = 20) -> str:
         return resp.read().decode("utf-8", errors="replace")
 
 
+def _resolve_douyin_with_dlr(url: str, quality: str) -> str:
+    from app.config import DOUYIN_LIVE_RECORDER_DIR, DOUYIN_LIVE_RECORDER_PYTHON
+
+    script = r'''
+import asyncio
+import json
+import sys
+from src import spider, stream
+
+async def main():
+    data = await spider.get_douyin_app_stream_data(sys.argv[1])
+    info = await stream.get_douyin_stream_url(data, sys.argv[2], None)
+    if not info.get("is_live"):
+        raise RuntimeError("该直播间当前未开播")
+    print(json.dumps({"url": info.get("flv_url") or info.get("record_url")}))
+
+asyncio.run(main())
+'''
+    quality_name = {"best": "OD", "high": "HD", "medium": "SD", "low": "LD"}.get(quality, "OD")
+    result = subprocess.run(
+        [str(DOUYIN_LIVE_RECORDER_PYTHON), "-c", script, url, quality_name],
+        cwd=DOUYIN_LIVE_RECORDER_DIR, capture_output=True, text=True, timeout=60)
+    if result.returncode != 0:
+        lines = (result.stderr or result.stdout).strip().splitlines()
+        message = lines[-1][:200] if lines else "抖音接口解析失败"
+        if "该直播间当前未开播" in message:
+            raise LiveOfflineError("该直播间当前未开播")
+        raise RuntimeError(message)
+    stream_url = json.loads(result.stdout.strip().splitlines()[-1]).get("url")
+    if not stream_url:
+        raise RuntimeError("抖音接口未返回直播流地址")
+    return stream_url
+
+
 def _resolve_douyin(url: str, quality: str = "best") -> str:
+    try:
+        return _resolve_douyin_with_dlr(url, quality)
+    except LiveOfflineError:
+        raise
+    except Exception:
+        pass
     html = _http_get(url, referer="https://live.douyin.com/")
     # 途径一：SSR 注水数据里的结构化流地址（按画质档位选键）
     m = re.search(r"<script[^>]*>window\._SSR_HYDRATED_DATA=(.*?)</script>", html, re.S)
@@ -127,7 +173,7 @@ def _resolve_bilibili(url: str, quality: str = "best") -> str:
         info = json.loads(_http_get(
             f"https://api.live.bilibili.com/room/v1/Room/get_info?room_id={room_id}"))
         if (info.get("data") or {}).get("live_status") != 1:
-            raise RuntimeError("该直播间当前未开播")
+            raise LiveOfflineError("该直播间当前未开播")
     except RuntimeError:
         raise
     except Exception:
@@ -155,12 +201,14 @@ def _resolve_ytdlp(url: str, quality: str = "best") -> str:
 
 def resolve_stream_url(url: str, platform: str, quality: str = "best") -> str:
     if platform == "direct":
-        return url
-    if platform == "douyin":
-        return _resolve_douyin(url, quality)
-    if platform == "bilibili":
-        return _resolve_bilibili(url, quality)
-    return _resolve_ytdlp(url, quality)
+        stream_url = url
+    elif platform == "douyin":
+        stream_url = _resolve_douyin(url, quality)
+    elif platform == "bilibili":
+        stream_url = _resolve_bilibili(url, quality)
+    else:
+        stream_url = _resolve_ytdlp(url, quality)
+    return stream_url
 
 
 def _safe_name(text: str) -> str:
@@ -177,7 +225,10 @@ def _build_ffmpeg_cmd(stream_url: str, platform: str, out_path: Path, fps: int =
                  "-reconnect_delay_max", "60",
                  "-timeout", "10000000"]
     if platform == "douyin":
-        opts += ["-headers", f"User-Agent: {UA}\r\nReferer: https://live.douyin.com/\r\n"]
+        mobile_ua = ("Mozilla/5.0 (Linux; Android 11; SAMSUNG SM-G973U) "
+                     "AppleWebKit/537.36 (KHTML, like Gecko) SamsungBrowser/14.2 "
+                     "Chrome/87.0.4280.141 Mobile Safari/537.36")
+        opts += ["-headers", f"User-Agent: {mobile_ua}\r\nReferer: https://live.douyin.com/\r\n"]
     if platform == "bilibili":
         opts += ["-headers", f"User-Agent: {UA}\r\nReferer: https://live.bilibili.com/\r\n"]
     # 帧率限制需要重编码（流拷贝改不了帧率）；0 = 原始帧率直接拷贝
@@ -204,7 +255,7 @@ def start_recording(url: str, title: str = "", quality: str = "best", fps: int =
 
     if not title:
         title = f"直播录制 {time.strftime('%m-%d %H:%M')}"
-    filename = f"{_safe_name(title)}_{time.strftime('%Y%m%d_%H%M%S')}.mp4"
+    filename = f"{_safe_name(title)}_{time.strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex}.mp4"
     out_path = RECORDINGS_DIR / filename
 
     rec_id = add_recording(url, platform, title, filename, quality, fps)
@@ -226,26 +277,33 @@ def start_recording(url: str, title: str = "", quality: str = "best", fps: int =
 
 
 def _monitor(rec_id: int, proc: subprocess.Popen, log_f):
-    proc.wait()
+    rec = None
     try:
-        log_f.close()
-    except Exception:
-        pass
-    with _lock:
-        _procs.pop(rec_id, None)
+        proc.wait()
+        rec = get_recording(rec_id)
+        if not rec or rec["status"] != "recording":
+            return  # 已被 stop_recording 处理
 
-    rec = get_recording(rec_id)
-    if not rec or rec["status"] != "recording":
-        return  # 已被 stop_recording 处理
-
-    size = _file_size(rec["filename"])
-    if proc.returncode == 0 and size > 0:
-        _finish_success(rec_id, rec)
-    else:
-        err = _last_error_line(rec_id)
+        size = _file_size(rec["filename"])
+        if proc.returncode == 0 and size > 0:
+            _finish_success(rec_id, rec)
+        else:
+            err = _last_error_line(rec_id)
+            update_recording(rec_id, status="failed", size=size,
+                             error=f"ffmpeg 退出码 {proc.returncode}: {err}",
+                             finished_at=time.strftime("%Y-%m-%d %H:%M:%S"))
+    except Exception as e:
+        size = _file_size(rec["filename"]) if rec else 0
         update_recording(rec_id, status="failed", size=size,
-                         error=f"ffmpeg 退出码 {proc.returncode}: {err}",
+                         error=f"录制收尾失败: {e}",
                          finished_at=time.strftime("%Y-%m-%d %H:%M:%S"))
+    finally:
+        try:
+            log_f.close()
+        except Exception:
+            pass
+        with _lock:
+            _procs.pop(rec_id, None)
 
 
 def _probe_with_retry(path: Path, tries: int = 5, interval: float = 1.0) -> dict:

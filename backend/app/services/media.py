@@ -1,11 +1,15 @@
 """媒体工具：ffprobe 探测视频信息、ffmpeg 生成封面/拼接渲染、Range 视频流。两者不存在时静默降级。"""
 import json
+import os
 import re
+import selectors
 import shutil
 import subprocess
+import tempfile
 import time
 from pathlib import Path
 
+from fastapi import Response
 from fastapi.responses import FileResponse, StreamingResponse
 
 
@@ -119,27 +123,55 @@ def concat_clips(clips: list[dict], out_path: Path, on_progress=None):
         "-progress", "pipe:1", "-nostats", "-v", "warning",
         str(out_path),
     ]
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     deadline = time.time() + 1800
-    assert proc.stdout is not None
-    while True:
-        line = proc.stdout.readline()
-        if not line:
-            break
-        if line.startswith("out_time_ms=") and on_progress and total > 0:
+    proc = None
+    try:
+        with tempfile.TemporaryFile() as stderr_file:
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=stderr_file)
+            assert proc.stdout is not None
+            pending = b""
+            with selectors.DefaultSelector() as selector:
+                selector.register(proc.stdout, selectors.EVENT_READ)
+                while True:
+                    remaining = deadline - time.time()
+                    if remaining <= 0:
+                        proc.kill()
+                        proc.wait()
+                        raise RuntimeError("渲染超时（30 分钟）")
+                    if not selector.select(timeout=min(1.0, remaining)):
+                        continue
+                    chunk = os.read(proc.stdout.fileno(), 65536)
+                    if not chunk:
+                        break
+                    pending += chunk
+                    while b"\n" in pending:
+                        raw, pending = pending.split(b"\n", 1)
+                        line = raw.decode("utf-8", errors="replace")
+                        if line.startswith("out_time_ms=") and on_progress and total > 0:
+                            try:
+                                us = int(line.split("=", 1)[1].strip())
+                                on_progress(min(99.0, us / 1e6 / total * 100))
+                            except ValueError:
+                                pass
             try:
-                us = int(line.split("=", 1)[1].strip())
-                on_progress(min(99.0, us / 1e6 / total * 100))
-            except ValueError:
-                pass
-        if time.time() > deadline:
+                code = proc.wait(timeout=max(0.001, deadline - time.time()))
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+                raise RuntimeError("渲染超时（30 分钟）")
+            proc.stdout.close()
+            stderr_file.seek(0)
+            err = stderr_file.read().decode("utf-8", errors="replace")
+        if code != 0 or not out_path.exists() or out_path.stat().st_size == 0:
+            raise RuntimeError("渲染失败：" + err[-300:])
+    except BaseException:
+        if proc is not None and proc.poll() is None:
             proc.kill()
-            raise RuntimeError("渲染超时（30 分钟）")
-    err = (proc.stderr.read() if proc.stderr else "") or ""
-    if proc.wait() != 0 or not out_path.exists() or out_path.stat().st_size == 0:
-        if out_path.exists():
-            out_path.unlink()
-        raise RuntimeError("渲染失败：" + err[-300:])
+            proc.wait()
+        if proc is not None and proc.stdout is not None:
+            proc.stdout.close()
+        out_path.unlink(missing_ok=True)
+        raise
     if on_progress:
         on_progress(100.0)
 
@@ -164,12 +196,20 @@ def range_stream(path: Path, range_header: str | None):
     file_size = path.stat().st_size
     if not range_header:
         return FileResponse(path, media_type="video/mp4")
-    m = re.match(r"bytes=(\d*)-(\d*)", range_header)
-    if not m:
-        return FileResponse(path, media_type="video/mp4")
-    start = int(m.group(1)) if m.group(1) else 0
-    end = int(m.group(2)) if m.group(2) else file_size - 1
-    end = min(end, file_size - 1)
+    m = re.fullmatch(r"bytes=(\d*)-(\d*)", range_header)
+    if not m or file_size == 0 or (not m.group(1) and not m.group(2)):
+        return Response(status_code=416, headers={"Content-Range": f"bytes */{file_size}"})
+    if not m.group(1):
+        suffix_length = int(m.group(2))
+        if suffix_length == 0:
+            return Response(status_code=416, headers={"Content-Range": f"bytes */{file_size}"})
+        start = max(0, file_size - suffix_length)
+        end = file_size - 1
+    else:
+        start = int(m.group(1))
+        end = min(int(m.group(2)), file_size - 1) if m.group(2) else file_size - 1
+    if start >= file_size or start > end:
+        return Response(status_code=416, headers={"Content-Range": f"bytes */{file_size}"})
     length = end - start + 1
 
     def iterfile():

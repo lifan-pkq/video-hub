@@ -7,19 +7,24 @@ import { ConfirmHost, ToastHost } from './ui'
 import ThemeToggle from './components/ThemeToggle'
 import CommandPalette from './components/CommandPalette'
 import VerificationDialog from './components/VerificationDialog'
+import TaskFocusBanner from './components/TaskFocusBanner'
 import { TaskCenterProvider, useTaskCenter } from './context/TaskCenter'
 
 const DashboardPage = lazy(() => import('./pages/DashboardPage'))
 const WorkbenchPage = lazy(() => import('./pages/WorkbenchPage'))
 const ImportWizardPage = lazy(() => import('./pages/ImportWizardPage'))
 const VideosPage = lazy(() => import('./pages/VideosPage'))
+const ImagesPage = lazy(() => import('./pages/ImagesPage'))
+const EditorHomePage = lazy(() => import('./pages/EditorHomePage'))
 const EditorPage = lazy(() => import('./pages/EditorPage'))
 const DownloadPage = lazy(() => import('./pages/DownloadPage'))
 const RecordPage = lazy(() => import('./pages/RecordPage'))
 const PublishPage = lazy(() => import('./pages/PublishPage'))
 const TasksPage = lazy(() => import('./pages/TasksPage'))
+const MaintenancePage = lazy(() => import('./pages/MaintenancePage'))
 const AccountsPage = lazy(() => import('./pages/AccountsPage'))
 const NarratePage = lazy(() => import('./pages/NarratePage'))
+const AIMediaPage = lazy(() => import('./pages/AIMediaPage'))
 const NotFoundPage = lazy(() => import('./pages/NotFoundPage'))
 
 function PageLoader() {
@@ -92,20 +97,25 @@ function AppContent() {
         </header>
 
         <main id="main" ref={mainRef} className="workspace-main" tabIndex={-1}>
-          <div key={location.pathname} className={`page-in page-container ${location.pathname === '/narrate' ? 'narrate-container' : ''}`}>
+          <div key={location.pathname} className="page-in page-container">
             <Suspense fallback={<PageLoader />}>
               <Routes location={location}>
                 <Route path="/" element={<DashboardPage />} />
                 <Route path="/workbench" element={<WorkbenchPage />} />
                 <Route path="/videos" element={<VideosPage />} />
+                <Route path="/images" element={<ImagesPage />} />
                 <Route path="/library" element={<VideosPage />} />
                 <Route path="/library/import" element={<ImportWizardPage />} />
-                <Route path="/edit" element={<EditorPage />} />
+                <Route path="/edit" element={<EditorHomePage />} />
+                <Route path="/edit/new" element={<EditorPage />} />
+                <Route path="/edit/:taskId" element={<EditorPage />} />
                 <Route path="/narrate" element={<NarratePage />} />
+                <Route path="/ai-media" element={<AIMediaPage />} />
                 <Route path="/download" element={<DownloadPage />} />
                 <Route path="/record" element={<RecordPage />} />
                 <Route path="/publish" element={<PublishPage />} />
                 <Route path="/tasks" element={<TasksPage />} />
+                <Route path="/maintenance" element={<MaintenancePage />} />
                 <Route path="/accounts" element={<AccountsPage />} />
                 <Route path="*" element={<NotFoundPage />} />
               </Routes>
@@ -129,6 +139,7 @@ function AppContent() {
         </section>
       </div>}
       <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
+      <TaskFocusBanner />
       <ToastHost /><ConfirmHost />
     </div>
   )

@@ -3,17 +3,8 @@
 frontend/node_modules
 frontend/dist
 data
-publisher/.venv
-publisher/cookies
-publisher/db
-publisher/media
-publisher/logs
-publisher/**/__pycache__
 .env
 **/.env
-**/access_token.txt
-**/sms_token.txt
-**/verify_code.txt
 **/*.pem
 **/*.key
 **/.DS_Store
@@ -27,7 +18,6 @@ narratoai/resource/videos
 services/.venv
 /models
 *.md
-ms-playwright
 frontend
 .env
 **/__pycache__

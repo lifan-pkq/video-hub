@@ -8,6 +8,7 @@ const STATUS_STYLE: Record<string, { label: string; color: 'gray' | 'accent' | '
   success: { label: '成功', color: 'green' },
   failed: { label: '失败', color: 'red' },
   partial: { label: '部分成功', color: 'orange' },
+  cancelled: { label: '已取消', color: 'gray' },
 }
 
 export default function StatusBadge({ status }: { status: TaskStatus | string }) {

@@ -1,4 +1,4 @@
-"""内存任务管理：下载/发布任务的状态、进度、日志，前端轮询 + WebSocket 实时推送。"""
+"""内存任务管理：下载/剪辑/AI 任务的状态、进度、日志，前端轮询 + WebSocket 实时推送。"""
 import threading
 import time
 import uuid
@@ -10,16 +10,16 @@ PROGRESS_EMIT_INTERVAL = 0.4
 
 
 class Task:
-    def __init__(self, type_: str, title: str = ""):
+    def __init__(self, type_: str, title: str = "", input: dict | None = None):
         self.id = uuid.uuid4().hex[:12]
-        self.type = type_            # download / publish
+        self.type = type_            # download / edit / ai
         self.title = title
         self._status = "pending"     # pending/running/success/failed/partial
-        self._progress = 0.0         # 0~100，下载任务用
-        self._needs_verify = False
+        self._progress = 0.0         # 0~100
         self._last_emit = 0.0        # 上次广播的 monotonic 时间（节流用）
         self.logs: list[str] = []
-        self.result: dict = {}       # download → video 信息；publish → 各平台结果
+        self.input = input or {}
+        self.result: dict = {}       # download → video；AI → 生成结果
         self.cancelled = False       # 超时取消标志（下载线程的 progress hook 检查它）
         self.created_at = time.strftime("%Y-%m-%d %H:%M:%S")
         self.finished_at = None
@@ -46,17 +46,6 @@ class Task:
         self._progress = value
         self._emit()
 
-    @property
-    def needs_verify(self) -> bool:
-        return self._needs_verify
-
-    @needs_verify.setter
-    def needs_verify(self, value: bool):
-        if value == self._needs_verify:
-            return
-        self._needs_verify = value
-        self._emit(force=True)
-
     def _emit(self, force: bool = False):
         """广播 task_updated 事件；非 force 时按任务节流，可从任意线程调用。"""
         now = time.monotonic()
@@ -70,6 +59,14 @@ class Task:
         self.logs.append(line)
         if len(self.logs) > 2000:
             self.logs = self.logs[-1000:]
+
+    def cancel(self):
+        if self._status in ("success", "failed", "partial", "cancelled"):
+            return
+        self.cancelled = True
+        self._status = "cancelled"
+        self.finished_at = time.strftime("%Y-%m-%d %H:%M:%S")
+        self._emit(force=True)
 
     def finish(self, status: str):
         if self._status == "cancelled":
@@ -85,8 +82,8 @@ class Task:
             "title": self.title,
             "status": self.status,
             "progress": round(self.progress, 1),
+            "input": self.input,
             "result": self.result,
-            "needs_verify": self.needs_verify,
             "created_at": self.created_at,
             "finished_at": self.finished_at,
         }
@@ -100,8 +97,8 @@ class TaskManager:
         self._tasks: dict[str, Task] = {}
         self._lock = threading.Lock()
 
-    def create(self, type_: str, title: str = "") -> Task:
-        t = Task(type_, title)
+    def create(self, type_: str, title: str = "", input: dict | None = None) -> Task:
+        t = Task(type_, title, input=input)
         with self._lock:
             self._tasks[t.id] = t
             # 只保留最近 200 个任务（进行中的任务不淘汰）
@@ -117,6 +114,13 @@ class TaskManager:
     def get(self, task_id: str) -> Task | None:
         with self._lock:
             return self._tasks.get(task_id)
+
+    def cancel(self, task_id: str) -> bool:
+        task = self.get(task_id)
+        if not task:
+            return False
+        task.cancel()
+        return True
 
     def list(self, limit: int = 30) -> list[Task]:
         with self._lock:

@@ -187,6 +187,7 @@ def _create_programmatic_subtitle_file(
         list_script=list_script,
         original_subtitle_paths=original_subtitle_paths,
         video_origin_paths=_get_video_origin_paths(params),
+        max_chars=max(6, min(int(getattr(params, "subtitle_max_chars", 16) or 16), 30)),
     )
 
 
@@ -718,6 +719,11 @@ def start_subclip_unified(task_id: str, params: VideoClipParams):
         voice_rate=params.voice_rate,
         voice_pitch=params.voice_pitch,
     )
+    if tts_segments and not tts_results:
+        raise RuntimeError(
+            "TTS 配音全部失败：请检查配音引擎、网络与音色配置"
+            "（Edge TTS 需要能访问 speech.platform.bing.com，或改用 Azure/腾讯云/本地 TTS）"
+        )
 
     _update_video_generation_task(
         task_id,

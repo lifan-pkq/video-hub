@@ -4,3 +4,5 @@ yt-dlp>=2026.7.4
 python-multipart==0.0.20
 faster-whisper>=1.1.0
 requests>=2.32.0
+# TestClient / 路由层测试（部署脚本会在安装依赖后跑 unittest）
+httpx==0.28.1

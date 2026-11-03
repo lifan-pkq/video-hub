@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { ClockCounterClockwise, DownloadSimple } from '@phosphor-icons/react'
 import http, {
   errorMessage,
@@ -40,7 +40,15 @@ async function cancelTask(taskId: string): Promise<{ ok: boolean }> {
   return data
 }
 
+const TASK_PAGE: Record<string, string> = {
+  download: '/download',
+  publish: '/publish',
+  edit: '/edit',
+  ai: '/ai-media',
+}
+
 export default function TasksPage() {
+  const navigate = useNavigate()
   const [tasks, setTasks] = useState<TaskSummary[]>([])
   const [loading, setLoading] = useState<boolean>(true)
   const [filter, setFilter] = useState<Filter>('all')
@@ -130,6 +138,15 @@ export default function TasksPage() {
   const toggle = (t: TaskSummary) => {
     setDetail(null)
     setExpandedId((prev) => (prev === t.id ? null : t.id))
+  }
+
+  const openTask = (t: TaskSummary) => {
+    if (t.type === 'edit') {
+      navigate(`/edit/${encodeURIComponent(t.id)}`)
+      return
+    }
+    const page = TASK_PAGE[t.type]
+    navigate(page ? `${page}?task=${encodeURIComponent(t.id)}` : '/tasks')
   }
 
   // ================= 取消任务 =================
@@ -227,6 +244,7 @@ export default function TasksPage() {
                 detail={expandedId === t.id ? detail : null}
                 cancelling={cancellingId === t.id}
                 onToggle={toggle}
+                onOpen={openTask}
                 onCancel={handleCancel}
               />
             </div>

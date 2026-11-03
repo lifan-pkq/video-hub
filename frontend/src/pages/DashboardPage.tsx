@@ -3,7 +3,9 @@ import { Link, useNavigate } from 'react-router-dom'
 import {
   Broadcast,
   ChartLine,
+  Cpu,
   DownloadSimple,
+  HardDrives,
   PaperPlaneTilt,
   UserCircle,
   VideoCamera,
@@ -12,12 +14,14 @@ import {
   errorMessage,
   fetchPublishRecords,
   fetchStats,
+  fetchSystemStatus,
   fetchTasks,
   fetchVideos,
   formatRelative,
   formatSize,
   type PublishRecord,
   type Stats,
+  type SystemStatus,
   type TaskSummary,
   type Video,
 } from '../api'
@@ -254,9 +258,97 @@ function PublishDonut({ records }: { records: PublishRecord[] }) {
   )
 }
 
+function formatUptime(seconds: number | null): string {
+  if (seconds == null) return '-'
+  const days = Math.floor(seconds / 86400)
+  const hours = Math.floor((seconds % 86400) / 3600)
+  const minutes = Math.floor((seconds % 3600) / 60)
+  if (days > 0) return days + ' 天 ' + hours + ' 小时'
+  if (hours > 0) return hours + ' 小时 ' + minutes + ' 分'
+  return minutes + ' 分钟'
+}
+
+function SystemPanel({ system, loading }: { system: SystemStatus | null; loading: boolean }) {
+  return (
+    <Panel
+      className="h-full"
+      title={
+        <>
+          服务器状态
+          <span className="ml-2 text-xs font-normal text-ink-4">内存 / 磁盘 / 服务</span>
+        </>
+      }
+    >
+      {loading && !system ? (
+        <PanelSkeleton />
+      ) : !system ? (
+        <p className="py-6 text-center text-[13px] text-ink-3">暂时读不到服务器状态</p>
+      ) : (
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 gap-3">
+            <div className="rounded-xl border border-line-soft bg-fill px-3 py-2.5">
+              <div className="flex items-center gap-1.5 text-xs text-ink-3"><Cpu size={14} />内存</div>
+              <div className="mt-1.5 flex items-baseline justify-between">
+                <span className="tnum text-lg font-medium text-ink-1">
+                  {system.memory.used_mb != null ? (system.memory.used_mb / 1024).toFixed(1) : '-'}
+                  <span className="ml-0.5 text-xs font-normal text-ink-4">GB</span>
+                </span>
+                <span className="tnum text-xs text-ink-4">
+                  / {system.memory.total_mb != null ? (system.memory.total_mb / 1024).toFixed(1) : '-'} GB
+                </span>
+              </div>
+              <Progress percent={(system.memory.percent ?? 0) / 100} status="normal" className="mt-2" />
+              <div className="mt-1 text-[11px] text-ink-4">
+                可用 {system.memory.available_mb != null ? (system.memory.available_mb / 1024).toFixed(1) : '-'} GB
+                {system.memory.swap_total_mb ? ' · Swap ' + (system.memory.swap_used_mb ?? 0) + ' MB' : ''}
+              </div>
+            </div>
+            <div className="rounded-xl border border-line-soft bg-fill px-3 py-2.5">
+              <div className="flex items-center gap-1.5 text-xs text-ink-3"><HardDrives size={14} />磁盘</div>
+              <div className="mt-1.5 flex items-baseline justify-between">
+                <span className="tnum text-lg font-medium text-ink-1">
+                  {system.disk.used_gb != null ? system.disk.used_gb.toFixed(1) : '-'}
+                  <span className="ml-0.5 text-xs font-normal text-ink-4">GB</span>
+                </span>
+                <span className="tnum text-xs text-ink-4">
+                  / {system.disk.total_gb != null ? system.disk.total_gb.toFixed(1) : '-'} GB
+                </span>
+              </div>
+              <Progress percent={(system.disk.percent ?? 0) / 100} status="normal" className="mt-2" />
+              <div className="mt-1 text-[11px] text-ink-4">剩余 {system.disk.free_gb ?? '-'} GB</div>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-ink-4">
+            <span>负载 {system.load.length ? system.load.join(' / ') : '-'}</span>
+            <span>运行 {formatUptime(system.uptime_seconds)}</span>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2">
+            {system.services.map((service) => (
+              <div key={service.key} className="flex items-center gap-2 rounded-lg border border-line-soft bg-fill px-2.5 py-2">
+                <span className={service.active ? 'status-dot' : 'status-dot is-off'} />
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-[11px] text-ink-2">{service.name}</div>
+                  <div className="tnum text-[10px] text-ink-4">
+                    {service.active ? '正常' : '异常'}
+                    {service.memory_mb != null ? ' · ' + service.memory_mb + ' MB' : ''}
+                    {service.active && service.latency_ms > 0 ? ' · ' + service.latency_ms + 'ms' : ''}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </Panel>
+  )
+}
+
 export default function DashboardPage() {
   const navigate = useNavigate()
   const [stats, setStats] = useState<Stats | null>(null)
+  const [system, setSystem] = useState<SystemStatus | null>(null)
   const [videos, setVideos] = useState<Video[]>([])
   const [tasks, setTasks] = useState<TaskSummary[]>([])
   const [records, setRecords] = useState<PublishRecord[]>([])
@@ -267,16 +359,18 @@ export default function DashboardPage() {
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const [s, v, t, r] = await Promise.all([
+      const [s, v, t, r, sys] = await Promise.all([
         fetchStats(),
         fetchVideos(),
         fetchTasks(),
         fetchPublishRecords(),
+        fetchSystemStatus().catch(() => null),
       ])
       setStats(s)
       setVideos(v)
       setTasks(t)
       setRecords(r)
+      if (sys) setSystem(sys)
       setHasData(true)
       setLoadError(null)
     } catch (e) {
@@ -289,6 +383,14 @@ export default function DashboardPage() {
   useEffect(() => {
     load()
   }, [load])
+
+  // 服务器状态独立刷新，不跟随任务轮询
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      fetchSystemStatus().then(setSystem).catch(() => undefined)
+    }, 15000)
+    return () => window.clearInterval(timer)
+  }, [])
 
   // 有进行中任务/录制时每 5 秒轮询，全部结束后自动停止
   const polling = !!stats && (stats.tasks.running > 0 || stats.recordings.active > 0)
@@ -420,6 +522,11 @@ export default function DashboardPage() {
               </div>
             )}
           </Panel>
+        </div>
+
+        {/* 服务器状态 */}
+        <div className="bento-2x1 enter-item" style={{ animationDelay: '60ms' }}>
+          <SystemPanel system={system} loading={loading} />
         </div>
 
         {/* 统计卡 ×4 */}

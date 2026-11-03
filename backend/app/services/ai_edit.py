@@ -13,8 +13,12 @@ from pathlib import Path
 
 import requests
 
-from app.config import AI_API_KEY, AI_BASE_URL, AI_MODEL, ASR_URL, TMP_DIR, WHISPER_MODEL
+from app.config import AI_BASE_URL, AI_MODEL, ASR_URL, TMP_DIR, WHISPER_MODEL
+from app.services.ai_pool import AI_POOL, AIPoolError
 from app.services.media import render_semaphore
+
+# 兼容旧调用/测试：生产环境优先使用 AI_POOL；单 Key 回退仅在池为空时生效。
+AI_API_KEY = AI_POOL.keys[0] if AI_POOL.keys else ""
 
 # whisper 模型全局单例（首次加载需下载模型文件，之后常驻内存）
 _model = None
@@ -252,16 +256,33 @@ def _build_prompt(kinds: list[str], custom_prompt: str, duration: float, transcr
 
 
 def _request_ai(prompt: str, log) -> list[dict]:
-    r = requests.post(
-        f"{AI_BASE_URL.rstrip('/')}/chat/completions",
-        headers={"Authorization": f"Bearer {AI_API_KEY}"},
-        json={
-            "model": AI_MODEL,
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.1,
-        },
-        timeout=120,
-    )
+    if AI_POOL.has_keys():
+        try:
+            r = AI_POOL.request(
+                "POST",
+                f"{AI_BASE_URL.rstrip('/')}/chat/completions",
+                json_body={
+                    "model": AI_MODEL,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0.1,
+                },
+                timeout=120,
+            )
+        except AIPoolError as exc:
+            raise AIServiceError(f"AI 接口错误：{exc}") from exc
+    else:
+        if not AI_API_KEY:
+            raise AIServiceError("没有配置 AI API Key")
+        r = requests.post(
+            f"{AI_BASE_URL.rstrip('/')}/chat/completions",
+            headers={"Authorization": f"Bearer {AI_API_KEY}", "Content-Type": "application/json"},
+            json={
+                "model": AI_MODEL,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.1,
+            },
+            timeout=120,
+        )
     if r.status_code != 200:
         raise AIServiceError(f"AI 接口错误 {r.status_code}：{r.text[:200]}")
     try:
@@ -294,8 +315,8 @@ def analyze_transcript(segments: list[dict], duration: float,
     candidates = repetition_candidates(segments) if "repeat" in selected else []
     if not base_kinds and not candidates:
         return []
-    if not AI_API_KEY:
-        raise RuntimeError("未配置 AI API Key（环境变量 VIDEO_HUB_AI_API_KEY）")
+    if not AI_POOL.has_keys() and not AI_API_KEY:
+        raise RuntimeError("未配置 AI API Key")
 
     jobs = []
     if base_kinds:
@@ -317,6 +338,109 @@ def analyze_transcript(segments: list[dict], duration: float,
                 range_start=chunk["start"], range_end=chunk["end"],
             ))
     return clean_intervals(results, duration, kinds=[kind for kind in selected if kind != "silence"])
+
+
+
+
+def _plan_prompt(duration: float, target: float, transcript: str, custom_prompt: str) -> str:
+    return (
+        "你是短视频导演。下面是一条视频的语音字幕，格式：[开始秒-结束秒] 文本。\n"
+        f"原片总时长 {duration:.1f} 秒，目标成片约 {target:.0f} 秒。\n\n"
+        "请选择要保留的片段，要求：\n"
+        f"- 总时长控制在 {target * 0.9:.0f}–{target * 1.1:.0f} 秒，不能明显超时；\n"
+        "- 只选 4–12 个片段，每段 2–15 秒，优先完整句子；\n"
+        "- 片段要分布在整条视频，不要只取开头；\n"
+        "- 开头选最有钩子的内容，结尾选能回扣主题的内容；\n"
+        "- 跳过寒暄、广告、重复、无信息过程；\n"
+        "- 片段按原片时间顺序输出，不要重叠；\n"
+        '- 只输出 JSON 数组：[{"start": 1.5, "end": 9.0, "reason": "为什么保留"}]\n'
+        "- 不确定就少选，不要编造时间。\n"
+    ) + (f"\n额外要求（优先）：{custom_prompt.strip()}\n" if custom_prompt.strip() else "") + "\n字幕：\n" + transcript
+
+
+def _clean_plan(items: list[dict], duration: float, target: float) -> list[dict]:
+    valid = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        try:
+            start, end = float(item["start"]), float(item["end"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if not math.isfinite(start) or not math.isfinite(end):
+            continue
+        start = max(0.0, min(float(duration), start))
+        end = max(0.0, min(float(duration), end))
+        if end - start < 0.8:
+            continue
+        valid.append({
+            "start": round(start, 2),
+            "end": round(end, 2),
+            "reason": str(item.get("reason") or "")[:160],
+        })
+    valid.sort(key=lambda item: item["start"])
+    merged: list[dict] = []
+    for item in valid:
+        if merged and item["start"] < merged[-1]["end"]:
+            merged[-1]["end"] = max(merged[-1]["end"], item["end"])
+            continue
+        merged.append(item)
+    total = sum(item["end"] - item["start"] for item in merged)
+    if total > target * 1.12 and merged:
+        # 从尾部逐步裁短，优先保住开头钩子
+        overflow = total - target * 1.12
+        for item in reversed(merged):
+            length = item["end"] - item["start"]
+            cut = min(overflow, max(0.0, length - 0.8))
+            item["end"] = round(item["end"] - cut, 2)
+            overflow -= cut
+            if overflow <= 0:
+                break
+    merged = [item for item in merged if item["end"] - item["start"] >= 0.8]
+    # LLM 常会少选；优先向后扩展已选片段，保证接近目标时长
+    total = sum(item["end"] - item["start"] for item in merged)
+    need = target * 0.95 - total
+    if need > 0:
+        for index, item in enumerate(merged):
+            if need <= 0:
+                break
+            next_start = merged[index + 1]["start"] if index + 1 < len(merged) else duration
+            room = max(0.0, next_start - item["end"] - 0.3)
+            add = min(room, need)
+            if add > 0:
+                item["end"] = round(item["end"] + add, 2)
+                item["reason"] = (item["reason"] + "；扩展以接近目标时长").strip("；")
+                need -= add
+        if need > 0 and merged:
+            tail = merged[-1]
+            add = min(max(0.0, duration - tail["end"]), need)
+            tail["end"] = round(tail["end"] + add, 2)
+    return merged
+
+
+def plan_edit(segments: list[dict], duration: float, target_duration: float,
+              custom_prompt: str = "", log=print, cuts: list[float] | None = None) -> dict:
+    if not segments:
+        raise AIResponseError("没有可用的语音字幕，无法选段")
+    target = max(5.0, min(float(target_duration or 60), duration))
+    transcript = "\n".join(_format_segment(segment) for segment in segments)
+    # 控制上下文，优先保留完整时间轴；超长时截断中段，但保留开头和结尾
+    if len(transcript) > 36000:
+        head, tail = transcript[:18000], transcript[-18000:]
+        transcript = head + "\n...[中间字幕省略]...\n" + tail
+    items = _request_ai(_plan_prompt(duration, target, transcript, custom_prompt), log)
+    clips = _clean_plan(items, duration, target)
+    if cuts:
+        from app.services.video_analysis import snap_plan_to_cuts
+        clips = snap_plan_to_cuts(clips, cuts, duration)
+    if not clips:
+        raise AIResponseError("AI 没有返回可用的保留片段")
+    return {
+        "duration": round(float(duration), 2),
+        "target_duration": round(target, 1),
+        "clips": clips,
+        "total": round(sum(item["end"] - item["start"] for item in clips), 2),
+    }
 
 
 def keep_segments(waste: list[dict], duration: float) -> list[dict]:

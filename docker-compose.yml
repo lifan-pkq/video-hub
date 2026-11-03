@@ -6,6 +6,9 @@ services:
     container_name: video-hub-backend
     init: true
     restart: unless-stopped
+    depends_on:
+      narrato-engine:
+        condition: service_healthy
     shm_size: 512m
     mem_limit: 1400m
     healthcheck:
@@ -16,8 +19,6 @@ services:
       start_period: 60s
     volumes:
       - ./data:/app/data
-      - ./publisher/cookies:/opt/publisher/cookies
-      - ./ms-playwright:/root/.cache/ms-playwright:ro
       - ./narratoai/storage:/app/narrato/storage:ro
     networks:
       - video-hub-net
@@ -29,10 +30,62 @@ services:
       VIDEO_HUB_WHISPER_MODEL: ${VIDEO_HUB_WHISPER_MODEL:-small}
       VIDEO_HUB_ASR_URL: ${VIDEO_HUB_ASR_URL:-}
       VIDEO_HUB_NARRATO_TASKS_DIR: ${VIDEO_HUB_NARRATO_TASKS_DIR:-/app/narrato/storage/tasks}
+      VIDEO_HUB_NARRATO_ENGINE_URL: ${VIDEO_HUB_NARRATO_ENGINE_URL:-http://narrato-engine:8601}
+      NARRATO_ENGINE_TOKEN: ${NARRATO_ENGINE_TOKEN:-}
+      VIDEO_HUB_VISION_BASE_URL: ${VIDEO_HUB_VISION_BASE_URL:-}
+      VIDEO_HUB_VISION_API_KEY: ${VIDEO_HUB_VISION_API_KEY:-}
+      VIDEO_HUB_VISION_MODEL: ${VIDEO_HUB_VISION_MODEL:-}
       # whisper 模型下载走国内镜像；缓存挂到 data 卷持久化；xet 与镜像站不兼容需禁用
       HF_ENDPOINT: ${HF_ENDPOINT:-https://hf-mirror.com}
       HF_HUB_CACHE: /app/data/.hf_cache
       HF_HUB_DISABLE_XET: "1"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  narrato-engine:
+    build:
+      context: ./narratoai
+      dockerfile: Dockerfile
+    container_name: video-hub-narrato-engine
+    init: true
+    # 命名卷 /config 默认 root 所有；引擎需要写 config.toml 与 storage
+    user: "0:0"
+    restart: unless-stopped
+    mem_limit: 3g
+    shm_size: 512m
+    entrypoint: ["/opt/venv/bin/python", "-m", "engine.server", "--host", "0.0.0.0", "--port", "8601"]
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8601/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+    volumes:
+      # 视频库与解说任务目录必须与 backend 看到同一份数据
+      - ./data:/app/data
+      - ./narratoai/storage:/NarratoAI/storage
+      - narrato-engine-config:/config
+    networks:
+      - video-hub-net
+    environment:
+      NARRATOAI_CONFIG: /config/config.toml
+      NARRATO_ENGINE_HOST: 0.0.0.0
+      NARRATO_ENGINE_PORT: "8601"
+      NARRATO_MAX_ACTIVE: ${NARRATO_MAX_ACTIVE:-2}
+      NARRATO_ENGINE_TOKEN: ${NARRATO_ENGINE_TOKEN:-}
+      PYTHONPATH: /NarratoAI
+      # 与 backend 共用一套模型配置；也可以在页面“AI 模型”里写 config.toml
+      VIDEO_HUB_AI_BASE_URL: ${VIDEO_HUB_AI_BASE_URL:-https://api.xiaomimimo.com/v1}
+      VIDEO_HUB_AI_API_KEY: ${VIDEO_HUB_AI_API_KEY:-}
+      VIDEO_HUB_AI_MODEL: ${VIDEO_HUB_AI_MODEL:-mimo-v2.5}
+      VIDEO_HUB_VISION_BASE_URL: ${VIDEO_HUB_VISION_BASE_URL:-}
+      VIDEO_HUB_VISION_API_KEY: ${VIDEO_HUB_VISION_API_KEY:-}
+      VIDEO_HUB_VISION_MODEL: ${VIDEO_HUB_VISION_MODEL:-}
+      # 自动识别口播（ASR）使用共享 faster-whisper 服务；留空则用引擎默认 8600
+      VIDEO_HUB_ASR_URL: ${VIDEO_HUB_ASR_URL:-}
     logging:
       driver: json-file
       options:
@@ -61,3 +114,6 @@ services:
 networks:
   video-hub-net:
     driver: bridge
+
+volumes:
+  narrato-engine-config:

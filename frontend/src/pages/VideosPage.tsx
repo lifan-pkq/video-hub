@@ -214,8 +214,8 @@ export default function VideosPage() {
   // ================= AI 智能剪辑 =================
 
   const handleAiEdit = (video: Video) => {
-    // 跳到剪辑页：该视频自动进时间线并立即开始 AI 分析
-    navigate('/edit', { state: { videoIds: [video.id], autoAnalyze: true } })
+    // 跳到智能剪辑首页并预选素材，确认模式后直接创建任务
+    navigate('/edit', { state: { videoIds: [video.id], mode: 'analyze' } })
   }
 
   const openTrim = (video: Video) => {
@@ -361,7 +361,7 @@ export default function VideosPage() {
             icon={<FilmSlate size={15} />}
             disabled={selectedIds.size < 2}
             onClick={() =>
-              navigate('/edit', { state: { videoIds: filtered.filter((v) => selectedIds.has(v.id)).map((v) => v.id) } })
+              navigate('/edit/new', { state: { videoIds: filtered.filter((v) => selectedIds.has(v.id)).map((v) => v.id) } })
             }
           >
             拼接所选
@@ -438,6 +438,7 @@ export default function VideosPage() {
                 onPublish={(video) => navigate('/publish', { state: { videoId: video.id } })}
                 onTrim={openTrim}
                 onAiEdit={handleAiEdit}
+                onNarrate={(video) => navigate('/narrate?video=' + video.id)}
                 onRename={openRename}
                 onDownload={handleDownload}
                 onDelete={handleDelete}

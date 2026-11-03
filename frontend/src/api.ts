@@ -28,14 +28,26 @@ export interface ParseResult {
   video_id: string
 }
 
-export type TaskStatus = 'pending' | 'running' | 'success' | 'failed' | 'partial'
+export type TaskStatus = 'pending' | 'running' | 'success' | 'failed' | 'partial' | 'cancelled'
+
+export interface EditTaskInput {
+  mode?: 'analyze' | 'plan' | 'concat'
+  video_ids?: number[]
+  kinds?: string[]
+  custom_prompt?: string
+  target_duration?: number
+  title?: string
+  clips?: EditClip[]
+  split_parts?: number
+}
 
 export interface Task {
   id: string
-  type: 'download' | 'publish' | 'edit'
+  type: 'download' | 'publish' | 'edit' | 'ai'
   title: string
   status: TaskStatus
   progress: number
+  input?: EditTaskInput
   /** 抖音发布触发短信验证时为 true（引擎已自动请求验证码） */
   needs_verify: boolean
   result: {
@@ -126,9 +138,12 @@ export interface Recording {
   quality: string
   fps: number
   created_at: string
+  started_at?: string | null
   finished_at: string | null
-  /** 仅 recording 状态时返回（秒） */
+  /** 仅 recording 状态时返回（秒）；未真正开始录制前为 0 */
   elapsed?: number
+  /** 仍在解析/握手/等待首帧，计时尚未开始 */
+  starting?: boolean
 }
 
 /** 主播监控（自动录制） */
@@ -197,6 +212,200 @@ export function getWsUrl(): string {
   }
 }
 
+// ================= 服务器状态 =================
+
+export interface ServerServiceStatus {
+  key: string
+  name: string
+  active: boolean
+  latency_ms: number
+  memory_mb: number | null
+  pid: number | null
+  detail: string
+}
+
+export interface SystemStatus {
+  memory: {
+    total_mb?: number
+    used_mb?: number
+    available_mb?: number
+    percent?: number
+    swap_total_mb?: number
+    swap_used_mb?: number
+  }
+  disk: {
+    total_gb?: number
+    used_gb?: number
+    free_gb?: number
+    percent?: number
+  }
+  load: number[]
+  uptime_seconds: number | null
+  services: ServerServiceStatus[]
+  checked_at: number
+}
+
+export async function fetchSystemStatus(): Promise<SystemStatus> {
+  const { data } = await http.get<SystemStatus>('/system/status', { timeout: 15000 })
+  return data
+}
+
+// ================= AI 媒体 / Key 池 =================
+
+export interface AIPoolKey {
+  hint: string
+  available: boolean
+  cooldown_seconds: number
+  successes: number
+  failures: number
+  last_status: number | null
+  last_error: string
+}
+
+export interface AIPoolStatus {
+  name: string
+  total: number
+  available: number
+  keys: AIPoolKey[]
+}
+
+export interface AIImageResult {
+  ok: boolean
+  url: string
+  name: string
+  model: string
+  size: number
+}
+
+export async function fetchAIPool(): Promise<AIPoolStatus> {
+  const { data } = await http.get<AIPoolStatus>('/ai/pool', { timeout: 15000 })
+  return data
+}
+
+export interface AIImageAsset {
+  id: number
+  filename: string
+  title: string
+  prompt: string
+  size: number
+  width: number | null
+  height: number | null
+  created_at: string
+  url: string
+  public_url: string
+  download_url: string
+}
+
+export async function fetchAIImages(): Promise<AIImageAsset[]> {
+  const { data } = await http.get<AIImageAsset[]>('/ai/images', { timeout: 30000 })
+  return data
+}
+
+export async function saveGeneratedAIImage(payload: {
+  name: string
+  title?: string
+  prompt?: string
+}): Promise<AIImageAsset> {
+  const { data } = await http.post<AIImageAsset>('/ai/images/save', payload, { timeout: 60000 })
+  return data
+}
+
+export async function uploadAIImage(file: File, title = ''): Promise<AIImageAsset> {
+  const form = new FormData()
+  form.append('file', file)
+  form.append('title', title)
+  const { data } = await http.post<AIImageAsset>('/ai/images', form, { timeout: 120000 })
+  return data
+}
+
+export async function deleteAIImage(imageId: number): Promise<void> {
+  await http.delete('/ai/images/' + imageId)
+}
+
+export interface AIReference {
+  url: string
+  data_uri: string
+  name: string
+  size: number
+}
+
+export async function uploadAIReference(file: File): Promise<AIReference> {
+  const form = new FormData()
+  form.append('file', file)
+  const { data } = await http.post<AIReference>('/ai/media/references', form, { timeout: 120000 })
+  return data
+}
+
+export async function generateAIImage(payload: {
+  prompt: string
+  size: string
+  ratio: string
+  images?: string[]
+}): Promise<AIImageResult> {
+  const { data } = await http.post<AIImageResult>('/ai/media/images', payload, { timeout: 300000 })
+  return data
+}
+
+export async function generateAIVideo(payload: {
+  prompt: string
+  seconds: number
+  aspect_ratio: string
+  first_frame?: string
+  last_frame?: string
+  images?: string[]
+  save_to_library?: boolean
+}): Promise<{ task_id: string; mode?: string }> {
+  const { data } = await http.post<{ task_id: string }>('/ai/media/videos', payload, { timeout: 60000 })
+  return data
+}
+
+// ================= 系统维护 =================
+
+export interface MaintenanceStorage {
+  videos: { count: number; size: number; files_size: number; covers_size: number }
+  tasks: { count: number; files: number; size: number }
+  temp: { files: number; size: number }
+  cache: { files: number; size: number }
+  logs: { files: number; size: number }
+  checked_at: string
+}
+
+export interface MaintenanceSettings {
+  enabled: boolean
+  interval_hours: number
+  retention_days: number
+  clean_logs: boolean
+  clear_videos: boolean
+  last_run_at: string
+  next_run_at: string
+  last_result: Record<string, unknown> | string | null
+}
+
+export interface MaintenanceStatus {
+  storage: MaintenanceStorage
+  settings: MaintenanceSettings
+}
+
+export async function fetchMaintenanceStatus(): Promise<MaintenanceStatus> {
+  const { data } = await http.get<MaintenanceStatus>('/maintenance/status', { timeout: 30000 })
+  return data
+}
+
+export async function clearAllVideos(force = false): Promise<{ ok: boolean; videos: number; bytes: number }> {
+  const { data } = await http.post<{ ok: boolean; videos: number; bytes: number }>('/maintenance/videos/clear', { force }, { timeout: 120000 })
+  return data
+}
+
+export async function cleanMaintenanceLogs(retentionDays = 7): Promise<{ ok: boolean; files: number; bytes: number }> {
+  const { data } = await http.post<{ ok: boolean; files: number; bytes: number }>('/maintenance/logs/clean', { retention_days: retentionDays }, { timeout: 120000 })
+  return data
+}
+
+export async function saveMaintenanceSettings(payload: Omit<MaintenanceSettings, 'last_run_at' | 'next_run_at' | 'last_result'>): Promise<MaintenanceSettings> {
+  const { data } = await http.put<MaintenanceSettings>('/maintenance/settings', payload)
+  return data
+}
+
 // ================= 视频库 =================
 
 export async function fetchVideos(): Promise<Video[]> {
@@ -261,6 +470,34 @@ export async function concatVideos(
 }
 
 /** AI 智能分析（可多视频）：whisper 转写 + LLM 标出低价值/广告区间（异步任务） */
+export interface AiEditPlanClip {
+  start: number
+  end: number
+  reason: string
+}
+
+export interface AiEditPlan {
+  video_id: number
+  title: string
+  duration: number
+  target_duration: number
+  clips: AiEditPlanClip[]
+  total: number
+}
+
+export async function planEdit(
+  videoId: number,
+  targetDuration: number,
+  customPrompt = '',
+): Promise<{ task_id: string }> {
+  const { data } = await http.post<{ task_id: string }>('/edit/plan', {
+    video_id: videoId,
+    target_duration: targetDuration,
+    custom_prompt: customPrompt,
+  })
+  return data
+}
+
 export async function analyzeVideos(
   videoIds: number[],
   kinds: string[],
@@ -639,6 +876,311 @@ export function formatRelative(iso: string | null | undefined): string {
   return formatTime(iso)
 }
 
+
+// ================= AI 解说 =================
+
+export type NarrationStatus = 'queued' | 'running' | 'awaiting_review' | 'success' | 'failed' | 'cancelled'
+
+export interface NarrationContentType {
+  value: string
+  label: string
+  summary: string
+  original_volume: number
+}
+
+export interface NarrationVoice {
+  value: string
+  label: string
+  engine: string
+}
+
+export interface NarrationAspect {
+  value: string
+  label: string
+}
+
+export interface NarrationSettings {
+  config_file: string
+  ready: boolean
+  text: { provider: string; base_url: string; model: string; fast_model?: string; configured: boolean; api_key_hint: string; source: string }
+  vision: { provider: string; base_url: string; model: string; configured: boolean; api_key_hint: string; source: string }
+  tts: { engine: string; voice_name: string }
+}
+
+export interface NarrationCapabilities {
+  available: boolean
+  ready: boolean
+  content_types: NarrationContentType[]
+  personas: { value: string; label: string; summary: string }[]
+  persona_strengths: { value: string; label: string }[]
+  voices: NarrationVoice[]
+  fonts: { value: string; label: string }[]
+  tts_engines: { value: string; label: string }[]
+  aspects: NarrationAspect[]
+  script_modes: { value: string; label: string }[]
+  defaults: {
+    content_type: string
+    persona: string
+    persona_strength: string
+    voice_name: string
+    tts_engine: string
+    aspect: string
+    target_duration: number
+    original_volume: number
+    subtitles: boolean
+    font_name: string
+    font_size: number
+    text_fore_color: string
+    stroke_color: string
+    stroke_width: number
+    subtitle_position: string
+    subtitle_y_percent: number
+    subtitle_max_chars: number
+    subtitle_mask_enabled: boolean
+    subtitle_mask_y: number
+    subtitle_mask_height: number
+    subtitle_mask_blur: number
+    subtitle_mask_opacity: number
+    clip_mode: 'timeline' | 'narration'
+    coverage: 'highlights' | 'full'
+    analysis_mode: 'fast' | 'deep'
+    output_mode: 'narration' | 'edit'
+    pause_between: boolean
+    pause_seconds: number
+    review_mode: boolean
+    tts_pronunciation: boolean
+  }
+  dependencies: Record<string, boolean>
+  settings: NarrationSettings
+  engine_url?: string
+  version?: string
+}
+
+export interface NarrationOutputVideo {
+  id: number
+  title: string
+  cover_url: string | null
+  file_url: string
+  duration: number | null
+  width: number | null
+  height: number | null
+}
+
+export interface NarrationTask {
+  id: string
+  video_id: number
+  title: string
+  content_type: string
+  mode: string
+  aspect: string | null
+  voice_name: string | null
+  target_duration: number | null
+  status: NarrationStatus
+  progress: number
+  message: string
+  error: string
+  engine_task_id: string
+  output_video_id: number | null
+  created_at: string
+  updated_at: string
+  finished_at: string | null
+  request?: Record<string, unknown>
+  result?: { duration?: number; width?: number; height?: number; size?: number; completed_at?: string }
+  source_video?: { id: number; title: string; cover_url: string | null; duration: number | null } | null
+  output_video?: NarrationOutputVideo | null
+}
+
+export interface CreateNarrationPayload {
+  video_id: number
+  title?: string
+  content_type: string
+  persona?: string
+  persona_strength?: string
+  mode: string
+  topic?: string
+  instruction?: string
+  tone?: string
+  target_duration: number
+  aspect: string
+  language: string
+  voice_name: string
+  tts_engine: string
+  voice_rate: number
+  original_volume: number
+  subtitles: boolean
+  font_name: string
+  font_size: number
+  text_fore_color: string
+  stroke_color: string
+  stroke_width: number
+  subtitle_position: string
+  custom_position: number
+  subtitle_y_percent: number
+  subtitle_max_chars: number
+  subtitle_mask_enabled: boolean
+  subtitle_mask_y: number
+  subtitle_mask_height: number
+  subtitle_mask_blur: number
+  subtitle_mask_opacity: number
+  clip_mode: 'timeline' | 'narration'
+  coverage: 'highlights' | 'full'
+  analysis_mode: 'fast' | 'deep'
+  output_mode: 'narration' | 'edit'
+  pause_between: boolean
+  pause_seconds: number
+  review_mode: boolean
+  tts_pronunciation: boolean
+  script_text?: string
+  transcript_text?: string
+}
+
+export async function fetchNarrationCapabilities(): Promise<NarrationCapabilities> {
+  const { data } = await http.get<NarrationCapabilities>('/narrate/capabilities', { timeout: 15000 })
+  return data
+}
+
+export async function fetchNarrationHealth(): Promise<{ available: boolean; error?: string }> {
+  const { data } = await http.get<{ available: boolean; error?: string }>('/narrate/health', { timeout: 6000 })
+  return data
+}
+
+export async function fetchNarrationTasks(): Promise<NarrationTask[]> {
+  const { data } = await http.get<NarrationTask[]>('/narrate/tasks')
+  return data
+}
+
+export async function fetchNarrationTask(taskId: string): Promise<NarrationTask> {
+  const { data } = await http.get<NarrationTask>('/narrate/tasks/' + taskId)
+  return data
+}
+
+export async function createNarrationTask(payload: CreateNarrationPayload): Promise<NarrationTask> {
+  const { data } = await http.post<NarrationTask>('/narrate/tasks', payload, { timeout: 30000 })
+  return data
+}
+
+export async function cancelNarrationTask(taskId: string): Promise<NarrationTask> {
+  const { data } = await http.post<NarrationTask>('/narrate/tasks/' + taskId + '/cancel', {}, { timeout: 20000 })
+  return data
+}
+
+export interface NarrationPlanItem {
+  timestamp: string
+  clip_duration?: number
+  narration: string
+  OST?: number
+}
+
+export interface NarrationPlan {
+  task_id: string
+  coverage?: string
+  clip_mode?: string
+  analysis_mode?: string
+  output_mode?: string
+  items: NarrationPlanItem[]
+}
+
+export async function fetchNarrationPlan(taskId: string): Promise<NarrationPlan> {
+  const { data } = await http.get<NarrationPlan>('/narrate/tasks/' + taskId + '/plan', { timeout: 15000 })
+  return data
+}
+
+export interface NarrationPreviewResult {
+  task_id: string
+  url: string
+  segments: number
+  size: number
+  note: string
+}
+
+export async function previewNarrationPlan(taskId: string): Promise<NarrationPreviewResult> {
+  const { data } = await http.post<NarrationPreviewResult>(
+    '/narrate/tasks/' + taskId + '/preview',
+    {},
+    { timeout: 600000 },
+  )
+  return data
+}
+
+export async function approveNarrationTask(taskId: string): Promise<NarrationTask> {
+  const { data } = await http.post<NarrationTask>('/narrate/tasks/' + taskId + '/approve', {}, { timeout: 30000 })
+  return data
+}
+
+export async function importNarrationTask(taskId: string): Promise<NarrationTask> {
+  const { data } = await http.post<NarrationTask>('/narrate/tasks/' + taskId + '/import', {}, { timeout: 30000 })
+  return data
+}
+
+export interface LegacyNarrationTask {
+  task_id: string
+  title: string
+  duration: number
+  size: number
+  created_at: string
+  imported_video_id: number | null
+}
+
+export async function fetchLegacyNarrationTasks(): Promise<LegacyNarrationTask[]> {
+  const { data } = await http.get<LegacyNarrationTask[]>('/narrate/legacy-tasks', { timeout: 30000 })
+  return data
+}
+
+export async function importLegacyNarrationTask(taskId: string): Promise<{ ok: boolean; video: Video }> {
+  const { data } = await http.post<{ ok: boolean; video: Video }>(
+    '/narrate/legacy-tasks/' + encodeURIComponent(taskId) + '/import',
+    {},
+    { timeout: 60000 },
+  )
+  return data
+}
+
+export interface JianyingExportResult {
+  ok: boolean
+  task_id: string
+  draft_name: string
+  draft_path: string
+}
+
+export async function exportNarrationJianying(taskId: string, draftName = ''): Promise<JianyingExportResult> {
+  const { data } = await http.post<JianyingExportResult>(
+    '/narrate/tasks/' + taskId + '/jianying',
+    { draft_name: draftName },
+    { timeout: 900000 },
+  )
+  return data
+}
+
+export async function fetchNarrationSettings(): Promise<NarrationSettings> {
+  const { data } = await http.get<NarrationSettings>('/narrate/settings')
+  return data
+}
+
+export async function saveNarrationSettings(payload: Record<string, unknown>): Promise<NarrationSettings> {
+  const { data } = await http.put<NarrationSettings>('/narrate/settings', payload)
+  return data
+}
+
+export interface SubtitlePreviewPayload {
+  text: string
+  font_name: string
+  font_size: number
+  text_color: string
+  stroke_color: string
+  stroke_width: number
+  orientation: 'portrait' | 'landscape'
+  subtitle_position: string
+  subtitle_y_percent: number
+}
+
+export async function previewNarrationSubtitle(payload: SubtitlePreviewPayload): Promise<Blob> {
+  const { data } = await http.post<Blob>('/narrate/subtitle-preview', payload, {
+    responseType: 'blob',
+    timeout: 30000,
+  })
+  return data
+}
+
 export const PLATFORMS: { key: string; label: string }[] = [
   { key: 'douyin', label: '抖音' },
   { key: 'xiaohongshu', label: '小红书' },
@@ -655,6 +1197,8 @@ export function platformLabel(key: string | null | undefined): string {
   if (key === 'unknown') return '未知'
   if (key === 'edited') return '剪辑合成'
   if (key === 'narrato') return 'AI 解说'
+  if (key === 'ai_edit') return 'AI 剪辑'
+  if (key === 'legacy') return '历史任务'
   // 直播录制入库的来源：live_douyin / live_bilibili / live_direct …
   if (key.startsWith('live_')) return `直播·${platformLabel(key.slice(5))}`
   return PLATFORMS.find((p) => p.key === key)?.label ?? key

@@ -1822,7 +1822,7 @@ def tts_multiple(task_id: str, list_script: list, voice_name: str, voice_rate: f
             audio_file = os.path.join(output_dir, f"audio_{timestamp}{audio_extension}")
             subtitle_file = os.path.join(output_dir, f"subtitle_{timestamp}.srt")
 
-            text = item['narration']
+            text = item.get('tts_text') or item['narration']
 
             sub_maker = tts(
                 text=text,

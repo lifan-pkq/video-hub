@@ -41,6 +41,7 @@ class DeploymentSecurityTests(unittest.TestCase):
         for excluded in ("publisher/cookies", "publisher/db", "publisher/media"):
             self.assertIn(f"--exclude='{excluded}'", script)
         self.assertIn("curl -sf http://localhost/api/health", script)
+        self.assertIn("curl -sf http://127.0.0.1:8601/health", script)
         self.assertIn("for attempt in", script)
 
     def test_browser_mount_is_read_only_and_container_logs_are_bounded(self):
@@ -50,6 +51,9 @@ class DeploymentSecurityTests(unittest.TestCase):
         self.assertGreaterEqual(compose.count('max-size: "10m"'), 2)
         self.assertGreaterEqual(compose.count('max-file: "3"'), 2)
         self.assertIn("./data:/app/data", compose)
+        self.assertIn("narrato-engine:", compose)
+        self.assertIn("narrato-engine-config:", compose)
+        self.assertIn("VIDEO_HUB_NARRATO_ENGINE_URL", compose)
 
 
 class HostDeploymentTests(unittest.TestCase):
@@ -70,6 +74,10 @@ class HostDeploymentTests(unittest.TestCase):
         self.assertIn("VIDEO_HUB_NARRATO_TASKS_DIR=/opt/video-hub/narratoai/storage/tasks", backend)
         self.assertIn("--server.baseUrlPath=narrato", narrato)
         self.assertIn("--server.address=127.0.0.1", narrato)
+        engine = (ROOT / "deploy/systemd/narrato-engine.service").read_text()
+        self.assertIn("NARRATO_ENGINE_HOST=127.0.0.1", engine)
+        self.assertIn("NARRATO_ENGINE_PORT=8601", engine)
+        self.assertIn("-m engine.server", engine)
 
     def test_remote_install_preserves_runtime_data_and_backs_up_configuration(self):
         script = (ROOT / "deploy/remote-install.sh").read_text()
@@ -101,6 +109,7 @@ class HostDeploymentTests(unittest.TestCase):
             "/etc/nginx/sites-available/video-hub",
             "/etc/nginx/sites-enabled/video-hub",
             "/etc/systemd/system/video-hub-backend.service",
+            "/etc/systemd/system/narrato-engine.service",
         ):
             self.assertIn(path, installer)
 

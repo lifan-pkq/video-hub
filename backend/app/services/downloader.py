@@ -7,7 +7,7 @@
   里的播放地址后直接流式下载 mp4；先试匿名，403/解析失败再带 cookie 重试
 - 小红书：yt-dlp 不强制 cookie，先匿名试，失败且有 cookie 再带 cookie 重试
 - B站：yt-dlp 带浏览器 UA/Referer/Origin 头规避 412 风控，按 URL 域名自动带 cookie
-  （发布引擎里保存的 storage_state，自动转 Netscape 格式喂给 yt-dlp）
+  （本地保存的 storage_state，自动转 Netscape 格式喂给 yt-dlp）
 """
 import asyncio
 import json
@@ -539,7 +539,7 @@ async def run_download(task, text: str):
             except Exception as e:
                 msg = str(e)
                 if "Fresh cookies" in msg or "cookie" in msg.lower():
-                    msg += "（提示：下载依赖登录 cookie，请到「平台账号」页检查对应平台的 cookie 是否有效）"
+                    msg += "（提示：下载依赖登录 cookie，当前 cookie 可能已失效）"
                 task.log(f"下载失败: {msg}")
                 task.result = {"error": msg}
                 task.finish("failed")

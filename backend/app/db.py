@@ -1,4 +1,4 @@
-"""SQLite 持久化：视频库 + 发布历史。使用标准库 sqlite3，简单可靠。"""
+"""SQLite 持久化：视频库、AI 图片、录制与任务。使用标准库 sqlite3，简单可靠。"""
 import json
 import sqlite3
 import threading
@@ -41,20 +41,6 @@ def _init_schema(conn: sqlite3.Connection):
             task_id TEXT PRIMARY KEY,
             video_id INTEGER NOT NULL
         );
-        CREATE TABLE IF NOT EXISTS publish_records (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            task_id TEXT NOT NULL,
-            video_id INTEGER,
-            video_title TEXT,
-            platform TEXT NOT NULL,
-            account TEXT DEFAULT 'default',
-            title TEXT,
-            desc TEXT,
-            tags TEXT,
-            status TEXT NOT NULL,
-            log TEXT,
-            created_at TEXT NOT NULL
-        );
         CREATE TABLE IF NOT EXISTS recordings (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             url TEXT NOT NULL,
@@ -69,6 +55,7 @@ def _init_schema(conn: sqlite3.Connection):
             quality TEXT DEFAULT 'best',
             fps INTEGER DEFAULT 0,
             created_at TEXT NOT NULL,
+            started_at TEXT,
             finished_at TEXT
         );
         CREATE TABLE IF NOT EXISTS watchers (
@@ -84,20 +71,59 @@ def _init_schema(conn: sqlite3.Connection):
             last_checked_at TEXT,
             created_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS ai_images (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            filename TEXT NOT NULL UNIQUE,
+            title TEXT DEFAULT '',
+            prompt TEXT DEFAULT '',
+            size INTEGER DEFAULT 0,
+            width INTEGER,
+            height INTEGER,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS maintenance_settings (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            enabled INTEGER DEFAULT 0,
+            interval_hours INTEGER DEFAULT 24,
+            retention_days INTEGER DEFAULT 7,
+            clean_logs INTEGER DEFAULT 1,
+            clear_videos INTEGER DEFAULT 0,
+            last_run_at TEXT,
+            next_run_at TEXT,
+            last_result TEXT
+        );
+        CREATE TABLE IF NOT EXISTS narration_tasks (
+            id TEXT PRIMARY KEY,
+            video_id INTEGER,
+            title TEXT NOT NULL,
+            content_type TEXT DEFAULT 'auto',
+            mode TEXT DEFAULT 'auto',
+            aspect TEXT,
+            voice_name TEXT,
+            target_duration INTEGER,
+            status TEXT NOT NULL DEFAULT 'queued',
+            progress REAL DEFAULT 0,
+            message TEXT DEFAULT '',
+            error TEXT DEFAULT '',
+            engine_task_id TEXT,
+            output_video_id INTEGER,
+            request_json TEXT,
+            result_json TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            finished_at TEXT
+        );
         """
     )
-    # 老库兼容：publish_records 补 account/schedule 列
-    cols = [r[1] for r in conn.execute("PRAGMA table_info(publish_records)").fetchall()]
-    if "account" not in cols:
-        conn.execute("ALTER TABLE publish_records ADD COLUMN account TEXT DEFAULT 'default'")
-    if "schedule" not in cols:
-        conn.execute("ALTER TABLE publish_records ADD COLUMN schedule TEXT")
     # 老库兼容：recordings 补 quality/fps 列
     cols = [r[1] for r in conn.execute("PRAGMA table_info(recordings)").fetchall()]
     if "quality" not in cols:
         conn.execute("ALTER TABLE recordings ADD COLUMN quality TEXT DEFAULT 'best'")
     if "fps" not in cols:
         conn.execute("ALTER TABLE recordings ADD COLUMN fps INTEGER DEFAULT 0")
+    if "started_at" not in cols:
+        conn.execute("ALTER TABLE recordings ADD COLUMN started_at TEXT")
+    conn.execute("INSERT OR IGNORE INTO maintenance_settings (id) VALUES (1)")
     conn.commit()
 
 
@@ -111,6 +137,147 @@ def add_video(**fields) -> dict:
         conn.commit()
         row = conn.execute("SELECT * FROM videos WHERE id=?", (cur.lastrowid,)).fetchone()
         return dict(row)
+
+
+def _serialize_json(value) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    try:
+        return json.dumps(value, ensure_ascii=False)
+    except (TypeError, ValueError):
+        return None
+
+
+def _narration_row(row: sqlite3.Row | None) -> dict | None:
+    if row is None:
+        return None
+    item = dict(row)
+    for field in ("request_json", "result_json"):
+        raw = item.get(field)
+        if raw:
+            try:
+                item[field[:-5]] = json.loads(raw)
+            except (TypeError, ValueError):
+                item[field[:-5]] = None
+    item.pop("request_json", None)
+    item.pop("result_json", None)
+    return item
+
+
+def create_narration_task(**fields) -> dict:
+    now = datetime.now().isoformat(timespec="seconds")
+    fields.setdefault("created_at", now)
+    fields.setdefault("updated_at", now)
+    fields.setdefault("status", "queued")
+    fields.setdefault("progress", 0)
+    fields["request_json"] = _serialize_json(fields.get("request_json"))
+    fields["result_json"] = _serialize_json(fields.get("result_json"))
+    keys = ",".join(fields.keys())
+    marks = ",".join("?" for _ in fields)
+    with _lock:
+        conn = _get_conn()
+        conn.execute(f"INSERT INTO narration_tasks ({keys}) VALUES ({marks})", list(fields.values()))
+        conn.commit()
+        row = conn.execute("SELECT * FROM narration_tasks WHERE id=?", (fields["id"],)).fetchone()
+        return _narration_row(row)
+
+
+def update_narration_task(task_id: str, **fields) -> dict | None:
+    if not fields:
+        return get_narration_task(task_id)
+    for field in ("request_json", "result_json"):
+        if field in fields:
+            fields[field] = _serialize_json(fields[field])
+    fields["updated_at"] = datetime.now().isoformat(timespec="seconds")
+    sets = ",".join(f"{key}=?" for key in fields)
+    with _lock:
+        conn = _get_conn()
+        conn.execute(f"UPDATE narration_tasks SET {sets} WHERE id=?", [*fields.values(), task_id])
+        conn.commit()
+        row = conn.execute("SELECT * FROM narration_tasks WHERE id=?", (task_id,)).fetchone()
+        return _narration_row(row)
+
+
+def get_narration_task(task_id: str) -> dict | None:
+    with _lock:
+        row = _get_conn().execute("SELECT * FROM narration_tasks WHERE id=?", (task_id,)).fetchone()
+        return _narration_row(row)
+
+
+def list_narration_tasks(limit: int = 50) -> list[dict]:
+    limit = max(1, min(int(limit or 50), 200))
+    with _lock:
+        rows = _get_conn().execute(
+            "SELECT * FROM narration_tasks ORDER BY created_at DESC, rowid DESC LIMIT ?", (limit,)
+        ).fetchall()
+        return [_narration_row(row) for row in rows]
+
+
+def add_ai_image(**fields) -> dict:
+    fields.setdefault("created_at", datetime.now().isoformat(timespec="seconds"))
+    keys = ",".join(fields.keys())
+    marks = ",".join("?" for _ in fields)
+    with _lock:
+        conn = _get_conn()
+        cur = conn.execute(f"INSERT INTO ai_images ({keys}) VALUES ({marks})", list(fields.values()))
+        conn.commit()
+        row = conn.execute("SELECT * FROM ai_images WHERE id=?", (cur.lastrowid,)).fetchone()
+        return dict(row)
+
+
+def list_ai_images(limit: int = 100) -> list[dict]:
+    with _lock:
+        rows = _get_conn().execute(
+            "SELECT * FROM ai_images ORDER BY created_at DESC, id DESC LIMIT ?", (max(1, min(limit, 300)),)
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
+def get_ai_image(image_id: int) -> dict | None:
+    with _lock:
+        row = _get_conn().execute("SELECT * FROM ai_images WHERE id=?", (image_id,)).fetchone()
+        return dict(row) if row else None
+
+
+def delete_ai_image(image_id: int) -> None:
+    with _lock:
+        conn = _get_conn()
+        conn.execute("DELETE FROM ai_images WHERE id=?", (image_id,))
+        conn.commit()
+
+
+def get_maintenance_settings() -> dict:
+    with _lock:
+        row = _get_conn().execute("SELECT * FROM maintenance_settings WHERE id=1").fetchone()
+        return dict(row) if row else {}
+
+
+def update_maintenance_settings(**fields) -> dict:
+    if "last_result" in fields:
+        fields["last_result"] = _serialize_json(fields["last_result"])
+    sets = ",".join(f"{key}=?" for key in fields)
+    with _lock:
+        conn = _get_conn()
+        conn.execute(f"UPDATE maintenance_settings SET {sets} WHERE id=1", list(fields.values()))
+        conn.commit()
+        row = conn.execute("SELECT * FROM maintenance_settings WHERE id=1").fetchone()
+        return dict(row) if row else {}
+
+
+def clear_video_references() -> None:
+    """视频被全部删除后，清理任务/录制记录里的悬空 video_id。"""
+    with _lock:
+        conn = _get_conn()
+        conn.execute("UPDATE narration_tasks SET output_video_id=NULL WHERE output_video_id IS NOT NULL")
+        conn.execute("UPDATE recordings SET video_id=NULL WHERE video_id IS NOT NULL")
+        conn.execute("DELETE FROM narrato_imports")
+        conn.commit()
+
+
+def link_narration_video(task_id: str, video_id: int) -> dict | None:
+    return update_narration_task(task_id, output_video_id=video_id)
 
 
 def add_narrato_video(task_id: str, **fields) -> dict:
@@ -181,36 +348,6 @@ def delete_video(video_id: int):
         conn = _get_conn()
         conn.execute("DELETE FROM videos WHERE id=?", (video_id,))
         conn.commit()
-
-
-def add_publish_record(task_id: str, video_id: int | None, video_title: str, platform: str,
-                       title: str, desc: str, tags: list[str], account: str = "default",
-                       schedule: str | None = None) -> int:
-    with _lock:
-        conn = _get_conn()
-        cur = conn.execute(
-            "INSERT INTO publish_records (task_id, video_id, video_title, platform, account, title, desc, tags, status, log, created_at, schedule)"
-            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-            (task_id, video_id, video_title, platform, account, title, desc, json.dumps(tags, ensure_ascii=False),
-             "running", "", datetime.now().isoformat(timespec="seconds"), schedule),
-        )
-        conn.commit()
-        return cur.lastrowid
-
-
-def finish_publish_record(record_id: int, status: str, log: str):
-    with _lock:
-        conn = _get_conn()
-        conn.execute("UPDATE publish_records SET status=?, log=? WHERE id=?", (status, log, record_id))
-        conn.commit()
-
-
-def list_publish_records(limit: int = 50) -> list[dict]:
-    with _lock:
-        rows = _get_conn().execute(
-            "SELECT * FROM publish_records ORDER BY id DESC LIMIT ?", (limit,)
-        ).fetchall()
-        return [dict(r) for r in rows]
 
 
 # ---------- 直播录制 ----------

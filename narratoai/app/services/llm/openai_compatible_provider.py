@@ -30,6 +30,7 @@ from app.utils.openai_base_url_security import (
 )
 from .base import TextModelProvider, VisionModelProvider
 from .exceptions import APICallError, AuthenticationError, ConfigurationError, ContentFilterError, RateLimitError
+from .key_pool import VISION_POOL
 
 
 def _normalize_model_name(model_name: str) -> str:
@@ -198,45 +199,66 @@ class OpenAICompatibleVisionProvider(_OpenAICompatibleBase, VisionModelProvider)
         messages = [{"role": "user", "content": content}]
         model_name = _normalize_model_name(self.model_name)
 
-        client = self._build_client(
-            api_key_override=kwargs.get("api_key"),
-            base_url_override=kwargs.get("api_base"),
-            timeout_override=config.app.get("llm_vision_timeout", 120),
-        )
+        keys = VISION_POOL.available()
+        if not keys:
+            keys = [kwargs.get("api_key") or self.api_key]
+        last_error: Exception | None = None
 
-        try:
-            generation_overrides = dict(kwargs)
-            completion_options = self._build_chat_completion_options(
-                "vision",
-                temperature=generation_overrides.pop("temperature", None),
-                max_tokens=generation_overrides.pop("max_tokens", None),
-                **generation_overrides,
+        for key in keys:
+            if not key:
+                continue
+            client = self._build_client(
+                api_key_override=key,
+                base_url_override=kwargs.get("api_base"),
+                timeout_override=config.app.get("llm_vision_timeout", 120),
             )
-            response = await client.chat.completions.create(
-                model=model_name,
-                messages=messages,
-                **completion_options,
-            )
-            if response.choices and response.choices[0].message and response.choices[0].message.content:
-                return response.choices[0].message.content
-            raise APICallError("OpenAI 兼容接口返回空响应")
-        except OpenAIAuthError as exc:
-            logger.error(f"OpenAI 兼容接口认证失败: {exc}")
-            raise AuthenticationError(str(exc))
-        except OpenAIRateLimitError as exc:
-            logger.error(f"OpenAI 兼容接口速率限制: {exc}")
-            raise RateLimitError(str(exc))
-        except OpenAIBadRequestError as exc:
-            error_msg = str(exc)
-            if _is_content_filter_error(error_msg):
-                raise ContentFilterError(f"内容被安全过滤器阻止: {error_msg}")
-            raise APICallError(f"请求错误: {error_msg}")
-        except OpenAIAPIError as exc:
-            logger.error(f"OpenAI 兼容接口 API 错误: {exc}")
-            raise APICallError(f"API 错误: {exc}")
-        except Exception as exc:
-            logger.error(f"OpenAI 兼容接口调用失败: {exc}")
-            raise APICallError(f"调用失败: {exc}")
+            try:
+                generation_overrides = dict(kwargs)
+                completion_options = self._build_chat_completion_options(
+                    "vision",
+                    temperature=generation_overrides.pop("temperature", None),
+                    max_tokens=generation_overrides.pop("max_tokens", None),
+                    **generation_overrides,
+                )
+                response = await client.chat.completions.create(
+                    model=model_name,
+                    messages=messages,
+                    **completion_options,
+                )
+                if response.choices and response.choices[0].message and response.choices[0].message.content:
+                    VISION_POOL.success(key)
+                    return response.choices[0].message.content
+                raise APICallError("OpenAI 兼容接口返回空响应")
+            except OpenAIAuthError as exc:
+                logger.error(f"OpenAI 兼容接口认证失败: {exc}")
+                VISION_POOL.failure(key, 401)
+                last_error = AuthenticationError(str(exc))
+                continue
+            except OpenAIRateLimitError as exc:
+                logger.error(f"OpenAI 兼容接口速率限制: {exc}")
+                VISION_POOL.failure(key, 429)
+                last_error = RateLimitError(str(exc))
+                continue
+            except OpenAIBadRequestError as exc:
+                error_msg = str(exc)
+                if _is_content_filter_error(error_msg):
+                    raise ContentFilterError(f"内容被安全过滤器阻止: {error_msg}")
+                raise APICallError(f"请求错误: {error_msg}")
+            except OpenAIAPIError as exc:
+                logger.error(f"OpenAI 兼容接口 API 错误: {exc}")
+                status = getattr(exc, "status_code", None)
+                if status and status >= 500:
+                    VISION_POOL.failure(key, status)
+                    last_error = APICallError(f"API 错误: {exc}")
+                    continue
+                raise APICallError(f"API 错误: {exc}")
+            except Exception as exc:
+                logger.error(f"OpenAI 兼容接口调用失败: {exc}")
+                raise APICallError(f"调用失败: {exc}")
+
+        if last_error:
+            raise last_error
+        raise APICallError("没有可用的视觉模型 Key")
 
     def _image_to_base64(self, img: PIL.Image.Image) -> str:
         img_buffer = io.BytesIO()

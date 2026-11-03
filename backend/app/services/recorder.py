@@ -98,6 +98,10 @@ async def main():
 
 asyncio.run(main())
 '''
+    if not DOUYIN_LIVE_RECORDER_PYTHON.is_file():
+        raise RuntimeError(
+            "缺少抖音直播解析组件 DouyinLiveRecorder，请运行 deploy/install-dlr.sh 安装"
+        )
     quality_name = {"best": "OD", "high": "HD", "medium": "SD", "low": "LD"}.get(quality, "OD")
     result = subprocess.run(
         [str(DOUYIN_LIVE_RECORDER_PYTHON), "-c", script, url, quality_name],
@@ -115,12 +119,13 @@ asyncio.run(main())
 
 
 def _resolve_douyin(url: str, quality: str = "best") -> str:
+    dlr_error = None
     try:
         return _resolve_douyin_with_dlr(url, quality)
     except LiveOfflineError:
         raise
-    except Exception:
-        pass
+    except Exception as exc:
+        dlr_error = exc
     html = _http_get(url, referer="https://live.douyin.com/")
     # 途径一：SSR 注水数据里的结构化流地址（按画质档位选键）
     m = re.search(r"<script[^>]*>window\._SSR_HYDRATED_DATA=(.*?)</script>", html, re.S)
@@ -139,7 +144,8 @@ def _resolve_douyin(url: str, quality: str = "best") -> str:
     # 途径二：正则从 HTML 抠流地址，按画质打分取最高
     urls = set(re.findall(r'https?://[^"\'\\]+?\.(?:flv|m3u8)(?:\?[^"\'\\]*)?', html))
     if not urls:
-        raise RuntimeError("未能在页面中找到直播流地址（可能未开播或页面结构已变）")
+        detail = f"；解析组件错误：{dlr_error}" if dlr_error else ""
+        raise RuntimeError(f"未能在页面中找到直播流地址（可能未开播或页面结构已变）{detail}")
 
     def score(u: str) -> int:
         for kw, s in (("_uhd", 6), ("_or4", 5), ("_hd", 4), (".flv", 3), ("_sd", 2), (".m3u8", 1)):
@@ -274,7 +280,28 @@ def start_recording(url: str, title: str = "", quality: str = "best", fps: int =
     with _lock:
         _procs[rec_id] = proc
     threading.Thread(target=_monitor, args=(rec_id, proc, log_f), daemon=True).start()
+    threading.Thread(target=_mark_started, args=(rec_id, proc, out_path), daemon=True).start()
     return get_recording(rec_id)
+
+
+def _mark_started(rec_id: int, proc: subprocess.Popen, out_path: Path) -> None:
+    """只有 ffmpeg 真正写出媒体数据后才开始计时。
+
+    直播间解析、握手、等待首个关键帧都可能耗时几十秒，不能把这段算进录制时长。
+    """
+    deadline = time.monotonic() + 120
+    while time.monotonic() < deadline:
+        if proc.poll() is not None:
+            return
+        try:
+            if out_path.exists() and out_path.stat().st_size > 0:
+                rec = get_recording(rec_id)
+                if rec and rec.get("status") == "recording" and not rec.get("started_at"):
+                    update_recording(rec_id, started_at=time.strftime("%Y-%m-%d %H:%M:%S"))
+                return
+        except OSError:
+            pass
+        time.sleep(0.5)
 
 
 def _monitor(rec_id: int, proc: subprocess.Popen, log_f):

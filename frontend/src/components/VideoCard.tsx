@@ -2,6 +2,7 @@ import type { ReactNode } from 'react'
 import {
   DownloadSimple,
   MagicWand,
+  Microphone,
   NotePencil,
   PaperPlaneTilt,
   Play,
@@ -22,6 +23,7 @@ interface Props {
   onPublish: (video: Video) => void
   onTrim: (video: Video) => void
   onAiEdit: (video: Video) => void
+  onNarrate: (video: Video) => void
   onRename: (video: Video) => void
   onDownload: (video: Video) => void
   onDelete: (video: Video) => void
@@ -59,6 +61,7 @@ export default function VideoCard({
   onPublish,
   onTrim,
   onAiEdit,
+  onNarrate,
   onRename,
   onDownload,
   onDelete,
@@ -68,6 +71,7 @@ export default function VideoCard({
     { key: 'publish', tip: '发布', icon: <PaperPlaneTilt size={15} />, onClick: () => onPublish(video) },
     { key: 'trim', tip: '截取', icon: <Scissors size={15} />, onClick: () => onTrim(video) },
     { key: 'ai', tip: '智能剪辑', icon: <MagicWand size={15} />, onClick: () => onAiEdit(video) },
+    { key: 'narrate', tip: 'AI 解说', icon: <Microphone size={15} />, onClick: () => onNarrate(video) },
     { key: 'rename', tip: '重命名', icon: <NotePencil size={15} />, onClick: () => onRename(video) },
     { key: 'download', tip: '下载', icon: <DownloadSimple size={15} />, onClick: () => onDownload(video) },
     { key: 'delete', tip: '删除', icon: <Trash size={15} />, onClick: () => onDelete(video), danger: true },

@@ -52,6 +52,19 @@ def stream_video(video_id: int, request: Request):
     return range_stream(path, request.headers.get("range"))
 
 
+@router.get("/{video_id}/download")
+def download_video(video_id: int):
+    """浏览器直接下载成片到本机（不额外占用服务器空间）。"""
+    v = get_video(video_id)
+    if not v:
+        raise HTTPException(404, "视频不存在")
+    path = VIDEOS_DIR / v["filename"]
+    if not path.exists():
+        raise HTTPException(404, "视频文件已丢失")
+    safe_title = re.sub(r'[\\/:*?"<>|#\n\r]', "_", str(v.get("title") or path.stem))[:80] or path.stem
+    return FileResponse(path, media_type="video/mp4", filename=f"{safe_title}{path.suffix or '.mp4'}")
+
+
 @router.get("/{video_id}/cover")
 def get_cover(video_id: int):
     v = get_video(video_id)

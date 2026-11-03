@@ -1,5 +1,7 @@
 # Video Hub 与 NarratoAI 融合设计
 
+> **已被取代（2026-10-29）**：AI 解说已改为 React 原生工作台 + NarratoAI headless engine，不再使用 iframe / 文件轮询作为主链路。新设计见 [native-narration-design.md](./2026-10-29-native-narration-design.md)；本文仅保留历史决策。
+
 ## 目标与范围
 以 Video Hub 为统一工作台，将当前服务器上的 NarratoAI 0.8.7、字幕预览服务和 faster-whisper ASR 服务纳入同一代码仓库与部署体系。保留 NarratoAI 成熟的 Streamlit 生成界面，新增 Video Hub「AI 解说」入口，并让最终成片自动进入 Video Hub 素材库供剪辑、下载和多平台发布。
 

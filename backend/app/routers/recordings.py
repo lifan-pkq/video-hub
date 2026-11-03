@@ -29,12 +29,16 @@ def _enrich(rec: dict) -> dict:
     if rec["status"] == "recording":
         path = recorder.recording_file_path(rec)
         rec["size"] = path.stat().st_size if path else 0
+        started_at = rec.get("started_at")
+        rec["starting"] = not bool(started_at)
         try:
             from datetime import datetime
-            started = datetime.fromisoformat(rec["created_at"]).timestamp()
-            rec["elapsed"] = max(0, int(time.time() - started))
+            started = datetime.fromisoformat(started_at).timestamp() if started_at else None
+            rec["elapsed"] = max(0, int(time.time() - started)) if started else 0
         except Exception:
             rec["elapsed"] = 0
+    else:
+        rec["starting"] = False
     return rec
 
 

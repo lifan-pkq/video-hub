@@ -55,6 +55,7 @@ const TASK_TYPE_TAG: Record<TaskSummary['type'], { label: string; color: 'accent
   download: { label: '下载', color: 'accent' },
   publish: { label: '发布', color: 'blue' },
   edit: { label: '剪辑', color: 'orange' },
+  ai: { label: 'AI 生成', color: 'blue' },
 }
 
 export default function WorkbenchPage() {
@@ -463,7 +464,7 @@ export default function WorkbenchPage() {
                       variant="text"
                       className="h-7 px-1.5"
                       icon={<Scissors size={13} />}
-                      onClick={() => navigate(`/edit?video=${v.id}`)}
+                      onClick={() => navigate(`/edit/new?video=${v.id}`)}
                     >
                       去剪辑
                     </Button>

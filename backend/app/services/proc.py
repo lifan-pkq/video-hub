@@ -40,7 +40,11 @@ def kill_tree(proc: subprocess.Popen):
 
 def reap_orphan_browsers():
     """收割被 init 收养（ppid=1）的孤儿浏览器进程——它们是失控子进程的残留。"""
-    for entry in Path("/proc").iterdir():
+    procfs = Path("/proc")
+    if not procfs.is_dir():
+        # macOS/Windows 没有 /proc；进程组 kill 已覆盖这些平台。
+        return
+    for entry in procfs.iterdir():
         if not entry.name.isdigit():
             continue
         try:

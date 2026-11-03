@@ -15,6 +15,8 @@ RSYNC_SSH="sshpass -e ssh -o StrictHostKeyChecking=accept-new"
 echo "=== [1/4] 本地测试与前端构建 ==="
 cd "$PROJECT_DIR/backend"
 .venv/bin/python -m unittest discover -s tests -v
+cd "$PROJECT_DIR"
+python3 -m unittest discover -s narratoai/engine/tests -v
 cd "$PROJECT_DIR/frontend"
 npm run build
 
@@ -22,17 +24,13 @@ echo "=== [2/4] 同步代码（保留服务器运行数据） ==="
 rsync -az --delete -e "$RSYNC_SSH" \
   --exclude='.git' --exclude='node_modules' --exclude='data' \
   --exclude='.env' --exclude='.venv' --exclude='backend/.venv' \
-  --exclude='publisher/.venv' --exclude='publisher/logs' \
-  --exclude='publisher/cookies' --exclude='publisher/db' --exclude='publisher/media' \
-  --exclude='publisher/conf.py' \
   --exclude='narratoai/.venv' --exclude='narratoai/.cache' \
   --exclude='narratoai/config.toml*' --exclude='narratoai/storage' \
   --exclude='narratoai/resource/videos' --exclude='narratoai/resource/scripts' \
   --exclude='narratoai/resource/bgm' --exclude='narratoai/resource/songs' \
   --exclude='narratoai/resource/srt' --exclude='narratoai/resource/fonts' \
   --exclude='narratoai/resource/safe_areas' --exclude='narratoai/resource/tts_reference_audio' \
-  --exclude='services/.venv' --exclude='models' --exclude='ms-playwright' \
-  --exclude='**/access_token.txt' --exclude='**/sms_token.txt' --exclude='**/verify_code.txt' \
+  --exclude='services/.venv' --exclude='models' \
   --exclude='**/__pycache__' \
   "$PROJECT_DIR/" "$SERVER_USER@$SERVER_IP:$REMOTE_DIR/"
 
@@ -54,6 +52,7 @@ for attempt in {1..30}; do
   sleep 2
 done
 curl -sf -o /dev/null -w 'Video Hub HTTP %{http_code}\n' http://localhost/
+curl -sf http://127.0.0.1:8601/health
 curl -sf http://localhost/narrato/_stcore/health
 curl -sf http://localhost/preview/health
 EOF

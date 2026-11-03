@@ -175,9 +175,9 @@ class VideoClipParams(BaseModel):
     # video_source: Optional[str] = "local"
     # video_concat_mode: Optional[VideoConcatMode] = VideoConcatMode.random.value
 
-    voice_name: Optional[str] = Field(default="zh-CN-YunjianNeural", description="语音名称")
+    voice_name: Optional[str] = Field(default="zh-CN-YunxiNeural", description="语音名称")
     voice_volume: Optional[float] = Field(default=AudioVolumeDefaults.VOICE_VOLUME, description="解说语音音量")
-    voice_rate: Optional[float] = Field(default=1.0, description="语速")
+    voice_rate: Optional[float] = Field(default=1.05, description="语速")
     voice_pitch: Optional[float] = Field(default=1.0, description="语调")
     tts_engine: Optional[str] = Field(default="", description="TTS 引擎")
     bgm_name: Optional[str] = Field(default="random", description="背景音乐名称")
@@ -208,19 +208,20 @@ class VideoClipParams(BaseModel):
     subtitle_auto_transcribe_api_key: str = ""
     subtitle_auto_transcribe_hotword: str = ""
     subtitle_auto_transcribe_enable_spk: bool = False
-    font_name: str = "SimHei"  # 默认使用黑体
-    font_size: int = 36
+    font_name: str = "Noto Sans CJK SC"
+    font_size: int = 40
     text_fore_color: str = "white"              # 文本前景色
     text_back_color: Optional[str] = None       # 文本背景色
     stroke_color: str = "black"                 # 描边颜色
-    stroke_width: float = 1.5                   # 描边宽度
+    stroke_width: float = 0.8                   # 描边宽度
+    subtitle_max_chars: int = 16        # 每行字幕最大字数
     subtitle_position: str = "bottom"   # top, bottom, center, custom
     custom_position: float = 70.0       # 自定义位置
 
     n_threads: Optional[int] = Field(default=16, description="线程数")    # 线程数，有助于提升视频处理速度
 
     tts_volume: Optional[float] = Field(default=AudioVolumeDefaults.TTS_VOLUME, description="解说语音音量（后处理）")
-    original_volume: Optional[float] = Field(default=AudioVolumeDefaults.ORIGINAL_VOLUME, description="视频原声音量")
+    original_volume: Optional[float] = Field(default=0.15, description="视频原声音量")
     bgm_volume: Optional[float] = Field(default=AudioVolumeDefaults.BGM_VOLUME, description="背景音乐音量")
     draft_name: Optional[str] = Field(default="", description="剪映草稿名称")
 

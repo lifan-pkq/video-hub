@@ -21,10 +21,12 @@ from app.services.ai_edit import (
     analyze_transcript,
     clean_intervals,
     keep_segments,
+    plan_edit,
     transcribe,
 )
 from app.services.audio_analysis import detect_silence
 from app.services.media import concat_clips, make_cover, probe_video
+from app.services.video_analysis import detect_scene_cuts
 from app.services.tasks import task_manager
 
 router = APIRouter(prefix="/api/edit", tags=["edit"])
@@ -107,7 +109,15 @@ def concat_videos(req: ConcatRequest):
     task_title = f"拼接 {len(sources)} 段 → {title}"
     if req.split_parts > 1:
         task_title += f"（再拆 {req.split_parts} 段）"
-    task = task_manager.create("edit", task_title)
+    task = task_manager.create("edit", task_title, input={
+        "mode": "concat",
+        "title": title,
+        "clips": [
+            {"video_id": clip.video_id, "start": round(clip.start, 2), "end": round(clip.end, 2)}
+            for clip in req.clips
+        ],
+        "split_parts": req.split_parts,
+    })
     task.log(f"共 {len(sources)} 个片段，预计总时长 {total:.1f}s")
     threading.Thread(target=_render, args=(task, sources, title, req.split_parts), daemon=True).start()
     return {"task_id": task.id}
@@ -174,6 +184,54 @@ class AnalyzeRequest(BaseModel):
     custom_prompt: str = ""
 
 
+class PlanRequest(BaseModel):
+    video_id: int
+    target_duration: float = 60
+    custom_prompt: str = ""
+
+
+@router.post("/plan")
+def plan_video(req: PlanRequest):
+    """按目标时长做 AI 选段，返回可应用到时间线的保留片段。"""
+    v = get_video(req.video_id)
+    if not v:
+        raise HTTPException(404, "视频不存在")
+    path = VIDEOS_DIR / v["filename"]
+    if not path.exists():
+        raise HTTPException(404, "视频文件已丢失")
+    target = max(5.0, min(float(req.target_duration), 1800.0))
+    task = task_manager.create("edit", f"AI 成片规划 → {v['title'][:20]} · {target:.0f}s", input={
+        "mode": "plan",
+        "video_ids": [req.video_id],
+        "target_duration": target,
+        "custom_prompt": req.custom_prompt,
+    })
+    threading.Thread(target=_plan, args=(task, v, path, target, req.custom_prompt), daemon=True).start()
+    return {"task_id": task.id}
+
+
+def _plan(task, video: dict, path: Path, target: float, custom_prompt: str):
+    task.status = "running"
+    try:
+        duration = float(video.get("duration") or probe_video(path).get("duration") or 0)
+        if duration <= 0:
+            raise ValueError("无法读取视频时长")
+        target = min(target, duration)
+        task.log(f"转写「{video['title']}」…")
+        segments = transcribe(path, log=task.log)
+        task.progress = 35
+        task.log(f"AI 正在按 {target:.0f}s 目标选段…")
+        cuts = detect_scene_cuts(path)
+        task.log(f"镜头切换点：{len(cuts)} 个")
+        plan = plan_edit(segments, duration, target, custom_prompt, log=task.log, cuts=cuts)
+        task.result = {"plan": {"video_id": video["id"], "title": video["title"], **plan}}
+        task.progress = 100
+        task.finish("success")
+    except Exception as exc:  # noqa: BLE001
+        task.log(f"AI 成片规划失败：{exc}")
+        task.finish("failed")
+
+
 @router.post("/analyze")
 def analyze_video(req: AnalyzeRequest):
     """AI 分析（本地静音/转写 + LLM 标废片段），支持多个视频，结果在 task.result。"""
@@ -192,7 +250,12 @@ def analyze_video(req: AnalyzeRequest):
             raise HTTPException(404, f"视频「{v['title']}」文件已丢失")
         items.append((v, path))
     names = "、".join(v["title"][:12] for v, _ in items)
-    task = task_manager.create("edit", f"AI 分析 {len(items)} 个视频 → {names}")
+    task = task_manager.create("edit", f"AI 分析 {len(items)} 个视频 → {names}", input={
+        "mode": "analyze",
+        "video_ids": req.video_ids,
+        "kinds": kinds,
+        "custom_prompt": req.custom_prompt,
+    })
     threading.Thread(target=_analyze, args=(task, items, kinds, req.custom_prompt), daemon=True).start()
     return {"task_id": task.id}
 

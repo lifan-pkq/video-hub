@@ -485,9 +485,13 @@ export default function RecordPage() {
                       <PlatformIcon platform={r.platform} size={16} />
                       <span>{platformLabel(r.platform)}</span>
                       <span className="mx-1 text-ink-4">|</span>
-                      <span>
-                        已录 <span className="tnum font-display">{formatElapsed(r.elapsed)}</span>
-                      </span>
+                      {r.starting ? (
+                        <span className="text-accent">正在连接直播流…</span>
+                      ) : (
+                        <span>
+                          已录 <span className="tnum font-display">{formatElapsed(r.elapsed)}</span>
+                        </span>
+                      )}
                       <span className="mx-1 text-ink-4">|</span>
                       <span className="tnum">{formatSize(r.size)}</span>
                       <span className="mx-1 text-ink-4">|</span>

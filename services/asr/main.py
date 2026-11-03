@@ -4,9 +4,12 @@ Exposes an OpenAI-compatible /v1/audio/transcriptions endpoint so
 NarratoAI's fun_asr "local" backend can use it directly.
 """
 
+import gc
 import os
 import subprocess
 import tempfile
+import threading
+import time
 
 import numpy as np
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
@@ -14,28 +17,49 @@ from fastapi.responses import PlainTextResponse
 from faster_whisper import WhisperModel
 
 MODEL_SIZE = os.environ.get("ASR_MODEL", "small")
+MODEL_IDLE_SECONDS = max(60, int(os.environ.get("ASR_IDLE_UNLOAD_SECONDS", "300") or 300))
 ALLOWED_FORMATS = {"json", "verbose_json", "srt", "vtt"}
 
 app = FastAPI(title="NarratoAI Local ASR", version="1.0.0")
 _model: WhisperModel | None = None
 _model_error: str | None = None
+_model_lock = threading.RLock()
+_model_last_used = 0.0
 
 
 def _load_model() -> WhisperModel:
-    global _model, _model_error
-    if _model is None:
-        try:
-            _model = WhisperModel(
-                MODEL_SIZE,
-                device="cpu",
-                compute_type="int8",
-                cpu_threads=int(os.environ.get("ASR_CPU_THREADS", "2")),
-            )
-            _model_error = None
-        except Exception as exc:  # noqa: BLE001
-            _model_error = str(exc)
-            raise HTTPException(status_code=503, detail=f"ASR model unavailable: {exc}") from exc
-    return _model
+    global _model, _model_error, _model_last_used
+    with _model_lock:
+        if _model is None:
+            try:
+                _model = WhisperModel(
+                    MODEL_SIZE,
+                    device="cpu",
+                    compute_type="int8",
+                    cpu_threads=int(os.environ.get("ASR_CPU_THREADS", "2")),
+                )
+                _model_error = None
+            except Exception as exc:  # noqa: BLE001
+                _model_error = str(exc)
+                raise HTTPException(status_code=503, detail=f"ASR model unavailable: {exc}") from exc
+        _model_last_used = time.time()
+        return _model
+
+
+def _idle_unload_loop() -> None:
+    """空闲一段时间后释放 Whisper 模型，避免常驻占用 1GB+ 内存。"""
+    global _model
+    while True:
+        time.sleep(30)
+        with _model_lock:
+            if _model is not None and time.time() - _model_last_used > MODEL_IDLE_SECONDS:
+                _model = None
+                gc.collect()
+
+
+@app.on_event("startup")
+def _start_idle_unload() -> None:
+    threading.Thread(target=_idle_unload_loop, daemon=True).start()
 
 
 def _to_srt_time(seconds: float) -> str:
@@ -67,24 +91,27 @@ def _decode_audio(path: str) -> np.ndarray:
 
 
 def _transcribe(path: str, language: str | None):
-    model = _load_model()
-    audio = _decode_audio(path)
-    segments_iter, info = model.transcribe(
-        audio,
-        language=language or None,
-        vad_filter=True,
-        beam_size=5,
-    )
-    segments = [
-        {
-            "id": idx,
-            "start": round(float(seg.start), 3),
-            "end": round(float(seg.end), 3),
-            "text": seg.text.strip(),
-        }
-        for idx, seg in enumerate(segments_iter)
-    ]
-    return segments, info
+    global _model_last_used
+    with _model_lock:
+        model = _load_model()
+        audio = _decode_audio(path)
+        segments_iter, info = model.transcribe(
+            audio,
+            language=language or None,
+            vad_filter=True,
+            beam_size=5,
+        )
+        segments = [
+            {
+                "id": idx,
+                "start": round(float(seg.start), 3),
+                "end": round(float(seg.end), 3),
+                "text": seg.text.strip(),
+            }
+            for idx, seg in enumerate(segments_iter)
+        ]
+        _model_last_used = time.time()
+        return segments, info
 
 
 @app.get("/health")
@@ -96,6 +123,7 @@ def health():
         "service": "narrato-asr",
         "model": MODEL_SIZE,
         "model_error": _model_error,
+        "idle_unload_seconds": MODEL_IDLE_SECONDS,
     }
 
 

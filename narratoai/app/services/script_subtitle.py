@@ -49,8 +49,21 @@ def split_narration(text: str, max_chars: int = DEFAULT_MAX_CHARS_PER_SUBTITLE) 
 
     def flush_long_part(part: str) -> str:
         while len(part) > max_chars:
-            chunks.append(part[:max_chars].strip())
-            part = part[max_chars:].strip()
+            chunk_count = (len(part) + max_chars - 1) // max_chars
+            target = (len(part) + chunk_count - 1) // chunk_count
+            lower = max(2, target - 4)
+            upper = min(max_chars, target + 4)
+            candidates = [
+                match.start()
+                for match in re.finditer(
+                    r"他们|她们|两人|大家|但是|但|却|而且|而|并且|并|还有|还|也|同时|随后|然后|接着|最后|展示|瞬间|镜头|画面|回到|进入|开始|在|从|到|把|被|让|与|和|或|及",
+                    part,
+                )
+                if lower <= match.start() <= upper
+            ]
+            cut = min(candidates, key=lambda position: abs(position - target)) if candidates else target
+            chunks.append(part[:cut].strip())
+            part = part[cut:].strip()
         return part
 
     for part in parts:

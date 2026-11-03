@@ -1,5 +1,5 @@
 import type { KeyboardEvent, ReactNode } from 'react'
-import { CaretDown, DownloadSimple, PaperPlaneTilt, Scissors } from '@phosphor-icons/react'
+import { CaretDown, DownloadSimple, PaperPlaneTilt, Scissors, Sparkle } from '@phosphor-icons/react'
 import { formatElapsed, formatRelative, platformLabel, type Task, type TaskSummary } from '../api'
 import { Button, Progress, Tag } from '../ui'
 import type { TagColor } from '../ui/Tag'
@@ -10,6 +10,7 @@ export const TYPE_META: Record<TaskSummary['type'], { label: string; color: TagC
   download: { label: '视频下载', color: 'blue', icon: (s) => <DownloadSimple size={s} /> },
   publish: { label: '视频发布', color: 'accent', icon: (s) => <PaperPlaneTilt size={s} /> },
   edit: { label: '剪辑拼接', color: 'orange', icon: (s) => <Scissors size={s} /> },
+  ai: { label: 'AI 生成', color: 'blue', icon: (s) => <Sparkle size={s} /> },
 }
 
 interface Props {
@@ -21,6 +22,7 @@ interface Props {
   detail: Task | null
   cancelling: boolean
   onToggle: (task: TaskSummary) => void
+  onOpen: (task: TaskSummary) => void
   onCancel: (task: TaskSummary) => void
 }
 
@@ -50,7 +52,7 @@ export function TaskRowSkeleton() {
 }
 
 /** 任务卡片：类型 Tag + 标题 + 实时进度条 + 状态徽标 + 耗时 + 展开日志 + 取消 */
-export default function TasksCard({ task, now, expanded, detail, cancelling, onToggle, onCancel }: Props) {
+export default function TasksCard({ task, now, expanded, detail, cancelling, onToggle, onOpen, onCancel }: Props) {
   const meta = TYPE_META[task.type] ?? TYPE_META.download
   const running = task.status === 'pending' || task.status === 'running'
 
@@ -59,9 +61,9 @@ export default function TasksCard({ task, now, expanded, detail, cancelling, onT
       <div
         role="button"
         tabIndex={0}
-        onClick={() => onToggle(task)}
+        onClick={() => onOpen(task)}
         onKeyDown={(e: KeyboardEvent<HTMLDivElement>) => {
-          if (e.key === 'Enter') onToggle(task)
+          if (e.key === 'Enter') onOpen(task)
         }}
         className="flex cursor-pointer items-center gap-3"
       >
@@ -98,11 +100,15 @@ export default function TasksCard({ task, now, expanded, detail, cancelling, onT
               取消
             </Button>
           )}
-          <span
-            className={`shrink-0 text-ink-4 transition-transform duration-200 ${expanded ? 'rotate-180' : ''}`}
+          <button
+            type="button"
+            className={`shrink-0 rounded p-1 text-ink-4 transition-transform duration-200 hover:bg-fill ${expanded ? 'rotate-180' : ''}`}
+            onClick={(e) => { e.stopPropagation(); onToggle(task) }}
+            aria-label={expanded ? '收起日志' : '展开日志'}
+            title={expanded ? '收起日志' : '展开日志'}
           >
             <CaretDown size={14} />
-          </span>
+          </button>
         </div>
       </div>
 

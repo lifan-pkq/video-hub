@@ -179,9 +179,9 @@ def _bili_get_json(session: requests.Session, url: str, params: dict, headers: d
             continue
         break
     if code in _BILI_RISK_CODES:
-        raise ValueError("B站风控拦截，请稍后重试或到「平台账号」页配置 B站 cookie")
+        raise ValueError("B站风控拦截，请稍后重试或配置 B站 cookie")
     if code is None:
-        raise ValueError("B站风控拦截（412），请稍后重试或到「平台账号」页配置 B站 cookie")
+        raise ValueError("B站风控拦截（412），请稍后重试或配置 B站 cookie")
     raise RuntimeError(f"B站接口返回错误（code={code}）：{(data.get('message') or '').strip() or '未知错误'}")
 
 
@@ -497,6 +497,5 @@ async def parse_author_works(text: str) -> dict:
         return await asyncio.to_thread(_bilibili_works, author)
     # 浏览器抓取的平台必须有登录 cookie
     if not cookie_exists(platform):
-        raise ValueError(
-            f"缺少{PLATFORM_NAMES[platform]}登录 cookie，请先到「平台账号」页扫码登录该平台")
+        raise ValueError(f"缺少{PLATFORM_NAMES[platform]}登录 cookie，无法抓取该作者主页")
     return await asyncio.to_thread(_scrape_locked, platform, author["url"])

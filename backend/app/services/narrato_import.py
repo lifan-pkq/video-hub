@@ -1,9 +1,11 @@
 """NarratoAI 最终成片扫描与幂等入库。"""
 import asyncio
+import json
 import logging
 import os
 import re
 import shutil
+import threading
 import uuid
 from pathlib import Path
 
@@ -13,6 +15,8 @@ from app.services.media import make_cover, probe_video
 
 logger = logging.getLogger(__name__)
 _observed_sizes: dict[str, int] = {}
+# 扫描循环与解说任务状态轮询可能同时触发入库，统一串行化，避免重复复制文件。
+_import_lock = threading.RLock()
 
 
 def _unique_path(task_id: str) -> Path:
@@ -30,7 +34,25 @@ def _signature(source: Path) -> tuple[int, int]:
     return stat.st_size, stat.st_mtime_ns
 
 
-def _import_final(source: Path, task_id: str) -> dict:
+def _import_final(
+    source: Path,
+    task_id: str,
+    title: str | None = None,
+    source_platform: str = "narrato",
+) -> dict:
+    with _import_lock:
+        existing = get_video_by_source(source_platform, f"narrato://task/{task_id}")
+        if existing:
+            return existing
+        return _import_locked(source, task_id, title, source_platform)
+
+
+def _import_locked(
+    source: Path,
+    task_id: str,
+    title: str | None = None,
+    source_platform: str = "narrato",
+) -> dict:
     before = _signature(source)
     if not probe_video(source).get("duration"):
         raise RuntimeError("最终成片尚未完成或无法读取")
@@ -60,14 +82,14 @@ def _import_final(source: Path, task_id: str) -> dict:
         cover = cover_name if make_cover(destination, COVERS_DIR / cover_name) else None
         video = add_narrato_video(
             task_id,
-            title=f"AI 解说 {task_id[:8]}",
+            title=title or f"AI 解说 {task_id[:8]}",
             filename=destination.name,
             size=destination.stat().st_size,
             duration=meta.get("duration"),
             width=meta.get("width"),
             height=meta.get("height"),
             cover=cover,
-            source_platform="narrato",
+            source_platform=source_platform,
             source_url=f"narrato://task/{task_id}",
         )
         if video["filename"] != destination.name:
@@ -79,6 +101,19 @@ def _import_final(source: Path, task_id: str) -> dict:
         temporary.unlink(missing_ok=True)
         if linked and not completed:
             destination.unlink(missing_ok=True)
+
+
+def import_task(
+    task_id: str,
+    source: Path | str,
+    title: str | None = None,
+    source_platform: str = "narrato",
+) -> dict:
+    """按任务 ID 显式导入成片（解说任务状态轮询调用）。"""
+    path = Path(source)
+    if not path.is_file() or path.stat().st_size <= 0:
+        raise FileNotFoundError(f"成片不存在或为空：{path}")
+    return _import_final(path, task_id, title, source_platform)
 
 
 def scan_once(tasks_dir: Path) -> list[dict]:
@@ -102,7 +137,16 @@ def scan_once(tasks_dir: Path) -> list[dict]:
             _observed_sizes[task_id] = size
             continue
         try:
-            imported.append(_import_final(source, task_id))
+            title = None
+            source_platform = "narrato"
+            try:
+                spec = json.loads((source.parent / "spec.json").read_text(encoding="utf-8"))
+                title = str(spec.get("title") or "").strip() or None
+                if spec.get("output_mode") == "edit":
+                    source_platform = "ai_edit"
+            except (OSError, ValueError):
+                pass
+            imported.append(_import_final(source, task_id, title, source_platform))
             logger.info("NarratoAI 成片已入库：%s", task_id)
         except Exception as exc:
             logger.warning("NarratoAI 成片导入失败，将重试：%s：%s", task_id, exc)

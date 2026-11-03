@@ -416,6 +416,16 @@ def _ffmpeg_filter_available(filter_name: str) -> bool:
         return False
 
 
+def _select_subtitle_renderer(has_drawtext: bool, has_subtitles: bool, has_overlay: bool) -> str:
+    if has_drawtext:
+        return "drawtext"
+    if has_overlay:
+        return "png"
+    if has_subtitles:
+        return "subtitles"
+    raise RuntimeError("当前 ffmpeg 缺少 subtitles/drawtext/overlay 字幕处理滤镜")
+
+
 def _ffmpeg_encoder_available(encoder_name: str) -> bool:
     ffmpeg_binary = _get_ffmpeg_binary()
     cache_key = (ffmpeg_binary, encoder_name)
@@ -1069,7 +1079,7 @@ def _build_ffmpeg_merge_command(
     subtitle_position = options.get("subtitle_position", "bottom")
     custom_position = float(options.get("custom_position", 70))
     stroke_color = options.get("stroke_color", "#000000")
-    stroke_width = options.get("stroke_width", 1)
+    stroke_width = options.get("stroke_width", 0.8)
     threads = int(options.get("threads", 2))
     fps = options.get("fps", 30)
     subtitle_enabled = options.get("subtitle_enabled", True)
@@ -1131,10 +1141,14 @@ def _build_ffmpeg_merge_command(
     )
     has_subtitles_filter = _ffmpeg_filter_available("subtitles") if valid_subtitle else False
     has_drawtext_filter = _ffmpeg_filter_available("drawtext") if valid_subtitle else False
-    if valid_subtitle and not has_subtitles_filter and not has_drawtext_filter:
-        if not _ffmpeg_filter_available("overlay"):
-            raise RuntimeError("当前 ffmpeg 缺少 subtitles/drawtext/overlay 字幕处理滤镜")
-        logger.warning("当前 ffmpeg 缺少 subtitles/drawtext，改用 PNG 字幕叠加快路径")
+    has_overlay_filter = _ffmpeg_filter_available("overlay") if valid_subtitle else False
+    subtitle_renderer = _select_subtitle_renderer(
+        has_drawtext=has_drawtext_filter,
+        has_subtitles=has_subtitles_filter,
+        has_overlay=has_overlay_filter,
+    ) if valid_subtitle else None
+    if subtitle_renderer == "png":
+        logger.warning("当前 ffmpeg 缺少 drawtext，改用 PNG 字幕叠加快路径")
 
     video_filters = []
     current_video_label = "[0:v]"
@@ -1170,7 +1184,7 @@ def _build_ffmpeg_merge_command(
             video_height,
             options,
         )
-        if has_drawtext_filter:
+        if subtitle_renderer == "drawtext":
             drawtext_filters = _build_drawtext_filters(
                 subtitle_path=subtitle_path,
                 font_path=font_path,
@@ -1187,7 +1201,7 @@ def _build_ffmpeg_merge_command(
                 next_label = f"[v_drawtext_{index}]"
                 video_filters.append(f"{current_video_label}{drawtext_filter}{next_label}")
                 current_video_label = next_label
-        elif has_subtitles_filter:
+        elif subtitle_renderer == "subtitles":
             subtitle_filter = _build_subtitle_filter(
                 subtitle_path=subtitle_path,
                 font_path=font_path,

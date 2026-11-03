@@ -17,6 +17,16 @@ class ScriptSubtitleTests(unittest.TestCase):
             chunks,
         )
 
+    def test_split_narration_balances_long_phrases_without_orphan_characters(self):
+        cases = [
+            ("两位主角正对着镜头展示像素墨镜特效", ["两位主角正对着镜头", "展示像素墨镜特效"]),
+            ("看似严肃的颁奖室瞬间变成了欢乐现场", ["看似严肃的颁奖室", "瞬间变成了欢乐现场"]),
+            ("但顾客们却在发型师的忙碌中搞怪互动", ["但顾客们却", "在发型师的忙碌中搞怪互动"]),
+        ]
+        for text, expected in cases:
+            with self.subTest(text=text):
+                self.assertEqual(script_subtitle.split_narration(text, max_chars=16), expected)
+
     def test_time_range_parsing_supports_milliseconds(self):
         start, end = script_subtitle.parse_time_range("00:00:01,500-00:00:03,250")
 

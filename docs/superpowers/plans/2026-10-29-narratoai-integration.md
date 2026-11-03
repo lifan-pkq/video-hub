@@ -1,5 +1,7 @@
 # Video Hub 与 NarratoAI 融合实施计划
 
+> **已被取代（2026-10-29）**：AI 解说已改为 React 原生工作台 + NarratoAI headless engine，不再使用 iframe / 文件轮询作为主链路。新设计见 [native-narration-design.md](../specs/2026-10-29-native-narration-design.md)；本文仅保留历史决策。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 以 Video Hub 为主工作台整合服务器 NarratoAI、字幕预览和共享 ASR，自动导入解说成片，部署到 `39.105.112.189` 并推送 GitHub。

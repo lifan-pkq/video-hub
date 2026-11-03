@@ -648,6 +648,22 @@ def try_fallback_encoding(
     return execute_simple_command(fallback_cmd, timestamp, "通用Fallback")
 
 
+def _resolve_segment_duration(script_item: Dict, tts_item: Dict) -> float:
+    """片段视频时长：默认跟配音走；timeline 模式用原片时间轴区间。
+
+    取两者较大值，避免 TTS 比原片区间更长时把配音截断。
+    """
+    try:
+        base = float(tts_item.get("duration") or 0)
+    except (TypeError, ValueError):
+        base = 0.0
+    try:
+        requested = float(script_item.get("clip_duration") or 0)
+    except (TypeError, ValueError):
+        requested = 0.0
+    return max(base, requested)
+
+
 def _process_narration_only_segment(
     video_origin_path: str,
     script_item: Dict,
@@ -670,9 +686,9 @@ def _process_narration_only_segment(
         logger.error(f"未找到片段 {_id} 的TTS结果")
         return None
 
-    # 解析起始时间，使用TTS音频时长计算结束时间
+    # 起始时间来自脚本；时长默认跟 TTS，timeline 模式按原片区间
     start_time, _ = parse_timestamp(timestamp)
-    duration = tts_item["duration"]
+    duration = _resolve_segment_duration(script_item, tts_item)
     calculated_end_time = calculate_end_time(start_time, duration, extra_seconds=0)
 
     # 转换为FFmpeg兼容的时间格式
@@ -765,9 +781,9 @@ def _process_mixed_segment(
         logger.error(f"未找到片段 {_id} 的TTS结果")
         return None
 
-    # 解析起始时间，使用TTS音频时长计算结束时间
+    # 起始时间来自脚本；时长默认跟 TTS，timeline 模式按原片区间
     start_time, _ = parse_timestamp(timestamp)
-    duration = tts_item["duration"]
+    duration = _resolve_segment_duration(script_item, tts_item)
     calculated_end_time = calculate_end_time(start_time, duration, extra_seconds=0)
 
     # 转换为FFmpeg兼容的时间格式

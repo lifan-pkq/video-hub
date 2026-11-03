@@ -29,5 +29,5 @@ async def parse(req: AuthorParseRequest):
     except Exception as e:
         msg = str(e)
         if "cookie" in msg.lower():
-            msg += "（提示：请先到「平台账号」页扫码登录该平台）"
+            msg += "（提示：该平台作者主页抓取需要有效 cookie）"
         raise HTTPException(400, msg)

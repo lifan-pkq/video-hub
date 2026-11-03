@@ -39,7 +39,7 @@ class EventHub:
         self._subs.discard(q)
 
     def broadcast(self, event: dict):
-        """线程安全广播：任意线程（含下载/发布的同步线程）均可调用。
+        """线程安全广播：任意线程（含下载/剪辑的同步线程）均可调用。
 
         事件附带单调递增 seq；事件循环未启动/已关闭时静默丢弃。
         """

@@ -300,9 +300,9 @@
     tts_engine = "indextts"
 
     # Edge TTS 配置
-    edge_voice_name = "zh-CN-XiaoyiNeural-Female"
+    edge_voice_name = "zh-CN-YunxiNeural"
     edge_volume = 80
-    edge_rate = 1.0
+    edge_rate = 1.05
     edge_pitch = 0
 
     # Azure Speech Services 配置

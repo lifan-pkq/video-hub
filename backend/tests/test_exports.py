@@ -76,6 +76,7 @@ class ExportServiceTests(unittest.TestCase):
             record = exporter.create_export(7)
             self.assertEqual(record["status"], "running")
             self.assertTrue(record["export_id"])
+            self._wait(lambda: len(calls) >= 1)
             self.assertEqual(len(calls), 1)
             self.assertEqual(exporter.get_export(record["export_id"])["status"], "running")
             gate.set()
@@ -95,6 +96,7 @@ class ExportServiceTests(unittest.TestCase):
             second = exporter.create_export(7)
             self.assertEqual(first["export_id"], second["export_id"])
             self.assertEqual(second["status"], "running")
+            self._wait(lambda: len(calls) >= 1)
             self.assertEqual(len(calls), 1)
             gate.set()
             for _ in range(100):
@@ -194,6 +196,10 @@ class ExportRouterTests(unittest.TestCase):
             body = response.json()
             self.assertEqual(body["status"], "running")
             self.assertTrue(body["export_id"])
+            for _ in range(100):
+                if calls:
+                    break
+                threading.Event().wait(0.05)
             self.assertEqual(len(calls), 1)
             again = self.client.post("/api/exports", json={"video_id": 7})
             self.assertEqual(again.json()["export_id"], body["export_id"])

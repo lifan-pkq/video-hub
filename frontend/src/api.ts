@@ -1052,7 +1052,7 @@ export function platformLabel(key: string | null | undefined): string {
   if (key === 'unknown') return '未知'
   if (key === 'edited') return '剪辑合成'
   if (key === 'douyin_short') return '抖音成片'
-  if (key === 'narrato' || key === 'narration') return 'AI 解说'
+  if (key === 'narrato' || key === 'narration') return '历史解说'
   if (key === 'ai_edit') return 'AI 剪辑'
   if (key === 'legacy') return '历史任务'
   // 直播录制入库的来源：live_douyin / live_bilibili / live_direct …

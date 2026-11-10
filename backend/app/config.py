@@ -1,5 +1,6 @@
 """全局配置：所有路径都可通过环境变量覆盖，方便本地与 Docker 部署。"""
 import os
+import sys
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent  # backend/
@@ -39,20 +40,18 @@ AI_MODEL = os.environ.get("VIDEO_HUB_AI_MODEL", "mimo-v2.5")
 VISION_BASE_URL = os.environ.get("VIDEO_HUB_VISION_BASE_URL", AI_BASE_URL).rstrip("/")
 VISION_API_KEY = os.environ.get("VIDEO_HUB_VISION_API_KEY", AI_API_KEY)
 VISION_MODEL = os.environ.get("VIDEO_HUB_VISION_MODEL", "")
-# 语音转文字模型（faster-whisper，本地运行，small 兼顾中文效果与速度）
+# 语音转文字：默认在后端进程里按需加载 faster-whisper，不另起常驻 ASR。
+# VIDEO_HUB_ASR_URL 仅作可选的远端覆盖；留空就走本机分段转写。
 WHISPER_MODEL = os.environ.get("VIDEO_HUB_WHISPER_MODEL", "small")
-# 配置共享 ASR 后不再在 Video Hub 进程内加载 whisper 模型
 ASR_URL = os.environ.get("VIDEO_HUB_ASR_URL", "").strip()
 NARRATO_TASKS_DIR = Path(os.environ.get(
     "VIDEO_HUB_NARRATO_TASKS_DIR", BASE_DIR.parent / "narratoai" / "storage" / "tasks"
 )).resolve()
 
-# AI 解说引擎（narratoai/engine，独立进程，仅监听本机）
+# 成品套装导出仍调用仓库里的 narratoai/engine/export_task.py，用当前解释器按需跑，
+# 不再安装或启动独立的解说引擎虚拟环境。
 NARRATOAI_ROOT = Path(os.environ.get("VIDEO_HUB_NARRATOAI_ROOT", BASE_DIR.parent / "narratoai")).resolve()
-# 注意：不要 resolve()，.venv/bin/python 是符号链接，resolve 后会跳出虚拟环境。
-NARRATOAI_PYTHON = Path(
-    os.environ.get("VIDEO_HUB_NARRATOAI_PYTHON", NARRATOAI_ROOT / ".venv" / "bin" / "python")
-).absolute()
+NARRATOAI_PYTHON = Path(os.environ.get("VIDEO_HUB_NARRATOAI_PYTHON", sys.executable)).absolute()
 NARRATO_ENGINE_URL = os.environ.get("VIDEO_HUB_NARRATO_ENGINE_URL", "http://127.0.0.1:8601").rstrip("/")
 NARRATO_ENGINE_TOKEN = (
     os.environ.get("VIDEO_HUB_NARRATO_ENGINE_TOKEN", "").strip()
@@ -62,9 +61,6 @@ try:
     NARRATO_ENGINE_TIMEOUT = max(2.0, float(os.environ.get("VIDEO_HUB_NARRATO_ENGINE_TIMEOUT", "8")))
 except ValueError:
     NARRATO_ENGINE_TIMEOUT = 8.0
-
-# 字幕样式预览（services/subtitle-preview；Nginx 对外是 /preview/）
-NARRATO_PREVIEW_URL = os.environ.get("VIDEO_HUB_NARRATO_PREVIEW_URL", "http://127.0.0.1:8502").rstrip("/")
 
 # Agnes 图像/视频模型（OpenAI 兼容媒体接口）
 AGNES_MEDIA_BASE_URL = os.environ.get("AGNES_MEDIA_BASE_URL", "https://api.agnes-ai.cn/v1").rstrip("/")

@@ -1,26 +1,20 @@
 # Video Hub 视频中枢
 
-本地视频创作工作台：高清素材 → 融合理解 → 创作档案 → 剧本两轮 → 分镜与多版本审片 → 配音/字幕/画面精修 → 质量门 → 成品套装导出。
+本地视频创作工作台：素材入库 → 抖音竖屏一键成片 → 封面与导出。发布由你自己完成，工作台不会登录或上传到抖音。
 
-本项目按仅本机使用设计，无需登录，不要把无认证 API 暴露到公网或不可信网络。
+本机部署默认开启口令（`VIDEO_HUB_AUTH_MODE=enforce`）。不要把无认证 API 暴露到公网或不可信网络。
 
 ## 主工作流
 
 1. **素材**：yt-dlp 下载、本地高清上传、手动直播分段录制、AI 图片/视频。
-2. **融合理解**：口播、画面、声音在同一条绝对时间轴；保存摘要、人物、场景、OCR、主体框、静音、节拍候选、结构与情绪。说话人分离依赖 ASR 返回值，不能识别时明确标 `speaker_unknown`。
-3. **创作档案**：人物固定特征/服装/年龄规则/参考图、场景摆设与光线、系列字幕/色彩/音乐/旁白、专属发音词典。任务保存档案快照，后续修改不影响历史。
-4. **剧本两轮**：初稿 → 独立批判 → 不合格段定向重写；检查事实、空话、重复、钩子与时长，仍需确认的红色段进入审片。
-5. **分镜与多版本**：关键帧、选段理由、预计时长；A/B/C 三版对比，支持跨版本逐段拼成新版。关键 morph 必须首尾帧并遵守同一人物、同一场景约束。
-6. **渲染**：逐段音色/语速/情绪、10 秒试听、动态 ASS 字幕、背景音乐 ducking、降噪去齿音、响度统一、色彩/锐化与主体跟拍。
-7. **质量门**：对齐、字幕、声音、结构、画面检查。严重问题进入 `needs_review`，不会自动入库；人工确认后才能复核入库。
-8. **导出**：横屏、竖屏、方形、带字幕、无字幕、SRT、三张封面、标题简介，一次打成 ZIP。
+2. **智能剪辑**：选一条素材库原片，本机按需转写后抽出多条竖屏短视频（字幕、封面、标题/话题/简介）。
+3. **导出**：单条或整包下载；也可以入库后做横屏、竖屏、方形、字幕和封面套装。
 
 ## 页面
 
 - 视频/图片素材库：质量分、素材卡、标题与内容搜索。
 - 视频下载与灵感：只走 yt-dlp；灵感库只存链接和笔记，不抓作者视频。
 - 智能剪辑：默认是抖音一键成片。选一条素材库原片，转写后抽出多条竖屏短视频（字幕、封面、标题/话题/简介），在页面里预览、下载，或入库后走封面与导出。不自动发布。手动切点、废片和单条时间线留在「高级」。
-- AI 解说：融合理解、剧本批判、分镜、三版与跨版拼段、结构审片、TTS 试听。
 - AI 素材：人物/场景/风格档案、一致性检查、morph、最多 10 个连续镜头批量生成。
 - 封面与导出：封面/标题选择和整套下载。
 - 创作档案：人物、场景、风格、默认偏好与发音词典。
@@ -40,18 +34,12 @@
 要求：Python 3.12、Node 20+、FFmpeg。
 
 ```bash
-# 后端
+# 后端（在仓库根目录，让它能找到 engine/）
 cd backend
 uv venv --python 3.12
 uv pip install -r requirements.txt
-.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
-
-# AI 解说引擎
-cd narratoai
-uv venv --python 3.12
-uv pip install -r requirements.txt
-cp -n config.example.toml config.toml
-.venv/bin/python -m engine.server --host 127.0.0.1 --port 8601
+cd ..
+VIDEO_HUB_AUTH_MODE=off PYTHONPATH=. backend/.venv/bin/uvicorn app.main:app --app-dir backend --host 127.0.0.1 --port 8000
 
 # 前端
 cd frontend
@@ -61,9 +49,9 @@ npm run dev
 
 打开 http://127.0.0.1:5173/ 。前端把 `/api` 代理到 8000。
 
-共享 ASR（8600）和字幕预览（8502）是可选服务，不启动不会影响主工作台。自动转写未配置共享 ASR 时使用后端本地 faster-whisper；超过 5 分钟会先抽音频再按 300 秒分段，避免整段波形进内存。旧 Streamlit（8501）已下线，不要作为生产入口。
+抖音一键成片在「智能剪辑」页：选原片，可选写一句想留的内容，点「生成抖音短视频」。任务页里可以预览竖屏成片，下载单条或整包（视频、封面、`copy.txt`），或入库后到「封面与导出」打包。需要自己剪时，展开「高级：手动切点和单条时间线」。
 
-抖音一键成片在「智能剪辑」页：选原片，可选写一句想留的内容，点「生成抖音短视频」。任务页里可以预览竖屏成片，下载单条或整包（视频、封面、`copy.txt`），或入库后到「封面与导出」打包。AI 解说仍是单独的配音流程。需要自己剪时，展开「高级：手动切点和单条时间线」。
+转写不另起服务。`VIDEO_HUB_ASR_URL` 留空时，后端在这次任务里加载 faster-whisper，超过 300 秒会先抽音频再分段，避免整段波形进内存。旧的共享 ASR（8600）、解说引擎（8601）、字幕预览（8502）和 `edit-narrate` 旁路都不再启动。
 
 ## 主要配置
 
@@ -76,13 +64,13 @@ npm run dev
 | `VIDEO_HUB_VISION_BASE_URL` | 文本接口 | 视觉接口 |
 | `VIDEO_HUB_VISION_API_KEY` | 文本 Key | 视觉 Key |
 | `VIDEO_HUB_VISION_MODEL` | 无 | 视觉模型名；未配置时视觉检查标 unknown |
-| `VIDEO_HUB_ASR_URL` | 无 | 可选共享 ASR transcriptions URL。未配置时本机 faster-whisper 会按 300 秒分段转写 |
+| `VIDEO_HUB_ASR_URL` | 无 | 可选的远端转写地址。留空则本机 faster-whisper 按需分段转写，不启动 8600 |
+| `VIDEO_HUB_WHISPER_MODEL` | `small` | faster-whisper 模型名或本地目录。服务器上已有模型时可指到该目录 |
 | `VIDEO_HUB_DOUYIN_MAX_CLIPS` | `10` | 一键成片最多条数，1–10。长原片大约每 70 秒一条，短片更少 |
 | `VIDEO_HUB_DOUYIN_MIN_SECONDS` | `12` | 单条最短秒数 |
 | `VIDEO_HUB_DOUYIN_MAX_SECONDS` | `60` | 单条最长秒数 |
 | `VIDEO_HUB_DOUYIN_WIDTH` / `VIDEO_HUB_DOUYIN_HEIGHT` | `1080` / `1920` | 竖屏输出。内存紧时可改成 `720` / `1280` |
 | `VIDEO_HUB_DOUYIN_FFMPEG_THREADS` | `1` | 单条编码线程，最大 2 |
-| `VIDEO_HUB_NARRATO_ENGINE_URL` | `http://127.0.0.1:8601` | 解说引擎 |
 | `AGNES_MEDIA_BASE_URL` | `https://api.agnes-ai.cn/v1` | AI 图片/视频 |
 | `AGNES_IMAGE_MODEL` | `agnes-image-2.5-flash` | 图片模型 |
 | `AGNES_VIDEO_MODEL` | `agnes-video-2.5-flash` | 视频模型 |
@@ -94,10 +82,7 @@ AI 分析会把字幕、提示词和抽帧发送给配置的模型服务。不�
 
 ```bash
 cd backend
-.venv/bin/python -m unittest discover -s tests -v
-
-cd ../narratoai
-.venv/bin/python -m unittest discover -s engine/tests -v
+VIDEO_HUB_AUTH_MODE=off PYTHONPATH=.. .venv/bin/python -m unittest discover -s tests -v
 
 cd ../frontend
 npm run build
@@ -119,17 +104,21 @@ cd backend
 ## 部署
 
 ```bash
-SSHPASS='服务器密码' ./deploy.sh
+./deploy.sh
 ```
 
-默认部署到 `root@39.105.112.189:/opt/video-hub`，可用 `SERVER_USER`、`SERVER_IP` 覆盖。脚本运行测试和前端构建，再同步代码、安装依赖、执行迁移、启动 `video-hub-backend`、`narrato-engine`、`narrato-preview`、`narrato-asr` 并检查 Nginx。
+默认部署到 `root@39.105.112.189:/opt/video-hub`，可用 `SERVER_USER`、`SERVER_IP` 覆盖。脚本运行测试和前端构建，再同步代码、安装依赖、执行迁移、只启动 `video-hub-backend`，并停用 `narrato-engine`、`narrato-preview`、`narrato-asr`、`video-hub-edit-narrate`。Nginx 只反代 `/api/`。
 
-同步排除 `.env`、数据库、媒体、模型和 Narrato 真实配置。配置备份在 `/opt/video-hub-backups/<时间戳>`。旧 8501 服务会停止并禁用，但旧媒体不会删除。
+同步排除 `.env`、数据库、媒体和模型。配置备份在 `/opt/video-hub-backups/<时间戳>`。这些目录里的旧媒体不会删除。
 
-Docker Compose 包含 `backend`、`web`、`narrato-engine` 三个服务，挂载 `./data` 和 `./narratoai/storage`，不包含旧 Streamlit。
+Docker Compose 只有 `backend` 和 `web`。生产机用的是 systemd，不是 Compose。
+
+若 `/opt/video-hub/.env` 里还有 `VIDEO_HUB_ASR_URL=http://127.0.0.1:8600/...`，部署脚本会删掉这一行，否则后端还会去连已经停掉的 ASR。指向其他主机的 `VIDEO_HUB_ASR_URL` 会保留。内存紧时可以在 `.env` 加 `VIDEO_HUB_DOUYIN_WIDTH=720` 和 `VIDEO_HUB_DOUYIN_HEIGHT=1280`，不必改仓库默认值。
 
 ## 已移除的旧链路
 
+- 常驻解说引擎（8601）、共享 ASR（8600）、字幕预览（8502），以及 `edit-narrate` 旁路（8765）。转写改到后端进程内按需执行。
+- 工作台里的「AI 解说」入口。旧地址 `/narrate` 会回到智能剪辑。
 - 旧 Streamlit 与 `legacy-tasks` 页面/API。
 - 浏览器自动发布、扫码登录、短信验证码和平台账号页；发布替换为“封面与导出”。
 - 主播监控自动开录；保留手动录制。

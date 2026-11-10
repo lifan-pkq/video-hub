@@ -231,12 +231,12 @@ export default function EditPage() {
               </Button>
             </div>
             <p className="text-xs text-ink-4">
-              会复用现有转写（共享 ASR，或本机分段 whisper），再让模型挑出适合竖屏 9:16 的几条口播。每条带烧录字幕、封面、标题、话题和简介。不会登录或发布到抖音。
+              转写在后端里按需进行：默认本机 faster-whisper，长音频按 300 秒分段。再让模型挑出适合竖屏 9:16 的几条口播。每条带烧录字幕、封面、标题、话题和简介。不会登录或发布到抖音。
               {selectedVideo ? ` 当前选中：${selectedVideo.title}` : ''}
             </p>
             <details className="rounded-lg border border-line-soft px-3 py-2 text-sm">
               <summary className="cursor-pointer text-ink-2">高级：手动切点和单条时间线</summary>
-              <p className="mt-2 text-xs text-ink-4">适合自己删静音、广告，或把多段拼成一条成片。解说配音仍走 AI 解说。</p>
+              <p className="mt-2 text-xs text-ink-4">适合自己删静音、广告，或把多段拼成一条成片。</p>
               <div className="mt-3 flex flex-wrap gap-2">
                 <Button variant="secondary" icon={<Scissors size={15} />} disabled={starting || !selectedVideoId} onClick={() => void startAnalyze()}>
                   分析切点

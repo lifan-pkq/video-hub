@@ -111,7 +111,7 @@ export default function MaintenancePage() {
   const removeVideos = async () => {
     const ok = await confirmDialog({
       title: '清空所有视频？',
-      content: '会删除视频库全部视频、封面和导入台账，不可恢复。正在进行的解说/录制会阻止操作。',
+      content: '会删除视频库全部视频、封面和导入台账，不可恢复。正在进行的任务或录制会阻止操作。',
       okText: '确认清空',
     })
     if (!ok) return
@@ -196,13 +196,13 @@ export default function MaintenancePage() {
                 {system.services.map((service) => (
                   <li key={service.key} className="flex items-center gap-2 rounded-lg border border-line-soft px-3 py-2 text-[12px]">
                     <span className={service.active ? 'status-dot' : 'status-dot is-off'} />
-                    <span className="text-ink-2">{service.key === 'engine' ? '旧解说引擎（可选）' : service.name}</span>
+                    <span className="text-ink-2">{service.name}</span>
                     <span className="ml-auto text-ink-4">{service.active ? '在线' : '未连接'}</span>
                   </li>
                 ))}
               </ul>
             )}
-            <p className="mt-3 text-[11px] leading-5 text-ink-4">新的剪辑和解说不依赖 8601。这里不显示密钥、进程号和内网地址。</p>
+            <p className="mt-3 text-[11px] leading-5 text-ink-4">转写在后端进程里按需进行，没有单独的 ASR 或解说引擎。这里不显示密钥、进程号和内网地址。</p>
           </Panel>
 
           <Panel title="存储占用" extra={<HardDrives size={18} className="text-ink-3" />}>
@@ -255,7 +255,7 @@ export default function MaintenancePage() {
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <div className="flex items-center gap-1.5 text-[13px] font-medium text-danger"><WarningCircle size={15} />清空所有视频</div>
-                    <p className="mt-1 text-[11px] leading-5 text-ink-3">删除视频库全部视频，包括 AI 解说成片和 AI 生成视频；同时删除 videos 行、封面和导入台账，并解除录制/发布记录里的 video_id。直播录制原片和 AI 图片不会删除。</p>
+                    <p className="mt-1 text-[11px] leading-5 text-ink-3">删除视频库全部视频，包括历史解说成片和 AI 生成视频；同时删除 videos 行、封面和导入台账，并解除录制记录里的 video_id。直播录制原片和 AI 图片不会删除。</p>
                   </div>
                   <Button size="sm" variant="danger" loading={cleaning === 'videos'} onClick={() => void removeVideos()}>清空</Button>
                 </div>

@@ -104,7 +104,7 @@ export default function ExportPage() {
           <EmptyState
             icon={<VideoCamera size={26} />}
             title="还没有可导出的视频"
-            desc="先把成片放进素材库。下载、剪辑或解说入库之后，再回到这里打包。"
+            desc="先把成片放进素材库。下载或剪辑入库之后，再回到这里打包。"
             action={<Link to="/videos"><Button size="sm">去素材库</Button></Link>}
           />
         </Panel>

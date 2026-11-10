@@ -22,7 +22,6 @@ const RecordPage = lazy(() => import('./pages/RecordPage'))
 const ExportPage = lazy(() => import('./pages/ExportPage'))
 const TasksPage = lazy(() => import('./pages/TasksPage'))
 const MaintenancePage = lazy(() => import('./pages/MaintenancePage'))
-const NarratePage = lazy(() => import('./pages/NarratePage'))
 const AIMediaPage = lazy(() => import('./pages/AIMediaPage'))
 const AIDramaPage = lazy(() => import('./pages/AIDramaPage'))
 const AIDramaResultPage = lazy(() => import('./pages/AIDramaResultPage'))
@@ -121,8 +120,8 @@ function AppContent() {
                 <Route path="/edit/douyin/:jobId" element={<DouyinProducePage />} />
                 <Route path="/edit/new" element={<EditResultPage />} />
                 <Route path="/edit/:taskId" element={<EditResultPage />} />
-                <Route path="/narrate" element={<NarratePage />} />
-                <Route path="/narrato" element={<Navigate to="/narrate" replace />} />
+                <Route path="/narrate" element={<Navigate to="/edit" replace />} />
+                <Route path="/narrato" element={<Navigate to="/edit" replace />} />
                 <Route path="/ai-media" element={<AIMediaPage />} />
                 <Route path="/ai-drama" element={<AIDramaPage />} />
                 <Route path="/ai-drama/:projectId" element={<AIDramaResultPage />} />

@@ -22,9 +22,7 @@ RSYNC_SSH="ssh ${SSH_OPTS[*]}"
 echo "=== [1/4] 本地测试与前端构建 ==="
 # 后端跑在项目根目录 venv（systemd：ExecStart=$REMOTE_DIR/.venv/bin/python），backend/ 下没有 .venv
 cd "$PROJECT_DIR/backend"
-VIDEO_HUB_AUTH_MODE=off "$PROJECT_DIR/.venv/bin/python" -m unittest discover -s tests -v
-cd "$PROJECT_DIR/narratoai"
-.venv/bin/python -m unittest discover -s engine/tests -v
+VIDEO_HUB_AUTH_MODE=off PYTHONPATH="$PROJECT_DIR" "$PROJECT_DIR/.venv/bin/python" -m unittest discover -s tests -v
 cd "$PROJECT_DIR/frontend"
 npm run build
 
@@ -60,8 +58,6 @@ for attempt in {1..30}; do
   sleep 2
 done
 curl -sf -o /dev/null -w 'Video Hub HTTP %{http_code}\n' http://localhost/
-curl -sf http://127.0.0.1:8601/health
-curl -sf http://localhost/preview/health
 EOF
 
 echo "=== 部署完成：http://$SERVER_IP ==="

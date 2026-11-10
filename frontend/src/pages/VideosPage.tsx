@@ -416,7 +416,7 @@ export default function VideosPage() {
           <EmptyState
             icon={<VideoCamera size={26} />}
             title="还没有视频"
-            desc="用导入向导上传原片，或从链接下载。入库后可以剪辑、解说和导出。"
+            desc="用导入向导上传原片，或从链接下载。入库后可以剪辑和导出。"
             action={
               <>
                 <Link to="/library/import">
@@ -450,7 +450,6 @@ export default function VideosPage() {
                 onPublish={(video) => navigate('/export', { state: { videoId: video.id } })}
                 onTrim={openTrim}
                 onAiEdit={handleAiEdit}
-                onNarrate={(video) => navigate('/narrate?video=' + video.id)}
                 onRename={openRename}
                 onDownload={handleDownload}
                 onDelete={handleDelete}

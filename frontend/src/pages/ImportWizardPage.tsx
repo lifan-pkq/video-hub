@@ -114,13 +114,12 @@ export default function ImportWizardPage() {
       {step === 2 && (
         <Panel title="导入已提交">
           {uploaded ? (
-            <p className="text-[13px] text-ink-2">「{uploaded.title}」已进入视频素材库，可以直接剪辑或解说。</p>
+            <p className="text-[13px] text-ink-2">「{uploaded.title}」已进入视频素材库，可以直接剪辑。</p>
           ) : (
             <p className="text-[13px] text-ink-2">已排队 {taskCount} 个下载。可以离开本页，失败原因会写在任务上。</p>
           )}
           <div className="mt-4 flex flex-wrap gap-2">
             {uploaded && <Link to="/edit" state={{ videoIds: [uploaded.id] }}><Button variant="primary">去智能剪辑</Button></Link>}
-            {uploaded && <Link to={`/narrate?video=${uploaded.id}`}><Button>去 AI 解说</Button></Link>}
             {!uploaded && <Link to="/tasks"><Button variant="primary">查看任务</Button></Link>}
             <Link to="/videos"><Button variant="ghost">打开素材库</Button></Link>
             <Button variant="ghost" onClick={reset}>再导入一条</Button>

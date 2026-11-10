@@ -136,12 +136,11 @@ export default function TasksPage() {
   const openTask = (t: TaskSummary) => {
     const kind = t.kind || ''
     if (t.type === 'narrate' || kind.startsWith('narrate')) {
-      const narrateId = t.input?.task_id || (typeof t.result?.task_id === 'string' ? t.result.task_id : '')
-      navigate(narrateId ? `/narrate?task=${encodeURIComponent(narrateId)}` : '/narrate')
+      navigate('/edit')
       return
     }
     if (t.type === 'edit' || kind.startsWith('edit')) {
-      navigate(`/edit/${encodeURIComponent(t.id)}`)
+      navigate(kind === 'edit.douyin' ? `/edit/douyin/${encodeURIComponent(t.id)}` : `/edit/${encodeURIComponent(t.id)}`)
       return
     }
     if (t.type === 'download') {
@@ -197,7 +196,7 @@ export default function TasksPage() {
 
   return (
     <div>
-      <PageHeader title="任务中心" desc="下载、剪辑与解说的进度。失败时会带上原因和下一步。" />
+      <PageHeader title="任务中心" desc="下载、剪辑和导出的进度。失败时会带上原因和下一步。" />
       <RequestState error={loadError} hasData={hasData} loading={loading} onRetry={() => { setLoading(true); void fetchTasks().then((list) => { setTasks(list); setHasData(true); setLoadError(null) }).catch((error) => setLoadError(errorMessage(error))).finally(() => setLoading(false)) }} className="mb-4" />
 
       {/* 分组筛选 Tab */}
@@ -230,7 +229,7 @@ export default function TasksPage() {
           <EmptyState
             icon={<ClockCounterClockwise size={26} />}
             title="暂无任务"
-            desc="下载、剪辑或解说开始后，任务会实时出现在这里"
+            desc="下载或剪辑开始后，任务会实时出现在这里"
             action={
               <Link to="/download">
                 <Button variant="primary" icon={<DownloadSimple size={15} />}>

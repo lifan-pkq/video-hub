@@ -20,10 +20,6 @@ export default defineConfig({
         target: process.env.VIDEO_HUB_API_TARGET || 'http://127.0.0.1:8000',
         changeOrigin: true,
       },
-      '/preview': {
-        target: 'http://127.0.0.1:8502',
-        changeOrigin: true,
-      },
     },
   },
 })

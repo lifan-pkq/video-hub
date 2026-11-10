@@ -1,3 +1,7 @@
+# 已停用
+
+不要再安装 `video-hub-edit-narrate.service`。主站部署会停用并删除这个单元，不会删除 `/opt/video-hub/data` 里的媒体。
+
 # 接到现有 Video Hub
 
 目标机器上的主服务一般是：

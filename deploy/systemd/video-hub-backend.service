@@ -1,6 +1,6 @@
 [Unit]
 Description=Video Hub FastAPI Backend
-After=network-online.target narrato-asr.service narrato-engine.service
+After=network-online.target
 Wants=network-online.target
 
 [Service]
@@ -9,13 +9,15 @@ User=narratoai
 Group=narratoai
 WorkingDirectory=/opt/video-hub/backend
 Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/opt/video-hub
 Environment=VIDEO_HUB_DATA_DIR=/opt/video-hub/data
 Environment=VIDEO_HUB_COOKIES_DIR=/opt/video-hub/data/cookies
-Environment=VIDEO_HUB_ASR_URL=http://127.0.0.1:8600/v1/audio/transcriptions
 Environment=VIDEO_HUB_DLR_DIR=/opt/DouyinLiveRecorder
 Environment=VIDEO_HUB_DLR_PYTHON=/opt/DouyinLiveRecorder/.venv/bin/python
-Environment=VIDEO_HUB_NARRATO_TASKS_DIR=/opt/video-hub/narratoai/storage/tasks
-Environment=VIDEO_HUB_NARRATO_ENGINE_URL=http://127.0.0.1:8601
+Environment=HF_HUB_CACHE=/opt/video-hub/data/.hf_cache
+Environment=HF_HUB_DISABLE_XET=1
+# 转写默认走本进程 faster-whisper。不要在这里指向 127.0.0.1:8600。
+# 若 .env 里仍有 VIDEO_HUB_ASR_URL，会覆盖成可选的远端接口。
 EnvironmentFile=-/opt/video-hub/.env
 ExecStart=/opt/video-hub/.venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 Restart=always

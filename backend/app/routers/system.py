@@ -17,9 +17,6 @@ router = APIRouter(prefix="/api/system", tags=["system"])
 
 SERVICES = [
     ("backend", "Video Hub 后端", "", "video-hub-backend"),
-    ("engine", "AI 解说引擎", "http://127.0.0.1:8601/health", "narrato-engine"),
-    ("asr", "共享 ASR", "http://127.0.0.1:8600/health", "narrato-asr"),
-    ("preview", "字幕预览", "http://127.0.0.1:8502/health", "narrato-preview"),
 ]
 
 

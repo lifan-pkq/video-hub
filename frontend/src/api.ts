@@ -74,6 +74,12 @@ export interface Task {
     download_url?: string
     output_path?: string
     warnings?: string[]
+    source?: string
+    source_title?: string
+    pack_url?: string
+    budget?: number
+    video_id?: number
+    shorts?: DouyinShort[]
   } | null
   error?: TaskError | null
   created_at: string
@@ -508,6 +514,28 @@ export interface Suggestion {
   text?: string
 }
 
+export interface DouyinShort {
+  index: number
+  title: string
+  hashtags: string[]
+  description: string
+  hook?: string
+  reason?: string
+  start: number
+  end: number
+  duration: number
+  framing?: string
+  captions_burned?: boolean
+  file_url: string
+  cover_url?: string
+  video_id?: number | null
+}
+
+export function editTaskPath(task: { id: string; kind?: string }): string {
+  if (task.kind === 'edit.douyin') return `/edit/douyin/${encodeURIComponent(task.id)}`
+  return `/edit/${encodeURIComponent(task.id)}`
+}
+
 export interface EditJob {
   id: string
   kind: string
@@ -598,6 +626,32 @@ export async function fetchJob(id: string): Promise<EditJob> {
 export async function cancelJob(id: string): Promise<EditJob> {
   try {
     const { data } = await http.post<EditJob>(`/jobs/${id}/cancel`)
+    return data
+  } catch (error) {
+    raiseApi(error)
+  }
+}
+
+export async function startDouyinProduce(videoId: number, instruction = '', maxClips = 0): Promise<EditJob> {
+  try {
+    const { data } = await http.post<EditJob>('/edit/douyin', {
+      video_id: videoId,
+      instruction,
+      max_clips: maxClips,
+    }, { timeout: 0 })
+    return data
+  } catch (error) {
+    raiseApi(error)
+  }
+}
+
+export async function saveDouyinToLibrary(jobId: string, indexes: number[] = []): Promise<{
+  videos: Video[]
+  shorts: DouyinShort[]
+  warnings: string[]
+}> {
+  try {
+    const { data } = await http.post(`/edit/douyin/${jobId}/library`, { indexes })
     return data
   } catch (error) {
     raiseApi(error)
@@ -997,7 +1051,8 @@ export function platformLabel(key: string | null | undefined): string {
   if (key === 'direct') return '直链'
   if (key === 'unknown') return '未知'
   if (key === 'edited') return '剪辑合成'
-  if (key === 'narrato' || key === 'narration') return 'AI 解说'
+  if (key === 'douyin_short') return '抖音成片'
+  if (key === 'narrato' || key === 'narration') return '历史解说'
   if (key === 'ai_edit') return 'AI 剪辑'
   if (key === 'legacy') return '历史任务'
   // 直播录制入库的来源：live_douyin / live_bilibili / live_direct …

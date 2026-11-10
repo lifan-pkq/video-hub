@@ -1,12 +1,14 @@
-"""智能剪辑：分析切点、精彩保留、模型精排、按时间线导出。"""
+"""智能剪辑：抖音一键成片，以及手动切点、精彩保留、按时间线导出。"""
 
 from typing import Literal
 
 from fastapi import APIRouter
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from engine.schemas import Suggestion
 from app.jobs import create, submit
+from app.services.douyin_flow import download_name, pack_file, produce_douyin, send_to_library, short_file
 from app.services.edit_flow import analyze_videos, build_highlight, export_clips, plan_suggestions
 from app.services.videos import fetch
 
@@ -67,6 +69,60 @@ class HighlightBody(BaseModel):
     videos: list[HighlightSource] = Field(min_length=1, max_length=12)
     instruction: str = ""
     use_llm: bool = True
+
+
+class DouyinProduceBody(BaseModel):
+    video_id: int
+    instruction: str = ""
+    max_clips: int = Field(default=0, ge=0, le=10)
+
+
+class DouyinLibraryBody(BaseModel):
+    indexes: list[int] = Field(default_factory=list, max_length=10)
+
+
+@router.post("/douyin")
+def douyin_produce(body: DouyinProduceBody):
+    """从素材库一条原片生成多条竖屏短视频。不发布，只给预览、下载和入库。"""
+    fetch(body.video_id)
+    instruction = body.instruction.strip()[:400]
+    job = create(
+        "edit.douyin",
+        "抖音成片",
+        {"video_id": body.video_id, "instruction": instruction, "max_clips": body.max_clips},
+    )
+    return submit(
+        job,
+        lambda job_id: produce_douyin(job_id, body.video_id, instruction, body.max_clips),
+    )
+
+
+@router.get("/douyin/{job_id}/shorts/{index}/file")
+def douyin_short_video(job_id: str, index: int, download: int = 0):
+    path = short_file(job_id, index)
+    return FileResponse(
+        path,
+        media_type="video/mp4",
+        filename=download_name(job_id, index) if download else path.name,
+        content_disposition_type="attachment" if download else "inline",
+    )
+
+
+@router.get("/douyin/{job_id}/shorts/{index}/cover")
+def douyin_short_cover(job_id: str, index: int):
+    path = short_file(job_id, index, cover=True)
+    return FileResponse(path, media_type="image/jpeg", filename=download_name(job_id, index, cover=True))
+
+
+@router.get("/douyin/{job_id}/pack")
+def douyin_pack(job_id: str):
+    path = pack_file(job_id)
+    return FileResponse(path, media_type="application/zip", filename="douyin-shorts.zip")
+
+
+@router.post("/douyin/{job_id}/library")
+def douyin_library(job_id: str, body: DouyinLibraryBody):
+    return send_to_library(job_id, body.indexes)
 
 
 @router.post("/analyze")

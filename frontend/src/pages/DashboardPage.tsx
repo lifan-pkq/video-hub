@@ -18,10 +18,10 @@ import StatusBadge from '../components/StatusBadge'
 
 function healthRows(health: HealthReport): Array<{ label: string; ok: boolean; detail: string }> {
   const tts = (health.tts || []).filter((item) => item.id !== 'tone' && item.available)
-  const asrLabel = health.asr === 'remote' ? '共享 ASR 已接通' : health.asr === 'whisper' ? '使用本地 whisper' : '未配置，解说转写会失败'
+  const asrLabel = health.asr === 'remote' ? '使用外部转写接口' : health.asr === 'whisper' ? '本机按需转写，长音频分段' : '未安装 faster-whisper，智能剪辑无法转写'
   return [
-    { label: 'ffmpeg', ok: !!health.ffmpeg, detail: health.ffmpeg ? '剪辑、解说和导出可用' : '未安装，剪辑与导出无法出片' },
-    { label: '文本模型', ok: !!health.llm, detail: health.llm ? '模型精排和写稿可用' : '未配置 VIDEO_HUB_AI_*，只能用本地信号和骨架稿' },
+    { label: 'ffmpeg', ok: !!health.ffmpeg, detail: health.ffmpeg ? '剪辑和导出可用' : '未安装，剪辑与导出无法出片' },
+    { label: '文本模型', ok: !!health.llm, detail: health.llm ? '抖音选段可用' : '未配置 VIDEO_HUB_AI_*，只能用本地信号' },
     { label: '画面模型', ok: !!health.vision, detail: health.vision ? '抽帧说明可用' : '未配置视觉模型，抽帧仍会保留' },
     { label: '语音识别', ok: health.asr === 'remote' || health.asr === 'whisper', detail: asrLabel },
     { label: '语音合成', ok: tts.length > 0, detail: tts.length ? tts.map((item) => item.id).join('、') + ' 可用' : '未安装 edge-tts，也没有 TTS 接口' },
@@ -65,7 +65,6 @@ export default function DashboardPage() {
       <div className="vh-quick-actions" aria-label="快捷入口">
         <Link to="/workbench">创作工作台</Link>
         <Link to="/edit">智能剪辑</Link>
-        <Link to="/narrate">AI 解说</Link>
         <Link to="/download">下载素材</Link>
         <Link to="/tasks">任务中心</Link>
       </div>
@@ -73,7 +72,7 @@ export default function DashboardPage() {
       {stats && (
         <div className="mb-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
           <Link to="/videos"><StatCard label="视频素材" value={stats.videos.count} sub={`${stats.videos.high_quality} 条高质 · ${formatSize(stats.videos.size)}`} icon={<FilmSlate size={18} />} /></Link>
-          <Link to="/videos"><StatCard label="已理解素材" value={stats.videos.analyzed} sub="可直接进剪辑或解说" icon={<MagicWand size={18} />} /></Link>
+          <Link to="/videos"><StatCard label="已理解素材" value={stats.videos.analyzed} sub="可直接进剪辑或导出" icon={<MagicWand size={18} />} /></Link>
           <Link to="/record"><StatCard label="录制中" value={stats.recordings.active} sub={`共 ${stats.recordings.total} 条记录`} icon={<Broadcast size={18} />} /></Link>
           <Link to="/tasks"><StatCard label="进行中任务" value={stats.tasks.running} sub={`今天新增 ${stats.tasks.today} 个`} icon={<DownloadSimple size={18} />} /></Link>
         </div>
@@ -81,7 +80,7 @@ export default function DashboardPage() {
       <div className="grid gap-5 xl:grid-cols-2">
         <Panel title="最近任务" extra={<Link to="/tasks" className="text-xs text-accent">任务中心 →</Link>}>
           {recentTasks.length === 0 ? (
-            <EmptyState icon={<DownloadSimple size={24} />} title="还没有任务" desc="下载、剪辑或解说开始后，进度会出现在这里。" action={<Link to="/download"><Button size="sm">去下载</Button></Link>} />
+            <EmptyState icon={<DownloadSimple size={24} />} title="还没有任务" desc="下载或剪辑开始后，进度会出现在这里。" action={<Link to="/download"><Button size="sm">去下载</Button></Link>} />
           ) : (
             <ul className="divide-y divide-line-soft">
               {recentTasks.map((task) => (
@@ -115,7 +114,7 @@ export default function DashboardPage() {
       <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <Link to="/download" className="vh-card flex items-center gap-3 p-4 hover:border-accent"><DownloadSimple size={18} /><span className="text-sm text-ink-1">获取视频</span></Link>
         <Link to="/record" className="vh-card flex items-center gap-3 p-4 hover:border-accent"><Broadcast size={18} /><span className="text-sm text-ink-1">直播录制</span></Link>
-        <Link to="/narrate" className="vh-card flex items-center gap-3 p-4 hover:border-accent"><MagicWand size={18} /><span className="text-sm text-ink-1">AI 解说</span></Link>
+        <Link to="/edit" className="vh-card flex items-center gap-3 p-4 hover:border-accent"><FilmSlate size={18} /><span className="text-sm text-ink-1">智能剪辑</span></Link>
         <Link to="/export" className="vh-card flex items-center gap-3 p-4 hover:border-accent"><Package size={18} /><span className="text-sm text-ink-1">封面与导出</span></Link>
       </div>
     </div>

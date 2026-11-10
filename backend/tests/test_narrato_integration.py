@@ -39,29 +39,22 @@ class VendorBoundaryTests(unittest.TestCase):
 
 
 class FrontendIntegrationTests(unittest.TestCase):
-    def test_narrate_route_navigation_and_source_label(self):
+    def test_narrate_surface_is_not_in_the_workbench(self):
         app = (ROOT / "frontend/src/App.tsx").read_text()
         nav = (ROOT / "frontend/src/nav.ts").read_text()
         api = (ROOT / "frontend/src/api.ts").read_text()
         self.assertIn('path="/narrate"', app)
-        self.assertIn("/narrate", nav)
-        self.assertIn("AI 解说", nav)
-        self.assertIn("制作", nav)
-        self.assertIn("narrato", api)
-        self.assertIn("startNarrateUnderstand", api)
+        self.assertIn('Navigate to="/edit"', app)
+        self.assertNotIn("NarratePage", app)
+        self.assertNotIn("/narrate", nav)
+        self.assertNotIn("AI 解说", nav)
+        self.assertIn("智能剪辑", nav)
+        self.assertIn("历史解说", api)
         self.assertIn("analyzeEdit", api)
-
-    def test_narration_page_is_native_not_iframe(self):
-        page = (ROOT / "frontend/src/pages/NarratePage.tsx").read_text()
-        self.assertNotIn("<iframe", page)
-        self.assertNotIn("_stcore/health", page)
-        self.assertIn("开始理解", page)
-        self.assertIn("逐句骨架", page)
-        self.assertIn("useSearchParams", page)
-        self.assertIn("剪映草稿暂未接入", page)
+        self.assertFalse((ROOT / "frontend/src/pages/NarratePage.tsx").exists())
         card = (ROOT / "frontend/src/components/VideoCard.tsx").read_text()
-        self.assertIn("onNarrate", card)
-        self.assertIn("AI 解说", card)
+        self.assertNotIn("onNarrate", card)
+        self.assertNotIn("AI 解说", card)
 
     def test_backend_owns_narration_tasks(self):
         schema = (ROOT / "backend/app/db.py").read_text()

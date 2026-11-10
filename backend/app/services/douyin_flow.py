@@ -16,6 +16,7 @@ from app.services.douyin_plan import (
     plan_douyin_shorts,
 )
 from app.services.douyin_render import (
+    build_clip_zip,
     build_pack_zip,
     probe_source,
     render_short,
@@ -57,12 +58,20 @@ def load_subject_boxes(video_id: int) -> list[dict]:
     return boxes_from_understanding(data if isinstance(data, dict) else None)
 
 
-def produce_douyin(job_id: str, video_id: int, instruction: str = "", max_clips: int = 0) -> None:
+def produce_douyin(
+    job_id: str,
+    video_id: int,
+    instruction: str = "",
+    max_clips: int = 0,
+    *,
+    layout: str = "interview",
+) -> None:
     video = fetch(int(video_id))
     source = resolve_media(video)
     meta = probe_source(source)
     settings = douyin_settings()
     title = str(video.get("title") or source.name)
+    layout = "podcast" if layout == "podcast" else "interview"
     report(job_id, 4, "asr", f"转写「{title}」")
     try:
         segments = transcribe(source, log=_log(job_id))
@@ -101,22 +110,45 @@ def produce_douyin(job_id: str, video_id: int, instruction: str = "", max_clips:
     clips = plan["clips"]
     root = data_dir() / "douyin" / job_id
     root.mkdir(parents=True, exist_ok=True)
-    boxes = load_subject_boxes(video_id)
+    boxes = [] if layout == "podcast" else load_subject_boxes(video_id)
     shorts = []
     failures: list[str] = []
+
+    def publish_live(pack_url: str = "") -> None:
+        update(
+            job_id,
+            result={
+                "video_id": int(video_id),
+                "source_title": title,
+                "source": plan["source"],
+                "budget": plan["budget"],
+                "duration": round(float(meta["duration"]), 2),
+                "sentences": len(segments),
+                "warnings": [*(plan.get("warnings") or []), *failures],
+                "layout": layout,
+                "pack_url": pack_url,
+                "shorts": list(shorts),
+            },
+        )
+
     for offset, clip in enumerate(clips):
+        if cancelled(job_id):
+            raise EngineError("任务已取消", code="cancelled", status=409)
         index = offset + 1
         label = str(clip.get("title") or f"片段 {index}")
         report(job_id, 48 + (index / max(1, len(clips))) * 42, "render", f"渲染 {index}/{len(clips)} · {label}")
         folder = root / f"{index:02d}"
         folder.mkdir(parents=True, exist_ok=True)
         write_copy_files(folder, clip)
-        in_boxes = [
-            item for item in boxes
-            if float(clip["start"]) - 1 <= float(item["time"]) <= float(clip["end"]) + 1
-        ]
-        skin = [] if in_boxes else sample_skin_boxes(source, float(clip["start"]), float(clip["end"]), segments)
-        track = build_subject_track(float(clip["start"]), float(clip["end"]), segments, in_boxes, skin)
+        if layout == "podcast":
+            track = []
+        else:
+            in_boxes = [
+                item for item in boxes
+                if float(clip["start"]) - 1 <= float(item["time"]) <= float(clip["end"]) + 1
+            ]
+            skin = [] if in_boxes else sample_skin_boxes(source, float(clip["start"]), float(clip["end"]), segments)
+            track = build_subject_track(float(clip["start"]), float(clip["end"]), segments, in_boxes, skin)
         try:
             rendered = render_short(
                 source,
@@ -131,6 +163,7 @@ def produce_douyin(job_id: str, video_id: int, instruction: str = "", max_clips:
                 out_w=int(settings["width"]),
                 out_h=int(settings["height"]),
                 threads=int(settings["threads"]),
+                layout=layout,
                 job_id=job_id,
                 should_cancel=_check(job_id),
             )
@@ -143,7 +176,13 @@ def produce_douyin(job_id: str, video_id: int, instruction: str = "", max_clips:
         cover_ok = write_cover(folder / "video.mp4", folder / "cover.jpg", job_id=job_id, should_cancel=_check(job_id))
         if not rendered["captions_burned"] and clip.get("captions"):
             update(job_id, log=f"「{label}」字幕没烧进去，文案和字幕稿仍可下载。")
-        shorts.append(_public_short(job_id, index, clip, rendered, cover_ok))
+        kit_ok = False
+        try:
+            kit_ok = build_clip_zip(folder)
+        except Exception as exc:  # noqa: BLE001 - 成片已写出，单条打包失败仍可预览
+            update(job_id, log=f"「{label}」单条发布包没打成：{exc}")
+        shorts.append(_public_short(job_id, index, clip, rendered, cover_ok, layout=layout, kit_ok=kit_ok))
+        publish_live()
     if not shorts:
         detail = failures[0] if failures else "没有可渲染的片段。"
         raise EngineError(
@@ -194,13 +233,23 @@ def produce_douyin(job_id: str, video_id: int, instruction: str = "", max_clips:
             "duration": round(float(meta["duration"]), 2),
             "sentences": len(segments),
             "warnings": warnings,
+            "layout": layout,
             "pack_url": pack_url,
             "shorts": shorts,
         },
     )
 
 
-def _public_short(job_id: str, index: int, clip: dict, rendered: dict, cover_ok: bool) -> dict:
+def _public_short(
+    job_id: str,
+    index: int,
+    clip: dict,
+    rendered: dict,
+    cover_ok: bool,
+    *,
+    layout: str,
+    kit_ok: bool,
+) -> dict:
     return {
         "index": index,
         "title": clip.get("title") or f"片段 {index}",
@@ -212,12 +261,14 @@ def _public_short(job_id: str, index: int, clip: dict, rendered: dict, cover_ok:
         "end": clip.get("end"),
         "duration": clip.get("duration"),
         "score": clip.get("score"),
+        "layout": layout,
         "framing": rendered.get("framing") or "center",
         "captions_burned": bool(rendered.get("captions_burned")),
         "width": rendered.get("width"),
         "height": rendered.get("height"),
         "file_url": f"/api/edit/douyin/{job_id}/shorts/{index}/file",
         "cover_url": f"/api/edit/douyin/{job_id}/shorts/{index}/cover" if cover_ok else "",
+        "kit_url": f"/api/edit/douyin/{job_id}/shorts/{index}/pack" if kit_ok else "",
         "video_id": None,
     }
 
@@ -231,9 +282,9 @@ def _job_or_raise(job_id: str) -> dict:
     return job
 
 
-def short_file(job_id: str, index: int, *, cover: bool = False) -> Path:
+def short_file(job_id: str, index: int, *, cover: bool = False, kit: bool = False) -> Path:
     job = _job_or_raise(job_id)
-    if job.get("status") not in {"success", "partial"}:
+    if job.get("status") not in {"success", "partial", "running"}:
         raise EngineError("成片还没完成", code="missing_file", action="等任务结束，或看失败原因。", status=404)
     shorts = ((job.get("result") or {}).get("shorts") or [])
     if not any(int(item.get("index") or 0) == int(index) for item in shorts):
@@ -241,13 +292,14 @@ def short_file(job_id: str, index: int, *, cover: bool = False) -> Path:
     root = (data_dir() / "douyin" / job["id"]).resolve()
     folder = (root / f"{int(index):02d}").resolve()
     folder.relative_to(root)
-    path = folder / ("cover.jpg" if cover else "video.mp4")
+    name = "kit.zip" if kit else "cover.jpg" if cover else "video.mp4"
+    path = folder / name
     if not path.is_file():
         raise EngineError("文件不在磁盘上", code="missing_file", action="重新跑一次一键生成。", status=404)
     return path
 
 
-def download_name(job_id: str, index: int, *, cover: bool = False) -> str:
+def download_name(job_id: str, index: int, *, cover: bool = False, kit: bool = False) -> str:
     job = _job_or_raise(job_id)
     short = next(
         (item for item in ((job.get("result") or {}).get("shorts") or []) if int(item.get("index") or 0) == int(index)),
@@ -255,7 +307,8 @@ def download_name(job_id: str, index: int, *, cover: bool = False) -> str:
     )
     stem = re.sub(r'[\\/:*?"<>|\n\r]+', "_", str(short.get("title") or f"短视频{index}")).strip(" ._")[:40]
     stem = stem or f"短视频{index}"
-    return f"{int(index):02d}-{stem}{'.jpg' if cover else '.mp4'}"
+    suffix = ".zip" if kit else ".jpg" if cover else ".mp4"
+    return f"{int(index):02d}-{stem}{suffix}"
 
 
 def pack_file(job_id: str) -> Path:

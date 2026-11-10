@@ -317,8 +317,25 @@ def vertical_filter(
     track: list[dict] | None,
     out_w: int,
     out_h: int,
+    layout: str = "interview",
 ) -> tuple[str, str]:
-    """返回 ffmpeg 滤镜和 framing：subject（跟着说话人/主体）或 center。"""
+    """返回 ffmpeg 滤镜和 framing。
+
+    interview：subject（跟着说话人）或 center。
+    podcast：完整画面居中，模糊背景铺满 9:16，不再按主体裁切。
+    """
+    if layout == "podcast":
+        even_w = max(2, int(out_w) // 2 * 2)
+        even_h = max(2, int(out_h) // 2 * 2)
+        graph = (
+            f"split[bg][fg];"
+            f"[bg]scale={even_w}:{even_h}:force_original_aspect_ratio=increase,"
+            f"crop={even_w}:{even_h},boxblur=20:2[bg2];"
+            f"[fg]scale={even_w}:{even_h}:force_original_aspect_ratio=decrease:"
+            f"force_divisible_by=2[fg2];"
+            f"[bg2][fg2]overlay=(W-w)/2:(H-h)/2,setsar=1"
+        )
+        return graph, "podcast"
     crop_w, crop_h = portrait_crop_size(src_w, src_h)
     points = [item for item in (track or []) if isinstance(item, dict) and isinstance(item.get("subject_box"), dict)]
     if not points:

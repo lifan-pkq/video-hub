@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { ArrowLeft, Copy, DownloadSimple, Package, Stop } from '@phosphor-icons/react'
+import { ArrowLeft } from '@phosphor-icons/react'
 import {
   cancelJob,
   errorMessage,
@@ -11,33 +11,18 @@ import {
   type EditJob,
   type Video,
 } from '../api'
-import { Alert, Button, PageHeader, Panel, Progress, toast } from '../ui'
-
-function formatTime(seconds: number): string {
-  const safe = Number.isFinite(seconds) ? Math.max(0, seconds) : 0
-  const minutes = Math.floor(safe / 60)
-  const rest = Math.floor(safe - minutes * 60)
-  return `${minutes}:${String(rest).padStart(2, '0')}`
-}
-
-function framingText(framing?: string): string {
-  if (framing === 'subject') return '已按说话人位置裁成 9:16'
-  return '没有可靠的说话人位置，已居中裁成 9:16'
-}
-
-function copyBlock(short: DouyinShort): string {
-  const tags = (short.hashtags || []).join(' ')
-  return `标题：${short.title}\n话题：${tags}\n简介：${short.description || ''}`
-}
-
-function downloadFile(url: string) {
-  const link = document.createElement('a')
-  link.href = url
-  link.rel = 'noopener'
-  document.body.appendChild(link)
-  link.click()
-  link.remove()
-}
+import {
+  STUDIO_STEPS,
+  clock,
+  copyBlock,
+  downloadFile,
+  framingLabel,
+  layoutName,
+  studioStepFill,
+  studioStepIndex,
+  taskSourceTitle,
+} from '../features/edit/studio'
+import { toast } from '../ui'
 
 export default function DouyinProducePage() {
   const { jobId = '' } = useParams()
@@ -45,7 +30,8 @@ export default function DouyinProducePage() {
   const [job, setJob] = useState<EditJob | null>(null)
   const [videos, setVideos] = useState<Video[]>([])
   const [error, setError] = useState('')
-  const [saving, setSaving] = useState<number | 'all' | null>(null)
+  const [picked, setPicked] = useState<number | null>(null)
+  const [saving, setSaving] = useState<number | 'export' | null>(null)
 
   const load = useCallback(async () => {
     if (!jobId) return
@@ -71,9 +57,12 @@ export default function DouyinProducePage() {
 
   const shorts = job?.result?.shorts || []
   const running = job?.status === 'pending' || job?.status === 'running'
-  const sourceTitle = job?.result?.source_title
-    || videos.find((video) => video.id === job?.input?.video_id)?.title
-    || (job?.input?.video_id ? `视频 #${job.input.video_id}` : '原片')
+  const active = shorts.find((short) => short.index === picked) || shorts[0] || null
+  const step = studioStepIndex(job?.stage, job?.status)
+  const layout = active?.layout || job?.result?.layout || job?.input?.layout
+  const sourceTitle = job
+    ? taskSourceTitle({ title: job.label, input: job.input, result: job.result }, videos)
+    : '成片'
 
   async function cancel() {
     if (!job) return
@@ -87,12 +76,12 @@ export default function DouyinProducePage() {
 
   async function save(indexes: number[], thenExport = false) {
     if (!job) return
-    setSaving(indexes.length === 1 ? indexes[0] : 'all')
+    setSaving(thenExport ? 'export' : indexes[0] ?? null)
     try {
       const saved = await saveDouyinToLibrary(job.id, indexes)
       if (saved.warnings?.length) toast.error(saved.warnings[0])
       else toast.success(thenExport ? '已入库，去封面与导出' : '已放入素材库')
-      setJob((current) => current && current.result ? {
+      setJob((current) => current?.result ? {
         ...current,
         result: { ...current.result, shorts: saved.shorts },
       } : current)
@@ -114,113 +103,178 @@ export default function DouyinProducePage() {
     }
   }
 
-  return (
-    <div>
-      <PageHeader
-        title="抖音短视频"
-        desc={`${sourceTitle} · 竖屏成片可预览、下载，或送进素材库后再做封面导出。不会自动发布。`}
-        extra={<Button variant="ghost" icon={<ArrowLeft size={16} />} onClick={() => navigate('/edit')}>返回智能剪辑</Button>}
-      />
+  const statusLine = !job
+    ? '正在读取'
+    : job.status === 'success'
+      ? `已生成 ${shorts.length} 条`
+      : job.status === 'partial'
+        ? `生成了 ${shorts.length} 条，有的没做成`
+        : job.status === 'failed'
+          ? '没有生成成片'
+          : job.status === 'cancelled'
+            ? '已取消'
+            : (job.label || '处理中')
 
-      {error && <Alert type="error" className="mb-4">{error}</Alert>}
+  return (
+    <div className="studio studio-job">
+      <button type="button" className="studio-back" onClick={() => navigate('/edit')}>
+        <ArrowLeft size={16} /> 返回选片
+      </button>
+
+      {error && <p className="studio-error">{error}</p>}
+
+      <header className="studio-job-head">
+        <div>
+          <p className="studio-kicker">一键出片</p>
+          <h1 className="studio-job-title">{sourceTitle}</h1>
+          <p className="studio-job-meta">{layoutName(layout)} · {statusLine}</p>
+        </div>
+        {job && running && (
+          <p className="studio-percent" aria-label={`进度 ${Math.round(job.progress || 0)}%`}>
+            <span className="tnum">{Math.round(job.progress || 0)}</span>
+            <small>%</small>
+          </p>
+        )}
+      </header>
 
       {job && (
-        <Panel className="mb-4">
-          <div className="flex flex-wrap items-center gap-3">
-            <div className="min-w-0 flex-1">
-              <p className="text-sm text-ink-1">{job.label || '生成中'}</p>
-              <p className="mt-1 text-xs text-ink-4">
-                {job.status === 'success' && '全部成片已生成'}
-                {job.status === 'partial' && '有一部分没完成，已生成的可以先用'}
-                {job.status === 'failed' && '生成失败'}
-                {job.status === 'cancelled' && '已取消'}
-                {running && '转写、选段和渲染都在这条任务里，也可以去任务中心看'}
-              </p>
-            </div>
-            {running && (
-              <Button size="sm" variant="ghost" icon={<Stop size={14} />} onClick={() => void cancel()}>取消</Button>
-            )}
-            {job.result?.pack_url && (
-              <Button size="sm" variant="secondary" icon={<Package size={14} />} onClick={() => downloadFile(job.result?.pack_url || '')}>
-                下载整包
-              </Button>
-            )}
-            {shorts.length > 0 && (
-              <Button size="sm" variant="secondary" loading={saving === 'all'} onClick={() => void save(shorts.map((item) => item.index))}>
-                全部入库
-              </Button>
-            )}
-          </div>
-          {running && (
-            <div className="mt-3">
-              <Progress percent={(job.progress || 0) / 100} />
-            </div>
-          )}
-          {job.error?.message && (
-            <Alert type={job.status === 'failed' ? 'error' : 'warning'} className="mt-3">
-              {job.error.message}{job.error.action ? ` ${job.error.action}` : ''}
-            </Alert>
-          )}
-          {(job.result?.warnings || []).length > 0 && job.status !== 'failed' && (
-            <ul className="mt-3 space-y-1 text-xs text-ink-3">
-              {job.result?.warnings?.map((warning) => <li key={warning}>{warning}</li>)}
-            </ul>
-          )}
-          {running && (job.logs || []).length > 0 && (
-            <p className="mt-3 truncate text-xs text-ink-4">{job.logs[job.logs.length - 1]}</p>
-          )}
-        </Panel>
+        <ol className="studio-steps" aria-label="出片进度">
+          {STUDIO_STEPS.map((item, index) => {
+            const state = index < step ? 'is-done' : index === step ? 'is-now' : ''
+            const fill = studioStepFill(index, step, job.progress || 0, job.status)
+            return (
+              <li
+                key={item.id}
+                className={`studio-step ${state}`}
+                style={{ ['--step' as string]: `${fill}%` }}
+                aria-current={index === step ? 'step' : undefined}
+              >
+                <i />
+                <b>{item.label}</b>
+              </li>
+            )
+          })}
+        </ol>
       )}
 
-      {!job && !error && <p className="mb-4 text-sm text-ink-3">正在读取任务…</p>}
+      {job && running && <p className="studio-now" aria-live="polite">{job.label || '正在处理'}</p>}
+      {job && running && <button type="button" className="studio-quiet studio-cancel" onClick={() => void cancel()}>取消这次生成</button>}
+
+      {job?.error?.message && (
+        <p className={shorts.length ? 'studio-fine' : 'studio-error'}>
+          {job.error.message}{job.error.action ? ` ${job.error.action}` : ''}
+        </p>
+      )}
+      {(job?.result?.warnings || []).slice(0, 2).map((warning) => (
+        <p key={warning} className="studio-fine">{warning}</p>
+      ))}
 
       {!running && job && shorts.length === 0 && (job.status === 'success' || job.status === 'partial') && (
-        <Panel>
-          <p className="text-sm text-ink-2">这次没有可预览的成片。看上面的说明，改提示或换一条口播更集中的原片再试。</p>
-        </Panel>
+        <p className="studio-empty">这次没有可预览的成片。换一条口播更集中的原片，或把想留的内容写具体一点。</p>
       )}
 
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-        {shorts.map((short) => (
-          <Panel key={short.index} pad="sm" className="overflow-hidden">
-            <div className="mx-auto aspect-[9/16] w-full max-w-[280px] overflow-hidden rounded-xl bg-black">
-              {short.file_url ? (
-                <video
-                  src={short.file_url}
-                  poster={short.cover_url || undefined}
-                  controls
-                  playsInline
-                  preload="metadata"
-                  className="h-full w-full bg-black object-contain"
-                />
-              ) : (
-                short.cover_url && <img src={short.cover_url} alt={short.title} className="h-full w-full object-cover" />
-              )}
-            </div>
-            <div className="mt-3 space-y-2 px-1 pb-1">
-              <div className="flex items-start justify-between gap-2">
-                <h3 className="text-sm font-medium text-ink-1">{short.title}</h3>
-                <span className="tnum shrink-0 text-xs text-ink-4">{formatTime(short.duration || (short.end - short.start))}</span>
+      {running && shorts.length > 0 && (
+        <p className="studio-fine">已经做好的可以先看。其余还在渲染。</p>
+      )}
+
+      {shorts.length > 0 && active && (
+        <div className="studio-screen">
+          <div className="studio-gallery" role="listbox" aria-label="成片">
+            {shorts.map((short) => {
+              const on = short.index === active.index
+              return (
+                <button
+                  key={short.index}
+                  type="button"
+                  role="option"
+                  aria-selected={on}
+                  className={`studio-frame ${on ? 'is-on' : ''}`}
+                  onClick={() => setPicked(short.index)}
+                >
+                  <span className="studio-still studio-still-tall">
+                    {short.cover_url ? <img src={short.cover_url} alt="" /> : <b>{short.index}</b>}
+                    <i className="tnum">{clock(short.duration || short.end - short.start)}</i>
+                    {typeof short.score === 'number' && short.score > 0 && <em className="tnum">{short.score}</em>}
+                  </span>
+                  <strong>{short.title}</strong>
+                </button>
+              )
+            })}
+          </div>
+
+          <div className="studio-watch">
+            <div className="studio-phone">
+              <div className="studio-screen-glass">
+                {active.file_url ? (
+                  <video
+                    key={active.index}
+                    src={active.file_url}
+                    poster={active.cover_url || undefined}
+                    controls
+                    playsInline
+                    preload="metadata"
+                  />
+                ) : (
+                  active.cover_url && <img src={active.cover_url} alt={active.title} />
+                )}
               </div>
-              <p className="text-xs text-ink-3">{(short.hashtags || []).join(' ')}</p>
-              {short.description && <p className="text-xs leading-relaxed text-ink-2">{short.description}</p>}
-              {short.hook && <p className="text-xs text-ink-4">钩子：{short.hook}</p>}
-              <p className="text-[11px] text-ink-4">
-                {framingText(short.framing)}
-                {short.captions_burned === false ? ' · 字幕没烧进画面，文案仍可复制' : ' · 字幕已烧录'}
+            </div>
+
+            <div className="studio-copy">
+              <h2>{active.title}</h2>
+              {(active.hashtags || []).length > 0 && <p className="studio-tags">{active.hashtags.join(' ')}</p>}
+              {active.description && <p className="studio-desc">{active.description}</p>}
+              <p className="studio-fine">
+                {clock(active.duration || active.end - active.start)}
+                {typeof active.score === 'number' && active.score > 0 ? ` · 评分 ${active.score}` : ''}
+                {' · '}{framingLabel(active)}
+                {active.captions_burned === false ? ' · 字幕没烧进画面' : ' · 字幕已烧录'}
               </p>
-              <div className="flex flex-wrap gap-2 pt-1">
-                <Button size="sm" variant="secondary" icon={<DownloadSimple size={14} />} onClick={() => downloadFile(`${short.file_url}?download=1`)}>下载</Button>
-                <Button size="sm" variant="ghost" icon={<Copy size={14} />} onClick={() => void copyText(short)}>复制文案</Button>
-                <Button size="sm" variant="ghost" loading={saving === short.index} onClick={() => void save([short.index])}>
-                  {short.video_id ? '已入库' : '入库'}
-                </Button>
-                <Button size="sm" variant="ghost" icon={<Package size={14} />} onClick={() => void save([short.index], true)}>封面与导出</Button>
+              <div className="studio-actions">
+                <button
+                  type="button"
+                  className="studio-cta"
+                  disabled={!active.file_url}
+                  onClick={() => downloadFile(`${active.file_url}?download=1`)}
+                >
+                  下载视频
+                </button>
+                <div className="studio-action-row">
+                  {active.kit_url && (
+                    <button type="button" className="studio-pill" onClick={() => downloadFile(active.kit_url || '')}>
+                      下载这条发布包
+                    </button>
+                  )}
+                  <button type="button" className="studio-pill" onClick={() => void copyText(active)}>复制文案</button>
+                </div>
+                <div className="studio-action-row">
+                  <button
+                    type="button"
+                    className="studio-quiet"
+                    disabled={Boolean(active.video_id) || saving === active.index || running}
+                    onClick={() => void save([active.index])}
+                  >
+                    {active.video_id ? '已入库' : saving === active.index ? '入库中…' : '入库'}
+                  </button>
+                  <button
+                    type="button"
+                    className="studio-quiet"
+                    disabled={saving === 'export' || running}
+                    onClick={() => void save([active.index], true)}
+                  >
+                    {saving === 'export' ? '正在入库…' : '封面与导出'}
+                  </button>
+                  {job?.result?.pack_url && (
+                    <button type="button" className="studio-quiet" onClick={() => downloadFile(job.result?.pack_url || '')}>
+                      下载全部
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
-          </Panel>
-        ))}
-      </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

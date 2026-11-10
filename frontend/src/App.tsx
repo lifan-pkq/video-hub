@@ -41,7 +41,7 @@ function AppContent() {
   const mainRef = useRef<HTMLElement>(null)
   // AI 短剧结果页（/ai-drama/:projectId）全屏展示：不显示左侧导航、顶栏和移动端 dock，
   // 左上角由结果页自己的「返回 AI 短剧」按钮负责回跳。
-  // 智能剪辑结果页（/edit/:taskId、/edit/new）同款：全屏展示时间线，结果页左上角「返回智能剪辑」回跳。
+  // 旧的手动时间线（/edit/new、/edit/:taskId）仍全屏。抖音工作室 /edit 与 /edit/douyin/:jobId 留在侧栏壳里。
   const isDramaResult = /^\/ai-drama\/[^/]+$/.test(location.pathname) || /^\/edit\/[^/]+$/.test(location.pathname)
   const activeItem = NAV_ITEMS.find((item) => item.to === '/' ? location.pathname === '/' : location.pathname.startsWith(item.to))
   const headerLabel = location.pathname.startsWith('/library/import')

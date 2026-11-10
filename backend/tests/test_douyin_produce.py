@@ -208,6 +208,15 @@ class DouyinFramingTests(unittest.TestCase):
         self.assertIn("scale=1080:1920", graph)
         self.assertIn(str(left_x), graph)
         self.assertIn(str(right_x), graph)
+        podcast, podcast_mode = vertical_filter(
+            1920, 1080,
+            [{"timestamp": 0, "subject_box": {"x": 40, "y": 200, "width": 80, "height": 220}}],
+            720, 1280, "podcast",
+        )
+        self.assertEqual(podcast_mode, "podcast")
+        self.assertIn("boxblur", podcast)
+        self.assertIn("overlay=(W-w)/2:(H-h)/2", podcast)
+        self.assertNotIn("if(lt(t,", podcast)
 
     def test_skin_blob_on_the_left_is_not_center(self):
         width, height = 40, 30
@@ -258,7 +267,7 @@ class DouyinRenderTests(unittest.TestCase):
     def test_render_writes_vertical_video_cover_and_pack(self):
         if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
             self.skipTest("ffmpeg required")
-        from app.services.douyin_render import build_pack_zip, render_short, write_copy_files, write_cover
+        from app.services.douyin_render import build_clip_zip, build_pack_zip, render_short, write_copy_files, write_cover
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -322,6 +331,38 @@ class DouyinRenderTests(unittest.TestCase):
                 check=True, capture_output=True, text=True, timeout=30,
             )
             self.assertEqual(probe.stdout.strip(), "270,480")
+            self.assertTrue(build_clip_zip(folder))
+            with zipfile.ZipFile(folder / "kit.zip") as packed:
+                kit_names = set(packed.namelist())
+            self.assertIn("video.mp4", kit_names)
+            self.assertIn("cover.jpg", kit_names)
+            self.assertIn("copy.txt", kit_names)
+            podcast_folder = root / "podcast"
+            podcast = render_short(
+                source,
+                podcast_folder / "video.mp4",
+                start=0.2,
+                end=2.4,
+                src_w=640,
+                src_h=360,
+                has_audio=True,
+                track=[],
+                captions=[],
+                out_w=270,
+                out_h=480,
+                threads=1,
+                layout="podcast",
+            )
+            self.assertEqual(podcast["framing"], "podcast")
+            podcast_probe = subprocess.run(
+                [
+                    "ffprobe", "-v", "error", "-select_streams", "v:0",
+                    "-show_entries", "stream=width,height", "-of", "csv=p=0",
+                    str(podcast_folder / "video.mp4"),
+                ],
+                check=True, capture_output=True, text=True, timeout=30,
+            )
+            self.assertEqual(podcast_probe.stdout.strip(), "270,480")
 
 
 class DouyinJobPackagingTests(unittest.TestCase):
@@ -352,9 +393,12 @@ class DouyinJobPackagingTests(unittest.TestCase):
                     ],
                 }
 
+                seen = {}
+
                 def fake_render(source, dest, **kwargs):
                     dest.parent.mkdir(parents=True, exist_ok=True)
                     dest.write_bytes(b"fake-mp4")
+                    seen["layout"] = kwargs.get("layout")
                     return {"framing": "subject" if kwargs.get("track") else "center", "captions_burned": bool(kwargs.get("captions")), "width": 1080, "height": 1920}
 
                 def fake_cover(video, dest, **kwargs):
@@ -381,9 +425,13 @@ class DouyinJobPackagingTests(unittest.TestCase):
         shorts = saved["result"]["shorts"]
         self.assertEqual([item["title"] for item in shorts], ["甲", "乙"])
         self.assertEqual(shorts[0]["framing"], "subject")
+        self.assertEqual(shorts[0]["layout"], "interview")
+        self.assertEqual(seen["layout"], "interview")
         self.assertTrue(shorts[0]["captions_burned"])
         self.assertTrue(shorts[0]["file_url"].endswith("/shorts/1/file"))
         self.assertTrue(shorts[0]["cover_url"].endswith("/shorts/1/cover"))
+        self.assertTrue(shorts[0]["kit_url"].endswith("/shorts/1/pack"))
+        self.assertEqual(saved["result"]["layout"], "interview")
         self.assertTrue(saved["result"]["pack_url"].endswith("/pack"))
         self.assertEqual(saved["input"]["video_id"], 7)
 
@@ -420,14 +468,14 @@ class DouyinRouteTests(unittest.TestCase):
     def test_produce_job_is_tracked_as_edit_douyin(self):
         from app.jobs import update
 
-        def run(job_id, video_id, instruction, max_clips):
+        def run(job_id, video_id, instruction, max_clips, layout="interview"):
             update(
                 job_id,
                 status="success",
                 progress=100,
                 stage="done",
                 label="抖音成片已生成",
-                result={"video_id": video_id, "shorts": [{"index": 1, "title": "一条"}], "pack_url": ""},
+                result={"video_id": video_id, "layout": layout, "shorts": [{"index": 1, "title": "一条"}], "pack_url": ""},
             )
 
         with patch("app.routers.edit.fetch", return_value={"id": 1, "title": "原片"}), \
@@ -443,7 +491,16 @@ class DouyinRouteTests(unittest.TestCase):
         self.assertEqual(body["status"], "success")
         self.assertEqual(body["input"]["video_id"], 1)
         self.assertEqual(body["input"]["max_clips"], 4)
+        self.assertEqual(body["input"]["layout"], "interview")
+        self.assertEqual(body["result"]["layout"], "interview")
         self.assertEqual(body["result"]["shorts"][0]["title"], "一条")
+
+        with patch("app.routers.edit.fetch", return_value={"id": 1, "title": "原片"}), \
+                patch("app.routers.edit.produce_douyin", side_effect=run):
+            podcast = self.client.post("/api/edit/douyin", json={"video_id": 1, "layout": "podcast"})
+        self.assertEqual(podcast.status_code, 200, podcast.text)
+        self.assertEqual(podcast.json()["input"]["layout"], "podcast")
+        self.assertEqual(podcast.json()["result"]["layout"], "podcast")
 
 
 if __name__ == "__main__":

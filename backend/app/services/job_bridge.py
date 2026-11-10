@@ -41,6 +41,7 @@ def job_as_task(job: dict, *, with_logs: bool = False) -> dict:
         "error": error,
         "created_at": job.get("created_at") or "",
         "finished_at": finished,
+        "stage": job.get("stage") or "",
     }
     if with_logs:
         item["logs"] = logs[-500:]

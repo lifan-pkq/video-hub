@@ -87,19 +87,29 @@ def _encode(
 ) -> None:
     preroll = min(2.0, max(0.0, start))
     seek = max(0.0, start - preroll)
+    complex_graph = ";" in graph
     args = [
         "-ss", f"{seek:.3f}",
         "-i", str(source),
         "-ss", f"{preroll:.3f}",
         "-t", f"{max(0.3, duration):.3f}",
-        "-vf", graph,
+    ]
+    if complex_graph:
+        args.extend(["-filter_complex", graph])
+        if "[vout]" in graph:
+            args.extend(["-map", "[vout]"])
+        if has_audio:
+            args.extend(["-map", "0:a:0"])
+    else:
+        args.extend(["-vf", graph])
+    args.extend([
         "-c:v", "libx264",
         "-preset", "veryfast",
         "-crf", "23",
         "-threads", str(max(1, threads)),
         "-pix_fmt", "yuv420p",
         "-movflags", "+faststart",
-    ]
+    ])
     if has_audio:
         args.extend(["-c:a", "aac", "-b:a", "128k", "-ac", "2"])
     else:
@@ -123,10 +133,15 @@ def render_short(
     out_w: int,
     out_h: int,
     threads: int = 1,
+    layout: str = "interview",
     job_id: str | None = None,
     should_cancel=None,
 ) -> dict:
-    """裁成竖屏并尽量烧上字幕。字幕滤镜失败时保留无字幕成片，由调用方记警告。"""
+    """裁成竖屏并尽量烧上字幕。字幕滤镜失败时保留无字幕成片，由调用方记警告。
+
+    layout=interview 跟着说话人裁切。layout=podcast 把完整画面居中放进 9:16，
+    背景用模糊铺满，不再跟说话人裁切。
+    """
     dest.parent.mkdir(parents=True, exist_ok=True)
     duration = max(0.3, float(end) - float(start))
     font_name, font_path = caption_font()
@@ -135,18 +150,23 @@ def render_short(
     if captions:
         ass_path.write_text(build_ass(captions, out_w, out_h, font_name), encoding="utf-8")
 
+    portrait = "podcast" if layout == "podcast" else "interview"
+
     def graph_for(points: list[dict], with_subs: bool) -> tuple[str, str]:
-        video_filter, mode = vertical_filter(src_w, src_h, points, out_w, out_h)
+        video_filter, mode = vertical_filter(src_w, src_h, points, out_w, out_h, portrait)
         if with_subs and captions and ass_path.is_file():
             fonts = f":fontsdir='{filter_path(font_path.parent)}'" if font_path else ""
             video_filter += f",subtitles='{filter_path(ass_path)}'{fonts}"
+        if mode == "podcast":
+            video_filter += "[vout]"
         return video_filter, mode
 
-    attempts = [track]
-    if len(track) > 1:
-        attempts.append([track[len(track) // 2]])
-    if track:
-        attempts.append([])
+    attempts: list[list[dict]] = [[]] if portrait == "podcast" else [track]
+    if portrait != "podcast":
+        if len(track) > 1:
+            attempts.append([track[len(track) // 2]])
+        if track:
+            attempts.append([])
     last_error: EngineError | None = None
     mode = "center"
     partial = dest.with_suffix(".part.mp4")
@@ -209,6 +229,26 @@ def write_copy_files(folder: Path, clip: dict) -> None:
     if payload["hook"]:
         text += f"钩子：{payload['hook']}\n"
     (folder / "copy.txt").write_text(text, encoding="utf-8")
+
+
+def build_clip_zip(folder: Path) -> bool:
+    """单条发布包：视频、封面、文案。缺视频就跳过，不让整次出片失败。"""
+    video = folder / "video.mp4"
+    if not video.is_file():
+        return False
+    dest = folder / "kit.zip"
+    temporary = folder / "kit.part.zip"
+    try:
+        with zipfile.ZipFile(temporary, "w", compression=zipfile.ZIP_STORED) as archive:
+            for name in ("video.mp4", "cover.jpg", "copy.txt"):
+                path = folder / name
+                if path.is_file():
+                    archive.write(path, name)
+        temporary.replace(dest)
+    except OSError:
+        temporary.unlink(missing_ok=True)
+        return False
+    return dest.is_file() and dest.stat().st_size > 0
 
 
 def build_pack_zip(root: Path, shorts: list[dict]) -> Path:

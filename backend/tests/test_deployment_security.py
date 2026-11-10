@@ -49,6 +49,10 @@ class HostDeploymentTests(unittest.TestCase):
     def test_host_routes_and_websocket_are_configured(self):
         config = (ROOT / "deploy/nginx-host.conf").read_text()
         self.assertIn("location /api/", config)
+        self.assertIn("video-hub-guard.conf", config)
+        listen_lines = [line.strip() for line in config.splitlines() if line.strip().startswith("listen ")]
+        self.assertTrue(listen_lines)
+        self.assertTrue(all("default_server" not in line for line in listen_lines))
         self.assertNotIn("location /narrato/", config)
         self.assertNotIn("location /preview/", config)
         self.assertIn("$http_upgrade", config)

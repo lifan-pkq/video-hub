@@ -31,7 +31,7 @@ export const NAV_ITEMS: NavItem[] = [
   { to: '/images', label: '图片素材库', shortLabel: '图片', icon: ImageSquare, keywords: 'images library 图片 素材 参考图', group: '素材' },
   { to: '/download', label: '视频下载与灵感', shortLabel: '下载', icon: DownloadSimple, keywords: 'download 下载 yt-dlp 灵感 链接 笔记', group: '获取' },
   { to: '/record', label: '直播录制', shortLabel: '录制', icon: Broadcast, keywords: 'record live 录制 直播 分段', group: '获取' },
-  { to: '/edit', label: '智能剪辑', shortLabel: '剪辑', icon: FilmSlate, keywords: 'edit editor 智能剪辑 抖音 竖屏 一键 字幕 封面 时间线', group: '制作' },
+  { to: '/edit', label: '智能剪辑', shortLabel: '剪辑', icon: FilmSlate, keywords: 'edit editor 智能剪辑 一键出片 抖音 竖屏 字幕 封面', group: '制作' },
   { to: '/ai-media', label: 'AI 素材', shortLabel: 'AI 素材', icon: Sparkle, keywords: 'ai image video 图片 视频 生成 人物档案 key', group: '制作' },
   { to: '/ai-drama', label: 'AI 短剧', shortLabel: '短剧', icon: FilmStrip, keywords: 'ai drama 短剧 小说 分集 分镜 剧集 锚定图 生成', group: '制作' },
   { to: '/export', label: '封面与导出', shortLabel: '导出', icon: Package, keywords: 'export 导出 封面 标题 多画幅 字幕 套装', group: '交付' },

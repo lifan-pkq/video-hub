@@ -162,6 +162,10 @@ export default function EditResultPage() {
 
     fetchTask(taskId)
       .then((loaded) => {
+        if (loaded.kind === 'edit.douyin') {
+          navigate(`/edit/douyin/${encodeURIComponent(loaded.id)}`, { replace: true })
+          return
+        }
         const state = location.state as { title?: string; highlightPrompt?: string } | null
         if (state?.highlightPrompt) setHighlightPrompt(state.highlightPrompt)
         const analyzed = (loaded.result?.clips || []) as Array<{ video_id: number; suggestions?: Suggestion[] }>
@@ -511,8 +515,8 @@ export default function EditResultPage() {
         <Button variant="ghost" icon={<ArrowLeft size={16} />} onClick={() => navigate('/edit')}>返回智能剪辑</Button>
       </div>
       <PageHeader
-        title="智能剪辑"
-        desc="手动时间线：分析切点、删废片、拼成一条成片。抖音多条竖屏在智能剪辑首页一键生成。"
+        title="手动时间线"
+        desc="这是以前的单条时间线，用来打开旧的切点任务。抖音短视频请回到智能剪辑，一键出片。"
         extra={<span className="tnum text-xs text-ink-3">原片 {formatTime(total)} · 成片 {formatTime(kept)} · {planSource}</span>}
       />
       {banner ? (

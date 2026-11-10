@@ -1,66 +1,24 @@
-import { useCallback, useEffect, useState } from 'react'
-import { useLocation, useNavigate } from 'react-router-dom'
-import { ClockCounterClockwise, Plus, Scissors, Stop } from '@phosphor-icons/react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 import {
-  analyzeEdit,
   cancelJob,
   editTaskPath,
   errorMessage,
   fetchTasks,
   fetchVideos,
+  formatRelative,
   startDouyinProduce,
+  type DouyinLayout,
   type TaskSummary,
   type Video,
 } from '../api'
-import { Alert, Button, PageHeader, Panel, Progress, Select, TextArea, toast } from '../ui'
+import { clock, historyLabel, taskSourceTitle } from '../features/edit/studio'
+import { toast } from '../ui'
 
-const KIND_LABEL: Record<string, string> = {
-  'edit.douyin': '抖音成片',
-  'edit.analyze': '分析切点',
-  'edit.export': '导出成片',
-}
-
-const STATUS_LABEL: Record<string, string> = {
-  pending: '排队中',
-  running: '处理中',
-  success: '已完成',
-  partial: '部分完成',
-  failed: '已失败',
-  cancelled: '已取消',
-}
-
-const CLIP_OPTIONS = [
-  { value: '0', label: '自动（长片最多约 10 条）' },
-  { value: '1', label: '1 条' },
-  { value: '3', label: '最多 3 条' },
-  { value: '5', label: '最多 5 条' },
-  { value: '10', label: '最多 10 条' },
+const LAYOUTS: Array<{ id: DouyinLayout; title: string; detail: string }> = [
+  { id: 'interview', title: '访谈式', detail: '跟着说话人裁成 9:16' },
+  { id: 'podcast', title: '满屏播客式', detail: '完整画面，背景铺满' },
 ]
-
-function StatusTag({ status }: { status: string }) {
-  const color = status === 'success'
-    ? 'text-success bg-success/10'
-    : status === 'failed'
-      ? 'text-danger bg-danger/10'
-      : status === 'running'
-        ? 'text-accent bg-accent/10'
-        : 'text-ink-3 bg-fill-deep'
-  return <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs ${color}`}>{STATUS_LABEL[status] || status}</span>
-}
-
-function formatTime(seconds: number): string {
-  const safe = Number.isFinite(seconds) ? Math.max(0, seconds) : 0
-  const minutes = Math.floor(safe / 60)
-  const rest = safe - minutes * 60
-  return `${String(minutes).padStart(2, '0')}:${rest.toFixed(1).padStart(4, '0')}`
-}
-
-function taskVideoLabel(task: TaskSummary, videos: Video[]): string {
-  const single = task.input?.video_id
-  if (single) return videos.find((video) => video.id === single)?.title || `#${single}`
-  const ids = task.input?.video_ids || []
-  return ids.map((id) => videos.find((video) => video.id === id)?.title || `#${id}`).join('、') || task.title
-}
 
 export default function EditPage() {
   const navigate = useNavigate()
@@ -69,14 +27,15 @@ export default function EditPage() {
   const [videos, setVideos] = useState<Video[]>([])
   const [loadError, setLoadError] = useState('')
   const [selectedVideoId, setSelectedVideoId] = useState(0)
+  const [query, setQuery] = useState('')
   const [instruction, setInstruction] = useState('')
-  const [maxClips, setMaxClips] = useState('0')
+  const [layout, setLayout] = useState<DouyinLayout>('interview')
   const [starting, setStarting] = useState(false)
 
   const load = useCallback(async () => {
     try {
       const [taskList, videoList] = await Promise.all([fetchTasks(), fetchVideos()])
-      setTasks(taskList.filter((task) => (task.kind || '').startsWith('edit.')))
+      setTasks(taskList.filter((task) => task.kind === 'edit.douyin'))
       setVideos(videoList)
       setLoadError('')
     } catch (error) {
@@ -86,7 +45,7 @@ export default function EditPage() {
 
   useEffect(() => {
     void load()
-    const timer = window.setInterval(load, 4000)
+    const timer = window.setInterval(() => { void load() }, 4000)
     return () => window.clearInterval(timer)
   }, [load])
 
@@ -96,33 +55,23 @@ export default function EditPage() {
     if (first) setSelectedVideoId(first)
   }, [location.state])
 
+  const selected = videos.find((video) => video.id === selectedVideoId) || null
+  const needle = query.trim().toLowerCase()
+  const visible = useMemo(
+    () => videos.filter((video) => !needle || video.title.toLowerCase().includes(needle)),
+    [needle, videos],
+  )
+
   async function startProduce() {
-    if (!selectedVideoId) {
-      toast.error('先选一条素材库里的原片')
+    if (!selectedVideoId || starting) {
+      if (!selectedVideoId) toast.error('先选一条素材库里的原片')
       return
     }
     setStarting(true)
     try {
-      const job = await startDouyinProduce(selectedVideoId, instruction.trim(), Number(maxClips) || 0)
+      const job = await startDouyinProduce(selectedVideoId, instruction.trim(), 0, layout)
       toast.success('已开始生成抖音短视频')
       navigate(editTaskPath(job))
-    } catch (error) {
-      toast.error(errorMessage(error))
-    } finally {
-      setStarting(false)
-    }
-  }
-
-  async function startAnalyze() {
-    if (!selectedVideoId) {
-      toast.error('先选一条原片')
-      return
-    }
-    setStarting(true)
-    try {
-      const job = await analyzeEdit([selectedVideoId])
-      toast.success('已开始分析切点')
-      navigate(`/edit/${job.id}`)
     } catch (error) {
       toast.error(errorMessage(error))
     } finally {
@@ -140,117 +89,157 @@ export default function EditPage() {
     }
   }
 
-  const selectedVideo = videos.find((video) => video.id === selectedVideoId) || null
-
   return (
-    <div>
-      <PageHeader
-        title="智能剪辑"
-        desc="选一条已经在素材库里的原片，转写后抽出多条抖音竖屏短视频。带字幕、封面和文案，你再自己发布。"
-      />
+    <div className="studio">
+      <header className="studio-hero">
+        <p className="studio-kicker">一键出片</p>
+        <h1 className="studio-title">一条长片，<br />一组抖音短视频。</h1>
+        <p className="studio-lead">
+          从素材库选访谈、直播回放或口播。转写、选段、渲染，交出竖屏成片、封面和文案。发布你自己来。
+        </p>
+      </header>
 
-      {loadError && <Alert type="error" className="mb-4">{loadError}</Alert>}
+      {loadError && <p className="studio-error">{loadError}</p>}
 
-      <div className="grid items-start gap-6 lg:grid-cols-[360px_minmax(0,1fr)]">
-        <div className="flex flex-col gap-3">
-          <h2 className="section-title">剪辑任务（{tasks.length}）</h2>
-          {tasks.length === 0 && <p className="text-sm text-ink-3">还没有剪辑任务。右边选一条原片，就可以生成抖音短视频。</p>}
-          {tasks.map((task) => (
-            <Panel key={task.id} pad="sm" className="cursor-pointer hover:border-accent">
-              <div
-                role="button"
-                tabIndex={0}
-                onClick={() => navigate(editTaskPath(task))}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter' || event.key === ' ') {
-                    event.preventDefault()
-                    navigate(editTaskPath(task))
-                  }
-                }}
-              >
-                <div className="flex items-center gap-2">
-                  <Scissors size={18} className="shrink-0 text-accent" />
-                  <strong className="min-w-0 flex-1 truncate text-sm">{KIND_LABEL[task.kind || ''] || task.title || '剪辑任务'}</strong>
-                  <span className="shrink-0"><StatusTag status={task.status} /></span>
-                </div>
-                <p className="mt-1.5 truncate text-xs text-ink-3">
-                  {taskVideoLabel(task, videos)} · {task.created_at}
-                </p>
-                <div className="mt-2.5 flex items-center gap-2">
-                  <div className="min-w-0 flex-1">
-                    <Progress percent={(task.progress || 0) / 100} status={task.status === 'failed' ? 'error' : task.status === 'success' ? 'success' : 'normal'} />
-                  </div>
-                  <span className="shrink-0 text-xs text-ink-3">{Math.round(task.progress || 0)}%</span>
-                </div>
-                {(task.status === 'running' || task.status === 'pending') && (
-                  <div className="mt-2.5 flex items-center gap-1.5" onClick={(event) => event.stopPropagation()}>
-                    <Button size="sm" variant="ghost" icon={<Stop size={14} />} onClick={() => void cancel(task.id)}>取消</Button>
-                  </div>
-                )}
-                {task.error?.message && (
-                  <p className="mt-2 truncate text-xs text-danger" title={task.error.message}>{task.error.message}</p>
-                )}
+      <section className="studio-board" aria-label="选择原片并生成">
+        <div className="studio-source">
+          <div className="studio-reel-head">
+            <div>
+              <h2>原片</h2>
+              <p>素材库 · {videos.length}</p>
+            </div>
+            {videos.length > 0 && (
+              <input
+                className="studio-search"
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="搜索标题"
+                aria-label="搜索原片"
+                type="search"
+              />
+            )}
+          </div>
+
+          {videos.length === 0 ? (
+            <div className="studio-empty">
+              <p>库里还没有原片。</p>
+              <div className="studio-links">
+                <Link to="/videos">去素材库</Link>
+                <Link to="/download">去下载</Link>
+                <Link to="/record">去录制</Link>
               </div>
-            </Panel>
-          ))}
+            </div>
+          ) : visible.length === 0 ? (
+            <p className="studio-empty">没有标题匹配的原片。</p>
+          ) : (
+            <div className="studio-reel" role="listbox" aria-label="素材库原片">
+              {visible.map((video) => {
+                const on = video.id === selectedVideoId
+                return (
+                  <button
+                    key={video.id}
+                    type="button"
+                    role="option"
+                    aria-selected={on}
+                    className={`studio-frame ${on ? 'is-on' : ''}`}
+                    onClick={() => setSelectedVideoId(video.id)}
+                  >
+                    <span className="studio-still">
+                      {video.cover_url ? <img src={video.cover_url} alt="" /> : <b>{video.title.slice(0, 1)}</b>}
+                      <i className="tnum">{clock(video.duration)}</i>
+                    </span>
+                    <strong>{video.title}</strong>
+                  </button>
+                )
+              })}
+            </div>
+          )}
         </div>
 
-        <Panel title="生成抖音短视频">
-          <div className="flex flex-col gap-4">
-            <div>
-              <p className="mb-2 text-xs text-ink-3">选一条原片（{videos.length} 条）</p>
-              {videos.length === 0 ? (
-                <p className="text-sm text-ink-3">库是空的。先去素材库上传、下载或录一段，再回来生成。</p>
-              ) : (
-                <div className="max-h-64 space-y-1 overflow-auto">
-                  {videos.map((video) => (
-                    <button
-                      key={video.id}
-                      type="button"
-                      onClick={() => setSelectedVideoId(video.id)}
-                      className={`flex w-full items-center gap-2 rounded-lg border px-3 py-2 text-left ${selectedVideoId === video.id ? 'border-accent bg-accent/5' : 'border-line-soft hover:bg-fill'}`}
-                    >
-                      <span className="min-w-0 flex-1 truncate text-[13px] text-ink-1">{video.title}</span>
-                      <span className="tnum shrink-0 text-[11px] text-ink-4">{formatTime(Number(video.duration || 0))}</span>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-            <label className="text-xs text-ink-3">想留什么样的片段（可选）
-              <TextArea value={instruction} onChange={setInstruction} rows={3} placeholder="例如：只留观点冲突和金句，不要寒暄和广告" className="mt-1" />
-            </label>
-            <label className="text-xs text-ink-3">条数
-              <div className="mt-1">
-                <Select value={maxClips} onChange={setMaxClips} options={CLIP_OPTIONS} />
-              </div>
-            </label>
-            <div className="flex flex-wrap items-center gap-2">
-              <Button variant="primary" icon={<Scissors size={15} />} disabled={starting || !selectedVideoId} onClick={() => void startProduce()}>
-                {starting ? '正在提交…' : '生成抖音短视频'}
-              </Button>
-            </div>
-            <p className="text-xs text-ink-4">
-              转写在后端里按需进行：默认本机 faster-whisper，长音频按 300 秒分段。再让模型挑出适合竖屏 9:16 的几条口播。每条带烧录字幕、封面、标题、话题和简介。不会登录或发布到抖音。
-              {selectedVideo ? ` 当前选中：${selectedVideo.title}` : ''}
-            </p>
-            <details className="rounded-lg border border-line-soft px-3 py-2 text-sm">
-              <summary className="cursor-pointer text-ink-2">高级：手动切点和单条时间线</summary>
-              <p className="mt-2 text-xs text-ink-4">适合自己删静音、广告，或把多段拼成一条成片。</p>
-              <div className="mt-3 flex flex-wrap gap-2">
-                <Button variant="secondary" icon={<Scissors size={15} />} disabled={starting || !selectedVideoId} onClick={() => void startAnalyze()}>
-                  分析切点
-                </Button>
-                <Button variant="secondary" icon={<Plus size={15} />} onClick={() => navigate('/edit/new')}>空白时间线</Button>
-              </div>
-            </details>
+        <form
+          className="studio-compose"
+          onSubmit={(event) => {
+            event.preventDefault()
+            void startProduce()
+          }}
+        >
+          <div className="studio-feature" aria-hidden="true">
+            {selected?.cover_url
+              ? <img src={selected.cover_url} alt="" />
+              : selected
+                ? <b>{selected.title.slice(0, 1)}</b>
+                : null}
           </div>
-        </Panel>
-      </div>
+          <div className="studio-picked">
+            <h2>{selected ? selected.title : '先选一条原片'}</h2>
+            {selected && <span className="tnum">{clock(selected.duration)}</span>}
+          </div>
+          <input
+            className="studio-prompt"
+            value={instruction}
+            maxLength={400}
+            onChange={(event) => setInstruction(event.target.value)}
+            placeholder="想留什么，可选。例如只要观点冲突和金句"
+            aria-label="想留什么样的片段"
+          />
+          <div className="studio-layouts" role="radiogroup" aria-label="竖屏版式">
+            {LAYOUTS.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                role="radio"
+                aria-checked={layout === item.id}
+                className={`studio-layout ${layout === item.id ? 'is-on' : ''}`}
+                onClick={() => setLayout(item.id)}
+              >
+                <strong>{item.title}</strong>
+                <span>{item.detail}</span>
+              </button>
+            ))}
+          </div>
+          <button className="studio-cta" type="submit" disabled={starting || !selectedVideoId}>
+            {starting ? '正在提交…' : '生成抖音短视频'}
+          </button>
+          <p className="studio-fine">
+            最多大约 10 条，先出更值得发的。转写在本机按需进行。不会登录抖音，也不会自动发布。
+          </p>
+        </form>
+      </section>
 
-      <p className="mt-4 flex items-center gap-1.5 text-xs text-ink-4">
-        <ClockCounterClockwise size={14} /> 任务也会出现在任务中心。点开可以预览、下载，或把成片送进素材库和封面导出。
-      </p>
+      <section className="studio-history" aria-label="出片记录">
+        <div className="studio-reel-head">
+          <div>
+            <h2>出片记录</h2>
+            <p>{tasks.length ? `${tasks.length} 次` : '还没有成片'}</p>
+          </div>
+        </div>
+        {tasks.length === 0 ? (
+          <p className="studio-empty">选好原片，点一次生成。完成后可以在这里回来看。</p>
+        ) : (
+          <div className="studio-reel studio-reel-tall">
+            {tasks.map((task) => {
+              const cover = task.result?.shorts?.find((short) => short.cover_url)?.cover_url
+              const running = task.status === 'pending' || task.status === 'running'
+              const title = taskSourceTitle(task, videos)
+              return (
+                <article key={task.id} className="studio-memory">
+                  <button type="button" className="studio-frame" onClick={() => navigate(editTaskPath(task))}>
+                    <span className={`studio-still studio-still-tall ${running ? 'is-live' : ''}`}>
+                      {cover ? <img src={cover} alt="" /> : <b className="tnum">{Math.round(task.progress || 0)}</b>}
+                      <i>{historyLabel(task)}</i>
+                    </span>
+                    <strong>{title}</strong>
+                    <em>{formatRelative(task.created_at)}</em>
+                  </button>
+                  {running && (
+                    <button type="button" className="studio-quiet" onClick={() => void cancel(task.id)}>取消</button>
+                  )}
+                </article>
+              )
+            })}
+          </div>
+        )}
+      </section>
     </div>
   )
 }

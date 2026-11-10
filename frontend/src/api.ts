@@ -65,7 +65,16 @@ export interface Task {
   title: string
   status: TaskStatus
   progress: number
-  input?: EditTaskInput & { task_id?: string; kind?: string; mode?: string; video_id?: number }
+  stage?: string
+  input?: EditTaskInput & {
+    task_id?: string
+    kind?: string
+    mode?: string
+    video_id?: number
+    instruction?: string
+    max_clips?: number
+    layout?: string
+  }
   result: {
     video?: Video
     videos?: Video[]
@@ -79,6 +88,7 @@ export interface Task {
     pack_url?: string
     budget?: number
     video_id?: number
+    layout?: string
     shorts?: DouyinShort[]
   } | null
   error?: TaskError | null
@@ -524,10 +534,13 @@ export interface DouyinShort {
   start: number
   end: number
   duration: number
+  score?: number | null
+  layout?: string
   framing?: string
   captions_burned?: boolean
   file_url: string
   cover_url?: string
+  kit_url?: string
   video_id?: number | null
 }
 
@@ -632,12 +645,20 @@ export async function cancelJob(id: string): Promise<EditJob> {
   }
 }
 
-export async function startDouyinProduce(videoId: number, instruction = '', maxClips = 0): Promise<EditJob> {
+export type DouyinLayout = 'interview' | 'podcast'
+
+export async function startDouyinProduce(
+  videoId: number,
+  instruction = '',
+  maxClips = 0,
+  layout: DouyinLayout = 'interview',
+): Promise<EditJob> {
   try {
     const { data } = await http.post<EditJob>('/edit/douyin', {
       video_id: videoId,
       instruction,
       max_clips: maxClips,
+      layout,
     }, { timeout: 0 })
     return data
   } catch (error) {

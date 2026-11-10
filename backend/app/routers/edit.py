@@ -75,6 +75,7 @@ class DouyinProduceBody(BaseModel):
     video_id: int
     instruction: str = ""
     max_clips: int = Field(default=0, ge=0, le=10)
+    layout: Literal["interview", "podcast"] = "interview"
 
 
 class DouyinLibraryBody(BaseModel):
@@ -89,11 +90,18 @@ def douyin_produce(body: DouyinProduceBody):
     job = create(
         "edit.douyin",
         "抖音成片",
-        {"video_id": body.video_id, "instruction": instruction, "max_clips": body.max_clips},
+        {
+            "video_id": body.video_id,
+            "instruction": instruction,
+            "max_clips": body.max_clips,
+            "layout": body.layout,
+        },
     )
     return submit(
         job,
-        lambda job_id: produce_douyin(job_id, body.video_id, instruction, body.max_clips),
+        lambda job_id: produce_douyin(
+            job_id, body.video_id, instruction, body.max_clips, layout=body.layout,
+        ),
     )
 
 
@@ -112,6 +120,16 @@ def douyin_short_video(job_id: str, index: int, download: int = 0):
 def douyin_short_cover(job_id: str, index: int):
     path = short_file(job_id, index, cover=True)
     return FileResponse(path, media_type="image/jpeg", filename=download_name(job_id, index, cover=True))
+
+
+@router.get("/douyin/{job_id}/shorts/{index}/pack")
+def douyin_short_pack(job_id: str, index: int):
+    path = short_file(job_id, index, kit=True)
+    return FileResponse(
+        path,
+        media_type="application/zip",
+        filename=download_name(job_id, index, kit=True),
+    )
 
 
 @router.get("/douyin/{job_id}/pack")

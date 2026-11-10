@@ -14,4 +14,5 @@ class EditRouteSurfaceTests(unittest.TestCase):
         self.assertIn("/api/edit/concat", paths)
         self.assertIn("/api/edit/douyin", paths)
         self.assertIn("/api/edit/douyin/{job_id}/pack", paths)
+        self.assertIn("/api/edit/douyin/{job_id}/shorts/{index}/pack", paths)
         self.assertIn("/api/edit/douyin/{job_id}/library", paths)

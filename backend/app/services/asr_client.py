@@ -8,7 +8,13 @@ from app.services.ai_edit import AIResponseError, AIServiceError
 
 
 def transcribe_remote(video_path: Path, url: str, log=print) -> list[dict]:
-    """通过 OpenAI 兼容接口转写，返回秒级 start/end/text segments。"""
+    """通过 OpenAI 兼容接口转写，返回秒级 start/end/text segments。
+
+    注意：requests 的 multipart 编码会把整个文件读进内存，所以调用方
+    必须只传小音频文件（ai_edit._transcribe_shared 会先抽音频再按 300s
+    分段），不要直接传原视频。本函数不改成流式上传（那是库行为）。
+    超时 (10, 1800)：与解说引擎的长转写任务保持一致，不会无限挂住。
+    """
     try:
         with video_path.open("rb") as media:
             response = requests.post(

@@ -9,9 +9,24 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from app.services import ai_images, ai_media
-from app.services.ai_pool import AI_POOL
+from app.services.ai_pool import AI_POOL, VISION_POOL
 
 router = APIRouter(prefix="/api/ai", tags=["ai"])
+
+
+def _media_error(exc: ai_media.MediaAIError) -> HTTPException:
+    text = str(exc)
+    if "没有配置 AI API Key" in text:
+        return HTTPException(status_code=409, detail={
+            "code": "ai_keys_missing",
+            "message": "没有配置可用的 AI Key，图片和视频都无法生成。",
+            "action": "在服务器环境变量写入 VIDEO_HUB_AI_API_KEY 或 AGNES_API_KEY 后重启后端。不要把密钥填进页面。",
+        })
+    return HTTPException(status_code=400, detail={
+        "code": "ai_media_failed",
+        "message": text,
+        "action": "按提示修改描述、档案或参考图后再提交。",
+    })
 
 
 class ImageBody(BaseModel):
@@ -19,12 +34,9 @@ class ImageBody(BaseModel):
     size: str = "2K"
     ratio: str = "16:9"
     images: list[str] = []
-
-
-class SaveImageBody(BaseModel):
-    name: str
-    title: str = ""
-    prompt: str = ""
+    character_profile_id: str = ""
+    scene_profile_id: str = ""
+    style_profile_id: str = ""
 
 
 class SaveImageBody(BaseModel):
@@ -41,15 +53,26 @@ class VideoBody(BaseModel):
     last_frame: str = ""
     images: list[str] = []
     save_to_library: bool = True
-    first_frame: str = ""
-    last_frame: str = ""
-    images: list[str] = []
-    save_to_library: bool = True
+    character_profile_id: str = ""
+    scene_profile_id: str = ""
+    style_profile_id: str = ""
+    transition: str = ""
+
+
+class VideoBatchBody(BaseModel):
+    shots: list[dict]
+    character_profile_id: str = ""
+    scene_profile_id: str = ""
+    style_profile_id: str = ""
+    aspect_ratio: str = "16:9"
 
 
 @router.get("/pool")
 def pool_status():
-    return AI_POOL.status()
+    # 文本池为主；附带视觉池状态，便于核对解说抽帧是否在轮换 Key
+    payload = AI_POOL.status()
+    payload["vision"] = VISION_POOL.status()
+    return payload
 
 
 @router.get("/images")
@@ -128,9 +151,14 @@ def get_reference(name: str):
 @router.post("/media/images")
 def generate_image(body: ImageBody):
     try:
-        return ai_media.generate_image(body.prompt, body.size, body.ratio, body.images)
+        return ai_media.generate_image(
+            body.prompt, body.size, body.ratio, body.images,
+            character_profile_id=body.character_profile_id,
+            scene_profile_id=body.scene_profile_id,
+            style_profile_id=body.style_profile_id,
+        )
     except ai_media.MediaAIError as exc:
-        raise HTTPException(400, str(exc)) from exc
+        raise _media_error(exc) from exc
 
 
 @router.get("/media/images/{name}")
@@ -155,9 +183,26 @@ def generate_video(body: VideoBody):
             last_frame=body.last_frame,
             images=body.images,
             save_to_library=body.save_to_library,
+            character_profile_id=body.character_profile_id,
+            scene_profile_id=body.scene_profile_id,
+            style_profile_id=body.style_profile_id,
+            transition=body.transition,
         )
     except ai_media.MediaAIError as exc:
-        raise HTTPException(400, str(exc)) from exc
+        raise _media_error(exc) from exc
+
+
+@router.post("/media/batches")
+def generate_video_batch(body: VideoBatchBody):
+    try:
+        return ai_media.start_video_batch(body.shots, body.model_dump(exclude={"shots"}))
+    except ai_media.MediaAIError as exc:
+        raise _media_error(exc) from exc
+
+
+@router.get("/media/batches/{batch_id}")
+def get_video_batch(batch_id: str):
+    return ai_media.get_video_batch(batch_id)
 
 
 @router.get("/media/videos/{name}")

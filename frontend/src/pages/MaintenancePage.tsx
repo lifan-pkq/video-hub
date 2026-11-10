@@ -11,11 +11,15 @@ import {
   cleanMaintenanceLogs,
   clearAllVideos,
   errorMessage,
+  fetchHealth,
   fetchMaintenanceStatus,
+  fetchSystemStatus,
   formatSize,
   saveMaintenanceSettings,
+  type HealthReport,
   type MaintenanceSettings,
   type MaintenanceStatus,
+  type SystemStatus,
 } from '../api'
 import {
   Alert,
@@ -42,9 +46,21 @@ function percent(used: number, total: number): number {
   return total > 0 ? Math.min(1, used / total) : 0
 }
 
+function safeResult(value: MaintenanceSettings['last_result']): string {
+  if (!value) return ''
+  if (typeof value === 'string') return value.slice(0, 500)
+  const hidden = /key|token|secret|password|cookie|authorization/i
+  return Object.entries(value)
+    .filter(([key]) => !hidden.test(key))
+    .map(([key, item]) => `${key}: ${typeof item === 'object' ? JSON.stringify(item) : String(item)}`)
+    .join('\n') || '上次清理没有可展示的明细'
+}
+
 export default function MaintenancePage() {
   const [status, setStatus] = useState<MaintenanceStatus | null>(null)
   const [settings, setSettings] = useState<MaintenanceSettings | null>(null)
+  const [system, setSystem] = useState<SystemStatus | null>(null)
+  const [health, setHealth] = useState<HealthReport | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [cleaning, setCleaning] = useState<'logs' | 'videos' | null>(null)
@@ -52,9 +68,15 @@ export default function MaintenancePage() {
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const data = await fetchMaintenanceStatus()
+      const [data, systemStatus, healthStatus] = await Promise.all([
+        fetchMaintenanceStatus(),
+        fetchSystemStatus().catch(() => null),
+        fetchHealth().catch(() => null),
+      ])
       setStatus(data)
       setSettings(data.settings)
+      setSystem(systemStatus)
+      setHealth(healthStatus)
     } catch (e) {
       toast.error('读取维护状态失败：' + errorMessage(e))
     } finally {
@@ -68,6 +90,12 @@ export default function MaintenancePage() {
 
   const cleanLogs = async () => {
     if (!settings) return
+    const ok = await confirmDialog({
+      title: '清理日志与临时文件？',
+      content: `会删除超过 ${settings.retention_days} 天的日志和临时文件，不删除视频库。`,
+      okText: '开始清理',
+    })
+    if (!ok) return
     setCleaning('logs')
     try {
       const result = await cleanMaintenanceLogs(settings.retention_days)
@@ -101,6 +129,15 @@ export default function MaintenancePage() {
 
   const save = async () => {
     if (!settings) return
+    if (settings.clear_videos) {
+      const ok = await confirmDialog({
+        title: '定时任务会清空视频库',
+        content: '已勾选「同时清空视频」。到点后会删除全部视频，不能恢复。',
+        okText: '仍然保存',
+        danger: true,
+      })
+      if (!ok) return
+    }
     setSaving(true)
     try {
       const next = await saveMaintenanceSettings({
@@ -139,6 +176,35 @@ export default function MaintenancePage() {
         <Alert type="error">无法读取维护状态，请稍后重试。</Alert>
       ) : (
         <div className="grid gap-4 lg:grid-cols-2">
+          <Panel title="运行状态" extra={<Database size={18} className="text-ink-3" />} className="lg:col-span-2">
+            <div className="grid gap-3 md:grid-cols-3">
+              <div className="rounded-xl bg-fill px-3 py-3 text-[12px] text-ink-3">
+                <div className="text-ink-4">内存</div>
+                <div className="mt-1 text-ink-1">{system?.memory.percent != null ? `${system.memory.percent}%` : '未知'}{system?.memory.used_mb != null ? ` · ${system.memory.used_mb} / ${system.memory.total_mb} MB` : ''}</div>
+              </div>
+              <div className="rounded-xl bg-fill px-3 py-3 text-[12px] text-ink-3">
+                <div className="text-ink-4">磁盘</div>
+                <div className="mt-1 text-ink-1">{system?.disk.percent != null ? `${system.disk.percent}%` : '未知'}{system?.disk.free_gb != null ? ` · 剩余 ${system.disk.free_gb} GB` : ''}</div>
+              </div>
+              <div className="rounded-xl bg-fill px-3 py-3 text-[12px] text-ink-3">
+                <div className="text-ink-4">创作能力</div>
+                <div className="mt-1 text-ink-1">{health ? `ffmpeg ${health.ffmpeg ? '可用' : '缺失'} · 文本模型 ${health.llm ? '已配置' : '未配置'} · ASR ${health.asr}` : '健康检查未返回'}</div>
+              </div>
+            </div>
+            {!!system?.services.length && (
+              <ul className="mt-3 grid gap-2 sm:grid-cols-2">
+                {system.services.map((service) => (
+                  <li key={service.key} className="flex items-center gap-2 rounded-lg border border-line-soft px-3 py-2 text-[12px]">
+                    <span className={service.active ? 'status-dot' : 'status-dot is-off'} />
+                    <span className="text-ink-2">{service.key === 'engine' ? '旧解说引擎（可选）' : service.name}</span>
+                    <span className="ml-auto text-ink-4">{service.active ? '在线' : '未连接'}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <p className="mt-3 text-[11px] leading-5 text-ink-4">新的剪辑和解说不依赖 8601。这里不显示密钥、进程号和内网地址。</p>
+          </Panel>
+
           <Panel title="存储占用" extra={<HardDrives size={18} className="text-ink-3" />}>
             <div className="space-y-4">
               <div>
@@ -246,7 +312,7 @@ export default function MaintenancePage() {
 
           {status.settings.last_result && (
             <Panel title="上次清理结果" extra={<Database size={18} className="text-ink-3" />} className="lg:col-span-2">
-              <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-all rounded-xl bg-fill p-3 text-[11px] leading-5 text-ink-3">{JSON.stringify(status.settings.last_result, null, 2)}</pre>
+              <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-all rounded-xl bg-fill p-3 text-[11px] leading-5 text-ink-3">{safeResult(status.settings.last_result)}</pre>
             </Panel>
           )}
         </div>

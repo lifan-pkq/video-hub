@@ -214,8 +214,7 @@ export default function VideosPage() {
   // ================= AI 智能剪辑 =================
 
   const handleAiEdit = (video: Video) => {
-    // 跳到智能剪辑首页并预选素材，确认模式后直接创建任务
-    navigate('/edit', { state: { videoIds: [video.id], mode: 'analyze' } })
+    navigate('/edit', { state: { videoIds: [video.id] } })
   }
 
   const openTrim = (video: Video) => {
@@ -272,7 +271,14 @@ export default function VideosPage() {
   const filtered = useMemo(() => {
     const kw = search.trim().toLowerCase()
     const list = videos.filter((v) => {
-      if (kw && !v.title.toLowerCase().includes(kw)) return false
+      const searchable = [
+        v.title,
+        v.analysis?.summary,
+        ...(v.analysis?.people ?? []),
+        ...(v.analysis?.scenes ?? []),
+        ...(v.analysis?.emotion_tags ?? []),
+      ].filter(Boolean).join(' ').toLowerCase()
+      if (kw && !searchable.includes(kw)) return false
       if (sourceFilter !== 'all' && (v.source_platform ?? 'local') !== sourceFilter) return false
       return true
     })
@@ -308,14 +314,17 @@ export default function VideosPage() {
         title="视频库"
         desc={`共 ${videos.length} 个视频 · 总大小 ${formatSize(totalSize)}`}
         extra={
-          <Button
-            variant="primary"
-            icon={<Plus size={15} weight="bold" />}
-            loading={uploading}
-            onClick={() => fileInputRef.current?.click()}
-          >
-            上传视频
-          </Button>
+          <>
+            <Link to="/library/import"><Button variant="ghost">导入向导</Button></Link>
+            <Button
+              variant="primary"
+              icon={<Plus size={15} weight="bold" />}
+              loading={uploading}
+              onClick={() => fileInputRef.current?.click()}
+            >
+              上传视频
+            </Button>
+          </>
         }
       />
       <input
@@ -336,14 +345,14 @@ export default function VideosPage() {
           accept="video/*"
           uploading={uploading}
           progress={uploadProgress}
-          tip="支持本地视频文件，上传后可发布到各平台"
+          tip="支持本地高清原片，上传后自动生成素材卡"
           onFile={handleUpload}
         />
       </div>
 
       {/* 工具栏 */}
       {selecting ? (
-        <div className="mb-4 flex flex-wrap items-center gap-3">
+        <div className="vh-filter-bar mb-4 flex flex-wrap items-center gap-3">
           <span className="text-sm text-ink-2">
             已选 <span className="tnum">{selectedIds.size}</span> 项
           </span>
@@ -371,7 +380,7 @@ export default function VideosPage() {
           </Button>
         </div>
       ) : (
-        <div className="mb-4 flex flex-wrap items-center gap-3">
+        <div className="vh-filter-bar mb-4 flex flex-wrap items-center gap-3">
           <Input
             allowClear
             prefix={<MagnifyingGlass size={15} />}
@@ -387,6 +396,7 @@ export default function VideosPage() {
             width={120}
             options={SORT_OPTIONS}
           />
+          <span className="text-xs text-ink-4">共 {filtered.length} / {videos.length} 条</span>
           <Button className="ml-auto" icon={<Checks size={15} />} onClick={() => setSelecting(true)}>
             多选
           </Button>
@@ -405,18 +415,20 @@ export default function VideosPage() {
         <Panel pad="none">
           <EmptyState
             icon={<VideoCamera size={26} />}
-            title="暂无视频"
-            desc="从抖音下载，或上传本地视频"
+            title="还没有视频"
+            desc="用导入向导上传原片，或从链接下载。入库后可以剪辑、解说和导出。"
             action={
               <>
-                <Link to="/download">
-                  <Button variant="primary" icon={<DownloadSimple size={15} />}>
-                    去下载视频
+                <Link to="/library/import">
+                  <Button variant="primary" icon={<Plus size={15} />}>
+                    导入素材
                   </Button>
                 </Link>
-                <Button icon={<Plus size={15} />} onClick={() => fileInputRef.current?.click()}>
-                  上传本地视频
-                </Button>
+                <Link to="/download">
+                  <Button icon={<DownloadSimple size={15} />}>
+                    去下载
+                  </Button>
+                </Link>
               </>
             }
           />
@@ -435,7 +447,7 @@ export default function VideosPage() {
                 selecting={selecting}
                 onToggleSelect={toggleSelect}
                 onPlay={setPlaying}
-                onPublish={(video) => navigate('/publish', { state: { videoId: video.id } })}
+                onPublish={(video) => navigate('/export', { state: { videoId: video.id } })}
                 onTrim={openTrim}
                 onAiEdit={handleAiEdit}
                 onNarrate={(video) => navigate('/narrate?video=' + video.id)}
@@ -443,6 +455,12 @@ export default function VideosPage() {
                 onDownload={handleDownload}
                 onDelete={handleDelete}
               />
+              {(v.quality_score != null || v.analysis?.summary || v.analysis_status === 'running') && (
+                <div className="mt-2 rounded-lg border border-line-soft bg-fill px-2.5 py-2 text-[11px] text-ink-3">
+                  {v.quality_score != null && <span className="mr-2 text-accent">质量 {Math.round(v.quality_score)}</span>}
+                  {v.analysis_status === 'running' ? '正在生成素材卡…' : v.analysis?.summary}
+                </div>
+              )}
             </div>
           ))}
         </div>

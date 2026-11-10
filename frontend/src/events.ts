@@ -25,7 +25,6 @@ function sameTask(a: TaskSummary, b: TaskSummary): boolean {
     a.status === b.status &&
     a.progress === b.progress &&
     a.title === b.title &&
-    a.needs_verify === b.needs_verify &&
     a.finished_at === b.finished_at
   )
 }

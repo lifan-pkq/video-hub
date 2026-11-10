@@ -20,7 +20,6 @@ SERVICES = [
     ("engine", "AI 解说引擎", "http://127.0.0.1:8601/health", "narrato-engine"),
     ("asr", "共享 ASR", "http://127.0.0.1:8600/health", "narrato-asr"),
     ("preview", "字幕预览", "http://127.0.0.1:8502/health", "narrato-preview"),
-    ("narrato", "旧版 NarratoAI", "http://127.0.0.1:8501/narrato/_stcore/health", "narratoai"),
 ]
 
 
@@ -99,8 +98,9 @@ def _probe_service(item: tuple[str, str, str, str]) -> dict:
         "active": active,
         "latency_ms": latency,
         "memory_mb": _process_memory_mb(pid),
-        "pid": pid,
-        "detail": detail,
+        # PID 与上游异常文本（含内网 URL/端口）属于内部拓扑信息，不再对外返回
+        "pid": None,
+        "detail": "",
     }
 
 

@@ -16,6 +16,15 @@ interface Props {
   className?: string
 }
 
+export function ProblemAlert({ message, action, className = '' }: { message: string; action?: string; className?: string }) {
+  return (
+    <Alert type="error" className={className}>
+      <p>{message}</p>
+      {action ? <p className="mt-1 text-[12px] leading-5 text-ink-3">{action}</p> : null}
+    </Alert>
+  )
+}
+
 export default function Alert({ type = 'info', children, className = '' }: Props) {
   const m = META[type]
   const Icon = m.icon

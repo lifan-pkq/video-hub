@@ -257,7 +257,11 @@ def normalize_script_items(items: Any, duration: float = 60.0) -> list[dict[str,
         if not isinstance(item, dict):
             raise SpecError(f"脚本第 {index + 1} 段不是对象")
         narration = _text(item.get("narration"), 500)
-        if not narration:
+        try:
+            ost = int(item.get("OST", 2))
+        except (TypeError, ValueError):
+            ost = 2
+        if not narration and ost != 1:
             raise SpecError(f"脚本第 {index + 1} 段缺少 narration")
         timestamp = item.get("timestamp")
         if timestamp:
@@ -265,24 +269,26 @@ def normalize_script_items(items: Any, duration: float = 60.0) -> list[dict[str,
         else:
             start, end = default_spans[index]
             normalized_timestamp = f"{format_clock(start)}-{format_clock(end)}"
-        try:
-            ost = int(item.get("OST", 2))
-        except (TypeError, ValueError):
-            ost = 2
         if ost not in (0, 1, 2):
             raise SpecError(f"脚本第 {index + 1} 段的 OST 只能是 0/1/2")
         if normalized_timestamp in used_timestamps:
             raise SpecError(f"脚本第 {index + 1} 段时间戳重复：{normalized_timestamp}")
         used_timestamps.add(normalized_timestamp)
-        normalized.append(
-            {
-                "_id": index + 1,
-                "narration": narration,
-                "picture": _text(item.get("picture"), 500) or narration,
-                "timestamp": normalized_timestamp,
-                "OST": ost,
-            }
-        )
+        normalized_item = {
+            "_id": index + 1,
+            "narration": narration,
+            "picture": _text(item.get("picture"), 500) or narration,
+            "timestamp": normalized_timestamp,
+            "OST": ost,
+        }
+        for key in (
+            "segment_id", "story_role", "reason", "evidence", "estimated_duration",
+            "emotion", "voice_name", "voice_rate", "voice_pitch", "quality_flags",
+            "score", "review_reason", "clip_duration", "transition", "morph_preview_status",
+        ):
+            if key in item:
+                normalized_item[key] = item[key]
+        normalized.append(normalized_item)
     return normalized
 
 
@@ -424,6 +430,7 @@ def normalize_spec(payload: dict[str, Any]) -> dict[str, Any]:
         "pause_seconds": _as_float(payload.get("pause_seconds"), 0.4, 0.0, 6.0),
         "review_mode": bool(payload.get("review_mode", True)),
         "loudness_normalize": bool(payload.get("loudness_normalize", True)),
+        "visual_polish": bool(payload.get("visual_polish", True)),
         "tts_pronunciation": bool(payload.get("tts_pronunciation", True)),
         "deep_segment_seconds": _as_float(payload.get("deep_segment_seconds"), 30.0, 10.0, 120.0),
         "deep_frame_interval": _as_float(payload.get("deep_frame_interval"), 1.5, 0.5, 5.0),
@@ -433,6 +440,7 @@ def normalize_spec(payload: dict[str, Any]) -> dict[str, Any]:
         "voice_name": voice_name,
         "tts_engine": tts_engine,
         "voice_rate": _as_float(payload.get("voice_rate"), 1.05, 0.5, 2.0),
+        "voice_emotion": _text(payload.get("voice_emotion"), 20) if _text(payload.get("voice_emotion"), 20) in {"平静", "激动", "哽咽", "幽默"} else "平静",
         "voice_pitch": _as_float(payload.get("voice_pitch"), 1.0, 0.5, 2.0),
         "original_volume": _as_float(payload.get("original_volume"), 0.15, 0.0, 1.5),
         "tts_volume": _as_float(payload.get("tts_volume"), 1.0, 0.0, 2.0),
@@ -457,5 +465,12 @@ def normalize_spec(payload: dict[str, Any]) -> dict[str, Any]:
         "script_items": items,
         "script_text": script_text if not items else "",
         "transcript_text": transcript_text if mode == "transcript" else "",
+        "profile_snapshot": payload.get("profile_snapshot") if isinstance(payload.get("profile_snapshot"), dict) else {},
+        "pronunciation": {
+            str(key)[:80]: str(value)[:80]
+            for key, value in (payload.get("pronunciation") or {}).items()
+        } if isinstance(payload.get("pronunciation"), dict) else {},
+        "variant_group_id": _text(payload.get("variant_group_id"), 80),
+        "variant_key": _text(payload.get("variant_key"), 20),
     }
     return spec

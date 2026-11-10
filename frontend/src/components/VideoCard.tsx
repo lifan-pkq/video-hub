@@ -68,7 +68,7 @@ export default function VideoCard({
 }: Props) {
   const actions: CardAction[] = [
     { key: 'play', tip: '播放', icon: <Play size={15} />, onClick: () => onPlay(video) },
-    { key: 'publish', tip: '发布', icon: <PaperPlaneTilt size={15} />, onClick: () => onPublish(video) },
+    { key: 'publish', tip: '封面与导出', icon: <PaperPlaneTilt size={15} />, onClick: () => onPublish(video) },
     { key: 'trim', tip: '截取', icon: <Scissors size={15} />, onClick: () => onTrim(video) },
     { key: 'ai', tip: '智能剪辑', icon: <MagicWand size={15} />, onClick: () => onAiEdit(video) },
     { key: 'narrate', tip: 'AI 解说', icon: <Microphone size={15} />, onClick: () => onNarrate(video) },

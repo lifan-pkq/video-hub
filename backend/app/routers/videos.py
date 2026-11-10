@@ -8,15 +8,41 @@ from pathlib import Path
 
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
+from fastapi.routing import APIRoute
 from pydantic import BaseModel
 
 from app.config import COVERS_DIR, MAX_UPLOAD_MB, TMP_DIR, VIDEOS_DIR, ensure_dirs
 from app.db import add_video, delete_video, get_video, list_videos, update_video
 from app.services.media import ensure_h264, make_cover, probe_video, range_stream
 
-router = APIRouter(prefix="/api/videos", tags=["videos"])
 
-UPLOAD_CHUNK_BYTES = 1024 * 1024
+class UploadSizeGuardRoute(APIRoute):
+    """在 multipart body 被解析之前，用 Content-Length 早拒超大上传。
+
+    FastAPI 的依赖（Depends）在 get_request_handler 里是「先 await request.form()，
+    再 solve_dependencies」，所以依赖永远晚于 body 读取；路由 handler 包在 body
+    解析之外，是应用层最早能执行的点。
+    """
+
+    def get_route_handler(self):
+        handler = super().get_route_handler()
+
+        async def guarded(request: Request):
+            if request.url.path.rstrip("/").endswith("/upload"):
+                try:
+                    declared = int(request.headers.get("content-length") or 0)
+                except ValueError:
+                    declared = 0
+                if declared > MAX_UPLOAD_MB * 1024 * 1024 + 1024 * 1024:
+                    raise HTTPException(413, f"文件超过大小上限（{MAX_UPLOAD_MB}MB）")
+            return await handler(request)
+
+        return guarded
+
+
+router = APIRouter(prefix="/api/videos", tags=["videos"], route_class=UploadSizeGuardRoute)
+
+UPLOAD_CHUNK_BYTES = 8 * 1024 * 1024  # 1MB->8MB：上传大文件时 syscall 数降一个数量级
 ALLOWED_SUFFIXES = {".mp4", ".mov", ".webm", ".mkv", ".flv", ".avi"}
 
 
@@ -120,6 +146,11 @@ async def upload_video(file: UploadFile = File(...), title: str = ""):
             source_platform="local",
             source_url=None,
         )
+        from app.services.quality import update_quality
+        from app.services.understanding import start_analysis
+
+        await asyncio.to_thread(update_quality, video["id"], final)
+        start_analysis(video["id"])
         completed = True
         return _serialize(video)
     finally:

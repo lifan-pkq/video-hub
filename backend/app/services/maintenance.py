@@ -132,9 +132,50 @@ def _active_work() -> tuple[int, int, int]:
     return running_tasks, recording, jobs
 
 
+# 清理白名单：只允许清空视频库自身的三个目录。目录本身是代码里的
+# 固定常量、不是用户输入，但仍做解析后校验，防止未来改动或符号链接
+# 把 rmtree 带到库外；符号链接只删链接本身，绝不跟随。
+_CLEARABLE_DIRS = (VIDEOS_DIR, COVERS_DIR, DATA_DIR / "generated" / "videos")
+
+
+def _safe_clear_directory(directory: Path) -> None:
+    """清空白名单目录内的全部条目；目录本身不在白名单时直接拒绝。"""
+    try:
+        resolved = directory.resolve()
+    except OSError:
+        return
+    allowed = set()
+    for candidate in _CLEARABLE_DIRS:
+        try:
+            allowed.add(candidate.resolve())
+        except OSError:
+            continue
+    if resolved not in allowed:
+        raise ValueError(f"拒绝清理非白名单目录：{directory}")
+    if not directory.exists():
+        directory.mkdir(parents=True, exist_ok=True)
+        return
+    for item in directory.iterdir():
+        try:
+            if item.is_symlink():
+                item.unlink()
+            elif item.is_file():
+                item.unlink()
+            elif item.is_dir():
+                # 子目录解析后必须仍在白名单目录内，否则只删链接/跳过
+                if resolved in item.resolve().parents:
+                    shutil.rmtree(item, ignore_errors=True)
+        except OSError:
+            pass
+
+
 def clear_all_videos(force: bool = False) -> dict[str, Any]:
+    """清空视频库。安全规则（第二批）：force 不得绕过进行中任务保护——
+    无论 force 是真是假，有进行中任务/录制/下载一律拒绝；force 现在只在
+    run_cleanup 里影响“是否强制清理日志”，不再影响视频清空。
+    参数保留仅为兼容旧调用方，调用时传 force=True 也不会绕过保护。"""
     active_tasks, recording, jobs = _active_work()
-    if not force and (active_tasks or recording or jobs):
+    if active_tasks or recording or jobs:
         raise ValueError(
             f"还有 {active_tasks} 个解说任务、{recording} 个录制、{jobs} 个下载任务在进行，请先停止"
         )
@@ -148,17 +189,8 @@ def clear_all_videos(force: bool = False) -> dict[str, Any]:
         platform = str(video.get("source_platform") or "unknown")
         sources[platform] = sources.get(platform, 0) + 1
         delete_video(video["id"])
-    for directory in (VIDEOS_DIR, COVERS_DIR, DATA_DIR / "generated" / "videos"):
-        if directory.exists():
-            for item in directory.iterdir():
-                try:
-                    if item.is_file():
-                        item.unlink()
-                    elif item.is_dir():
-                        shutil.rmtree(item, ignore_errors=True)
-                except OSError:
-                    pass
-        directory.mkdir(parents=True, exist_ok=True)
+    for directory in _CLEARABLE_DIRS:
+        _safe_clear_directory(directory)
     clear_video_references()
     return {"ok": True, "videos": removed, "bytes": total, "sources": sources, "at": _now()}
 

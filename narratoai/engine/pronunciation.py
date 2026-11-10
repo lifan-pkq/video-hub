@@ -20,10 +20,15 @@ HINTS: dict[str, str] = {
 }
 
 
-def apply(items: list[dict[str, Any]], enabled: bool = True) -> list[dict[str, Any]]:
+def apply(
+    items: list[dict[str, Any]],
+    enabled: bool = True,
+    custom: dict[str, str] | None = None,
+) -> list[dict[str, Any]]:
     if not enabled:
         return items
-    ordered = sorted(HINTS.items(), key=lambda pair: len(pair[0]), reverse=True)
+    hints = {**HINTS, **(custom or {})}
+    ordered = sorted(hints.items(), key=lambda pair: len(pair[0]), reverse=True)
     for item in items:
         text = str(item.get("narration") or "")
         if not text:

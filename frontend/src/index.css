@@ -994,3 +994,189 @@
     .vh-card:hover { transform: none; }
   }
 }
+
+@layer components {
+  /* ---------- 前端重设计：统一的步骤条 / 粘性操作区 / 粘性筛选条 ---------- */
+  .vh-stepbar {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 8px;
+    margin: 0 0 18px;
+    padding: 0;
+    list-style: none;
+  }
+  .vh-stepbar-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+    border: 1px solid var(--border-soft);
+    border-radius: 12px;
+    background: var(--surface);
+    padding: 10px 12px;
+  }
+  .vh-stepbar-item.current {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+  }
+  .vh-stepbar-item.todo {
+    opacity: 0.62;
+  }
+  .vh-stepbar-dot {
+    display: inline-flex;
+    width: 24px;
+    height: 24px;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: center;
+    border-radius: 999px;
+    background: var(--fill-deep);
+    color: var(--ink-2);
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .vh-stepbar-item.current .vh-stepbar-dot {
+    background: var(--accent);
+    color: #fff;
+  }
+  .vh-stepbar-item.done .vh-stepbar-dot {
+    background: var(--success-soft);
+    color: var(--success);
+  }
+  .vh-stepbar-text {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 1px;
+  }
+  .vh-stepbar-text strong {
+    overflow: hidden;
+    color: var(--ink-1);
+    font-size: 12px;
+    font-weight: 600;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .vh-stepbar-text small {
+    overflow: hidden;
+    color: var(--ink-4);
+    font-size: 11px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  @media (max-width: 760px) {
+    .vh-stepbar {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+
+  .vh-sticky-action {
+    position: sticky;
+    top: 0;
+    z-index: 12;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 18px;
+    border: 1px solid var(--border-soft);
+    border-radius: 14px;
+    background: color-mix(in srgb, var(--surface) 92%, transparent);
+    padding: 10px 12px;
+    box-shadow: var(--shadow-card);
+    backdrop-filter: blur(12px);
+  }
+  .vh-sticky-action .vh-sticky-summary {
+    min-width: 0;
+    flex: 1;
+  }
+  .vh-sticky-action .vh-sticky-summary strong {
+    display: block;
+    overflow: hidden;
+    color: var(--ink-1);
+    font-size: 13px;
+    font-weight: 600;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .vh-sticky-action .vh-sticky-summary span {
+    color: var(--ink-4);
+    font-size: 11px;
+  }
+
+  .vh-filter-bar {
+    position: sticky;
+    top: 0;
+    z-index: 11;
+    background: color-mix(in srgb, var(--bg) 94%, transparent);
+    padding: 8px 0 10px;
+    backdrop-filter: blur(12px);
+  }
+
+  /* 表单分组小标题：与 Narrate 已有的 settings-section-title 保持同一口径 */
+  .vh-form-section-title {
+    margin: 18px 0 10px;
+    padding-top: 14px;
+    border-top: 1px solid var(--border-soft);
+    color: var(--ink-4);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+  }
+  .vh-form-section-title:first-child {
+    margin-top: 0;
+    padding-top: 0;
+    border-top: none;
+  }
+
+  /* 快捷入口条（Dashboard）：只做展示跳转，不改任何数据逻辑 */
+  .vh-quick-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 16px;
+  }
+  .vh-quick-actions a {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    border: 1px solid var(--border-soft);
+    border-radius: 999px;
+    background: var(--surface);
+    padding: 7px 13px;
+    color: var(--ink-2);
+    font-size: 12px;
+    transition: border-color 160ms ease, color 160ms ease;
+  }
+  .vh-quick-actions a:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+
+  /* 模式说明卡（AIMedia）：纯展示文案，不改生成参数 */
+  .vh-mode-note {
+    border: 1px solid var(--border-soft);
+    border-radius: 12px;
+    background: var(--fill);
+    padding: 10px 12px;
+    color: var(--ink-3);
+    font-size: 12px;
+    line-height: 1.7;
+  }
+}
+
+@layer components {
+  /* 小屏防溢出：页面内容与表单控件不撑出容器 */
+  .page-container > * {
+    min-width: 0;
+  }
+  .vh-card {
+    min-width: 0;
+  }
+  input,
+  select,
+  textarea {
+    max-width: 100%;
+  }
+}

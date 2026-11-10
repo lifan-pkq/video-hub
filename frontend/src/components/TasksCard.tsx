@@ -1,6 +1,6 @@
 import type { KeyboardEvent, ReactNode } from 'react'
-import { CaretDown, DownloadSimple, PaperPlaneTilt, Scissors, Sparkle } from '@phosphor-icons/react'
-import { formatElapsed, formatRelative, platformLabel, type Task, type TaskSummary } from '../api'
+import { Broadcast, CaretDown, DownloadSimple, MagicWand, Scissors, Sparkle } from '@phosphor-icons/react'
+import { formatElapsed, formatRelative, type Task, type TaskSummary } from '../api'
 import { Button, Progress, Tag } from '../ui'
 import type { TagColor } from '../ui/Tag'
 import StatusBadge from './StatusBadge'
@@ -8,9 +8,10 @@ import TaskLogs from './TaskLogs'
 
 export const TYPE_META: Record<TaskSummary['type'], { label: string; color: TagColor; icon: (size: number) => ReactNode }> = {
   download: { label: '视频下载', color: 'blue', icon: (s) => <DownloadSimple size={s} /> },
-  publish: { label: '视频发布', color: 'accent', icon: (s) => <PaperPlaneTilt size={s} /> },
-  edit: { label: '剪辑拼接', color: 'orange', icon: (s) => <Scissors size={s} /> },
+  edit: { label: '智能剪辑', color: 'orange', icon: (s) => <Scissors size={s} /> },
+  narrate: { label: 'AI 解说', color: 'accent', icon: (s) => <MagicWand size={s} /> },
   ai: { label: 'AI 生成', color: 'blue', icon: (s) => <Sparkle size={s} /> },
+  record: { label: '直播录制', color: 'orange', icon: (s) => <Broadcast size={s} /> },
 }
 
 interface Props {
@@ -82,8 +83,13 @@ export default function TasksCard({ task, now, expanded, detail, cancelling, onT
           </div>
           <div className="mt-1.5 text-xs text-ink-4">
             {formatRelative(task.created_at)} · 耗时 <span className="tnum">{formatElapsed(elapsedSeconds(task, now))}</span>
-            {task.needs_verify && <span className="ml-2 text-accent">等待短信验证码</span>}
           </div>
+          {(task.status === 'failed' || task.status === 'partial') && task.error?.message && (
+            <p className="mt-1 text-[12px] leading-5 text-danger">
+              {task.error.message}
+              {task.error.action ? <span className="mt-0.5 block text-ink-3">{task.error.action}</span> : null}
+            </p>
+          )}
         </div>
         <div className="flex shrink-0 flex-col items-end gap-2 sm:flex-row sm:items-center">
           <StatusBadge status={task.status} />
@@ -118,22 +124,6 @@ export default function TasksCard({ task, now, expanded, detail, cancelling, onT
             <TaskRowSkeleton />
           ) : (
             <div className="space-y-3">
-              {detail.result.targets && Object.keys(detail.result.targets).length > 0 && (
-                <div className="space-y-1.5">
-                  {Object.entries(detail.result.targets).map(([key, r]) => {
-                    const [platform, account] = key.split(':')
-                    return (
-                      <div key={key} className="flex items-center gap-2 text-[13px]">
-                        <span className="text-ink-2">
-                          {platformLabel(platform)} / {account}
-                        </span>
-                        <StatusBadge status={r.status} />
-                        {r.message && <span className="truncate text-xs text-ink-4">{r.message}</span>}
-                      </div>
-                    )
-                  })}
-                </div>
-              )}
               <TaskLogs logs={detail.logs} />
               {detail.logs.length === 0 && <p className="text-xs text-ink-4">暂无日志输出</p>}
             </div>

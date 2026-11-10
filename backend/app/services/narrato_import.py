@@ -116,13 +116,24 @@ def import_task(
     return _import_final(path, task_id, title, source_platform)
 
 
+def _quality_allows(source: Path) -> bool:
+    try:
+        report = json.loads((source.parent / "quality_report.json").read_text(encoding="utf-8"))
+        return report.get("passed") is True
+    except (OSError, ValueError):
+        return False
+
+
 def scan_once(tasks_dir: Path) -> list[dict]:
-    """导入连续两次扫描大小不变的最终成片，成功任务永久去重。"""
+    """只自动导入有通过质量报告且文件稳定的成片。"""
     if not tasks_dir.is_dir():
         return []
     imported = []
     for source in sorted(tasks_dir.glob("*/combined.mp4")):
         task_id = source.parent.name
+        if not _quality_allows(source):
+            _observed_sizes.pop(task_id, None)
+            continue
         source_key = f"narrato://task/{task_id}"
         if get_video_by_source("narrato", source_key):
             _observed_sizes.pop(task_id, None)

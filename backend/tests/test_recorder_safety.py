@@ -45,7 +45,9 @@ class RecorderSafetyTests(unittest.TestCase):
                 recorder.start_recording("https://example.test/live", "同一直播")
                 records.extend(call.args[3] for call in add_recording.call_args_list)
                 for call in thread.call_args_list:
-                    call.kwargs["args"][2].close()
+                    resource = call.kwargs["args"][2]
+                    if hasattr(resource, "close"):
+                        resource.close()
 
         self.assertEqual(len(records), 2)
         self.assertNotEqual(records[0], records[1])

@@ -39,13 +39,15 @@ from engine.profiles import (  # noqa: E402
     VOICES,
 )
 from engine.settings import ensure_config, settings_payload, update_settings  # noqa: E402
-from engine.spec import SpecError, normalize_spec  # noqa: E402
+from engine.spec import SpecError, normalize_script_items, normalize_spec  # noqa: E402
 from engine.store import TaskStore  # noqa: E402
+from engine.storyboard import build_storyboard  # noqa: E402
 
 MAX_BODY = 3 * 1024 * 1024
 TASK_RE = re.compile(r"^/tasks/([A-Za-z0-9_-]{1,80})(?:/(cancel|logs|script))?$")
 CANCEL_RE = re.compile(r"^/tasks/([A-Za-z0-9_-]{1,80})/cancel$")
 APPROVE_RE = re.compile(r"^/tasks/([A-Za-z0-9_-]{1,80})/approve$")
+SCRIPT_RE = re.compile(r"^/tasks/([A-Za-z0-9_-]{1,80})/script$")
 
 STORE = TaskStore(ROOT)
 SPAWN_LOCK = threading.Lock()
@@ -118,7 +120,7 @@ def _monitor_worker(task_id: str, proc: subprocess.Popen) -> None:
     """worker 在写 state 之前就崩溃（import/依赖错误）时，及时把任务收口。"""
     code = proc.wait()
     state = STORE.read_state(task_id) or {}
-    if state.get("status") in {"awaiting_review", "success", "failed", "cancelled"}:
+    if state.get("status") in {"awaiting_review", "success", "needs_review", "failed", "cancelled"}:
         return
     try:
         log_text = (STORE.task_dir(task_id) / "worker.log").read_text(encoding="utf-8", errors="replace")[-3000:]
@@ -238,6 +240,16 @@ class Handler(BaseHTTPRequestHandler):
             self._error(401, "unauthorized")
             return
         path = urlparse(self.path).path.rstrip("/") or "/"
+        if path == "/tts/preview":
+            try:
+                from engine.voice_preview import create_preview
+
+                self._send(200, {"ok": True, "preview": create_preview(ROOT, self._body())})
+            except (ValueError, RuntimeError) as exc:
+                self._error(400, str(exc))
+            except Exception as exc:  # noqa: BLE001
+                self._error(500, "试听生成失败", str(exc))
+            return
         if path == "/tasks":
             self._create_task()
             return
@@ -287,6 +299,10 @@ class Handler(BaseHTTPRequestHandler):
             self._error(401, "unauthorized")
             return
         path = urlparse(self.path).path.rstrip("/") or "/"
+        match = SCRIPT_RE.match(path)
+        if match:
+            self._update_script(match.group(1))
+            return
         if path == "/settings":
             try:
                 payload = self._body()
@@ -307,6 +323,71 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     # ---- 业务 ----
+
+    def _update_script(self, task_id: str) -> None:
+        """待审片阶段保存完整结构：排序、删章、文案和故事角色。"""
+        try:
+            state = STORE.read_state(task_id) or {}
+            if state.get("status") != "awaiting_review":
+                self._error(409, "任务不在待审片状态，无法编辑脚本")
+                return
+            payload = self._body()
+            submitted = payload.get("items")
+            if not isinstance(submitted, list) or not submitted:
+                self._error(400, "items 必须是非空数组，至少保留一段")
+                return
+            if len(submitted) > 200:
+                self._error(400, "脚本片段过多")
+                return
+            existing = STORE.read_script(task_id)
+            if not isinstance(existing, list) or not existing:
+                self._error(404, "脚本尚未生成")
+                return
+            task_spec = STORE.read_spec(task_id) or {}
+            normalized = normalize_script_items(
+                submitted, float(task_spec.get("video_duration") or task_spec.get("target_duration") or 60)
+            )
+            metadata = (
+                "segment_id", "story_role", "reason", "evidence", "estimated_duration",
+                "emotion", "voice_name", "voice_rate", "voice_pitch", "quality_flags",
+                "score", "review_reason", "clip_duration", "tts_text",
+            )
+            updated: list[dict] = []
+            segment_ids: set[str] = set()
+            for index, (source, item) in enumerate(zip(submitted, normalized)):
+                for key in metadata:
+                    if key in source:
+                        item[key] = source[key]
+                segment_id = str(item.get("segment_id") or f"segment-{index + 1}")
+                if segment_id in segment_ids:
+                    raise SpecError(f"segment_id 重复：{segment_id}")
+                segment_ids.add(segment_id)
+                item["segment_id"] = segment_id
+                updated.append(item)
+            task_dir = STORE.task_dir(task_id)
+            (task_dir / "analysis").mkdir(parents=True, exist_ok=True)
+            (task_dir / "analysis" / "script_before_edit.json").write_text(
+                json.dumps(existing, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+            STORE.write_script(task_id, updated)
+            plan_path = task_dir / "analysis" / "plan.json"
+            plan = STORE._read_json(plan_path, {}) or {}  # noqa: SLF001
+            plan["items"] = updated
+            plan["total_estimated_duration"] = round(sum(float(item.get("estimated_duration") or 0) for item in updated), 2)
+            plan_path.write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
+            build_storyboard(task_dir, updated, str(task_spec.get("video_path") or ""), extract=True)
+            STORE.update_state(
+                task_id,
+                message="审片结构已保存，等待确认渲染",
+                script_edited=True,
+            )
+            self._send(200, {"ok": True, "task_id": task_id, "items": updated})
+        except KeyError:
+            self._error(404, "任务不存在")
+        except SpecError as exc:
+            self._error(400, str(exc))
+        except Exception as exc:  # noqa: BLE001
+            self._error(500, "保存脚本失败", str(exc))
 
     def _capabilities(self) -> None:
         try:

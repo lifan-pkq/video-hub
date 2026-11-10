@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { ClockCounterClockwise, DownloadSimple } from '@phosphor-icons/react'
-import http, {
+import {
+  cancelTask,
   errorMessage,
   fetchTask,
   fetchTasks,
@@ -10,6 +11,7 @@ import http, {
 } from '../api'
 import { useEvents, type EventMsg } from '../events'
 import { Button, EmptyState, PageHeader, Segment, confirmDialog, toast } from '../ui'
+import RequestState from '../ui/RequestState'
 import TasksCard, { TaskRowSkeleton } from '../components/TasksCard'
 
 type Filter = 'all' | 'running' | 'done' | 'failed'
@@ -31,22 +33,6 @@ function matchFilter(t: TaskSummary, f: Filter): boolean {
 /** 兜底全量刷新间隔（实时事件由 useEvents 驱动，此处仅防丢帧） */
 const FALLBACK_INTERVAL = 60_000
 
-/**
- * 取消任务：api.ts 暂无该函数，按契约约定用 http 实例就地请求。
- * 后端 POST /api/tasks/{id}/cancel（若后端未实现会 toast 报错，不影响列表）。
- */
-async function cancelTask(taskId: string): Promise<{ ok: boolean }> {
-  const { data } = await http.post<{ ok: boolean }>(`/tasks/${taskId}/cancel`)
-  return data
-}
-
-const TASK_PAGE: Record<string, string> = {
-  download: '/download',
-  publish: '/publish',
-  edit: '/edit',
-  ai: '/ai-media',
-}
-
 export default function TasksPage() {
   const navigate = useNavigate()
   const [tasks, setTasks] = useState<TaskSummary[]>([])
@@ -55,6 +41,8 @@ export default function TasksPage() {
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [detail, setDetail] = useState<Task | null>(null)
   const [cancellingId, setCancellingId] = useState<string | null>(null)
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [hasData, setHasData] = useState(false)
 
   // 进行中任务耗时每秒跳动
   const [now, setNow] = useState(() => Date.now())
@@ -95,9 +83,14 @@ export default function TasksPage() {
         if (!dead) {
           setTasks(list)
           setLoading(false)
+          setHasData(true)
+          setLoadError(null)
         }
-      } catch {
-        // 静默，下一轮重试
+      } catch (error) {
+        if (!dead) {
+          setLoading(false)
+          setLoadError(errorMessage(error))
+        }
       }
     }
     void tick()
@@ -141,12 +134,29 @@ export default function TasksPage() {
   }
 
   const openTask = (t: TaskSummary) => {
-    if (t.type === 'edit') {
+    const kind = t.kind || ''
+    if (t.type === 'narrate' || kind.startsWith('narrate')) {
+      const narrateId = t.input?.task_id || (typeof t.result?.task_id === 'string' ? t.result.task_id : '')
+      navigate(narrateId ? `/narrate?task=${encodeURIComponent(narrateId)}` : '/narrate')
+      return
+    }
+    if (t.type === 'edit' || kind.startsWith('edit')) {
       navigate(`/edit/${encodeURIComponent(t.id)}`)
       return
     }
-    const page = TASK_PAGE[t.type]
-    navigate(page ? `${page}?task=${encodeURIComponent(t.id)}` : '/tasks')
+    if (t.type === 'download') {
+      navigate(`/download?task=${encodeURIComponent(t.id)}`)
+      return
+    }
+    if (t.type === 'ai' || kind.startsWith('ai')) {
+      navigate(`/ai-media?task=${encodeURIComponent(t.id)}`)
+      return
+    }
+    if (t.type === 'record' || kind.startsWith('record')) {
+      navigate('/record')
+      return
+    }
+    navigate('/tasks')
   }
 
   // ================= 取消任务 =================
@@ -187,10 +197,11 @@ export default function TasksPage() {
 
   return (
     <div>
-      <PageHeader title="任务中心" desc="下载、发布与剪辑任务的实时状态（事件流驱动）" />
+      <PageHeader title="任务中心" desc="下载、剪辑与解说的进度。失败时会带上原因和下一步。" />
+      <RequestState error={loadError} hasData={hasData} loading={loading} onRetry={() => { setLoading(true); void fetchTasks().then((list) => { setTasks(list); setHasData(true); setLoadError(null) }).catch((error) => setLoadError(errorMessage(error))).finally(() => setLoading(false)) }} className="mb-4" />
 
       {/* 分组筛选 Tab */}
-      <div className="mb-4 overflow-x-auto">
+      <div className="vh-filter-bar mb-4 overflow-x-auto">
         <Segment
           value={filter}
           onChange={(v) => setFilter(v as Filter)}
@@ -206,7 +217,7 @@ export default function TasksPage() {
         />
       </div>
 
-      {loading ? (
+      {loading && !hasData ? (
         <div className="space-y-3">
           {[0, 1, 2].map((i) => (
             <div key={i} className="vh-card p-4">
@@ -214,14 +225,14 @@ export default function TasksPage() {
             </div>
           ))}
         </div>
-      ) : tasks.length === 0 ? (
+      ) : !hasData ? null : tasks.length === 0 ? (
         <div className="vh-card">
           <EmptyState
             icon={<ClockCounterClockwise size={26} />}
             title="暂无任务"
-            desc="从导入向导下载视频或发布视频后，任务会实时出现在这里"
+            desc="下载、剪辑或解说开始后，任务会实时出现在这里"
             action={
-              <Link to="/library/import">
+              <Link to="/download">
                 <Button variant="primary" icon={<DownloadSimple size={15} />}>
                   去下载视频
                 </Button>

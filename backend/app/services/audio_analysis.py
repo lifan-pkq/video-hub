@@ -49,3 +49,61 @@ def detect_silence(video_path: Path, log=print) -> list[dict]:
     items = parse_silencedetect(result.stderr or "")
     log(f"静音检测完成：{len(items)} 段")
     return items
+
+
+def analyze_loudness(video_path: Path) -> dict:
+    command = [
+        "ffmpeg", "-hide_banner", "-nostats", "-i", str(video_path),
+        "-af", "ebur128=peak=true", "-vn", "-f", "null", "-",
+    ]
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=1800, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return {"status": "unknown"}
+    output: dict = {"status": "ok" if result.returncode == 0 else "unknown"}
+    for line in (result.stderr or "").splitlines():
+        integrated = re.search(r"I:\s*([-0-9.]+)\s*LUFS", line)
+        peak = re.search(r"Peak:\s*([-0-9.]+)\s*dBFS", line)
+        if integrated:
+            output["integrated_lufs"] = float(integrated.group(1))
+        if peak:
+            output["true_peak_dbfs"] = float(peak.group(1))
+    return output
+
+
+def detect_beats(video_path: Path) -> list[float]:
+    from array import array
+    from statistics import median
+
+    command = [
+        "ffmpeg", "-nostdin", "-v", "error", "-i", str(video_path),
+        "-af", "highpass=f=60,lowpass=f=180", "-ac", "1", "-ar", "8000",
+        "-f", "s16le", "-acodec", "pcm_s16le", "-",
+    ]
+    try:
+        result = subprocess.run(command, capture_output=True, timeout=1800, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return []
+    if result.returncode != 0:
+        return []
+    samples = array("h")
+    samples.frombytes(result.stdout)
+    window = 960
+    energies = [
+        sum(abs(value) for value in samples[offset:offset + window]) / max(1, len(samples[offset:offset + window]))
+        for offset in range(0, len(samples), window)
+    ]
+    if len(energies) < 3 or max(energies, default=0) < 100:
+        return []
+    baseline = max(1.0, median(energies))
+    beats: list[float] = []
+    previous = -1.0
+    for index in range(1, len(energies) - 1):
+        value = energies[index]
+        if value < max(baseline * 1.7, energies[index - 1] * 1.35) or value < energies[index + 1]:
+            continue
+        timestamp = index * window / 8000
+        if timestamp - previous >= 0.28:
+            beats.append(round(timestamp, 3))
+            previous = timestamp
+    return beats

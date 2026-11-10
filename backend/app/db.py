@@ -35,6 +35,11 @@ def _init_schema(conn: sqlite3.Connection):
             cover TEXT,
             source_platform TEXT,
             source_url TEXT,
+            quality_score REAL,
+            quality_json TEXT,
+            analysis_status TEXT DEFAULT 'pending',
+            analysis_error TEXT DEFAULT '',
+            analysis_json TEXT,
             created_at TEXT NOT NULL
         );
         CREATE TABLE IF NOT EXISTS narrato_imports (
@@ -52,6 +57,7 @@ def _init_schema(conn: sqlite3.Connection):
             duration REAL,
             error TEXT,
             video_id INTEGER,
+            segments_json TEXT,
             quality TEXT DEFAULT 'best',
             fps INTEGER DEFAULT 0,
             created_at TEXT NOT NULL,
@@ -92,6 +98,22 @@ def _init_schema(conn: sqlite3.Connection):
             next_run_at TEXT,
             last_result TEXT
         );
+        CREATE TABLE IF NOT EXISTS publish_records (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id TEXT NOT NULL,
+            video_id INTEGER,
+            video_title TEXT DEFAULT '',
+            platform TEXT NOT NULL,
+            account TEXT DEFAULT 'default',
+            title TEXT DEFAULT '',
+            desc TEXT DEFAULT '',
+            tags TEXT DEFAULT '',
+            schedule TEXT,
+            status TEXT NOT NULL DEFAULT 'running',
+            log TEXT DEFAULT '',
+            created_at TEXT NOT NULL,
+            finished_at TEXT
+        );
         CREATE TABLE IF NOT EXISTS narration_tasks (
             id TEXT PRIMARY KEY,
             video_id INTEGER,
@@ -113,9 +135,15 @@ def _init_schema(conn: sqlite3.Connection):
             updated_at TEXT NOT NULL,
             finished_at TEXT
         );
+        CREATE TABLE IF NOT EXISTS inspirations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            url TEXT NOT NULL,
+            note TEXT DEFAULT '',
+            created_at TEXT NOT NULL
+        );
         """
     )
-    # 老库兼容：recordings 补 quality/fps 列
+    # 老库兼容：只增列，不删除历史数据。
     cols = [r[1] for r in conn.execute("PRAGMA table_info(recordings)").fetchall()]
     if "quality" not in cols:
         conn.execute("ALTER TABLE recordings ADD COLUMN quality TEXT DEFAULT 'best'")
@@ -123,8 +151,34 @@ def _init_schema(conn: sqlite3.Connection):
         conn.execute("ALTER TABLE recordings ADD COLUMN fps INTEGER DEFAULT 0")
     if "started_at" not in cols:
         conn.execute("ALTER TABLE recordings ADD COLUMN started_at TEXT")
+    if "segments_json" not in cols:
+        conn.execute("ALTER TABLE recordings ADD COLUMN segments_json TEXT")
+    video_cols = [r[1] for r in conn.execute("PRAGMA table_info(videos)").fetchall()]
+    for name, definition in (
+        ("quality_score", "REAL"),
+        ("quality_json", "TEXT"),
+        ("analysis_status", "TEXT DEFAULT 'pending'"),
+        ("analysis_error", "TEXT DEFAULT ''"),
+        ("analysis_json", "TEXT"),
+    ):
+        if name not in video_cols:
+            conn.execute(f"ALTER TABLE videos ADD COLUMN {name} {definition}")
     conn.execute("INSERT OR IGNORE INTO maintenance_settings (id) VALUES (1)")
     conn.commit()
+
+
+def _video_row(row: sqlite3.Row | None) -> dict | None:
+    if row is None:
+        return None
+    item = dict(row)
+    for column, key in (("analysis_json", "analysis"), ("quality_json", "quality")):
+        raw = item.get(column)
+        if raw:
+            try:
+                item[key] = json.loads(raw)
+            except (TypeError, ValueError):
+                item[key] = None
+    return item
 
 
 def add_video(**fields) -> dict:
@@ -213,6 +267,47 @@ def list_narration_tasks(limit: int = 50) -> list[dict]:
             "SELECT * FROM narration_tasks ORDER BY created_at DESC, rowid DESC LIMIT ?", (limit,)
         ).fetchall()
         return [_narration_row(row) for row in rows]
+
+
+def add_publish_record(task_id: str, video_id: int | None, video_title: str,
+                       platform: str, title: str, desc: str = "",
+                       tags: list[str] | str | None = None, account: str = "default",
+                       schedule: str | None = None) -> int:
+    """发布记录：此前 publish.py / publisher.py 引用的函数在 db.py 里根本不存在，
+    导致发布路由即使挂载也会在运行时 NameError；tags 在库里存为逗号字符串，
+    与前端 PublishRecord.tags: string 的契约一致。"""
+    tags_text = ",".join(tags) if isinstance(tags, list) else (str(tags or ""))
+    now = datetime.now().isoformat(timespec="seconds")
+    with _lock:
+        conn = _get_conn()
+        cur = conn.execute(
+            "INSERT INTO publish_records (task_id, video_id, video_title, platform,"
+            " account, title, desc, tags, schedule, status, created_at)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (task_id, video_id, video_title or "", platform, account, title,
+             desc or "", tags_text, schedule, "running", now),
+        )
+        conn.commit()
+        return cur.lastrowid
+
+
+def finish_publish_record(record_id: int, status: str, log: str = "") -> None:
+    with _lock:
+        conn = _get_conn()
+        conn.execute(
+            "UPDATE publish_records SET status=?, log=?, finished_at=? WHERE id=?",
+            (status, log or "", datetime.now().isoformat(timespec="seconds"), record_id),
+        )
+        conn.commit()
+
+
+def list_publish_records(limit: int = 100) -> list[dict]:
+    with _lock:
+        rows = _get_conn().execute(
+            "SELECT * FROM publish_records ORDER BY id DESC LIMIT ?",
+            (max(1, min(int(limit or 100), 500)),),
+        ).fetchall()
+        return [dict(r) for r in rows]
 
 
 def add_ai_image(**fields) -> dict:
@@ -309,13 +404,13 @@ def add_narrato_video(task_id: str, **fields) -> dict:
 def get_video(video_id: int) -> dict | None:
     with _lock:
         row = _get_conn().execute("SELECT * FROM videos WHERE id=?", (video_id,)).fetchone()
-        return dict(row) if row else None
+        return _video_row(row)
 
 
 def get_video_by_filename(filename: str) -> dict | None:
     with _lock:
         row = _get_conn().execute("SELECT * FROM videos WHERE filename=?", (filename,)).fetchone()
-        return dict(row) if row else None
+        return _video_row(row)
 
 
 def get_video_by_source(source_platform: str, source_url: str) -> dict | None:
@@ -324,13 +419,13 @@ def get_video_by_source(source_platform: str, source_url: str) -> dict | None:
             "SELECT * FROM videos WHERE source_platform=? AND source_url=?",
             (source_platform, source_url),
         ).fetchone()
-        return dict(row) if row else None
+        return _video_row(row)
 
 
 def list_videos() -> list[dict]:
     with _lock:
         rows = _get_conn().execute("SELECT * FROM videos ORDER BY id DESC").fetchall()
-        return [dict(r) for r in rows]
+        return [_video_row(row) for row in rows]
 
 
 def update_video(video_id: int, **fields):
@@ -409,47 +504,29 @@ def fail_interrupted_recordings():
         conn.commit()
 
 
-# ---------- 主播监控（自动录制） ----------
-
-def add_watcher(platform: str, url: str, name: str, quality: str, fps: int) -> int:
+def add_inspiration(url: str, note: str = "") -> dict:
+    now = datetime.now().isoformat(timespec="seconds")
     with _lock:
         conn = _get_conn()
-        cur = conn.execute(
-            "INSERT INTO watchers (platform, url, name, quality, fps, created_at)"
-            " VALUES (?,?,?,?,?,?)",
-            (platform, url, name, quality, fps, datetime.now().isoformat(timespec="seconds")),
+        cursor = conn.execute(
+            "INSERT INTO inspirations (url, note, created_at) VALUES (?,?,?)",
+            (url, note, now),
         )
         conn.commit()
-        return cur.lastrowid
+        row = conn.execute("SELECT * FROM inspirations WHERE id=?", (cursor.lastrowid,)).fetchone()
+        return dict(row)
 
 
-def list_watchers(enabled_only: bool = False) -> list[dict]:
-    sql = "SELECT * FROM watchers"
-    if enabled_only:
-        sql += " WHERE enabled=1"
+def list_inspirations(limit: int = 100) -> list[dict]:
     with _lock:
-        rows = _get_conn().execute(sql + " ORDER BY id DESC").fetchall()
-        return [dict(r) for r in rows]
+        rows = _get_conn().execute(
+            "SELECT * FROM inspirations ORDER BY id DESC LIMIT ?", (max(1, min(limit, 500)),)
+        ).fetchall()
+        return [dict(row) for row in rows]
 
 
-def get_watcher(watcher_id: int) -> dict | None:
-    with _lock:
-        row = _get_conn().execute("SELECT * FROM watchers WHERE id=?", (watcher_id,)).fetchone()
-        return dict(row) if row else None
-
-
-def update_watcher(watcher_id: int, **fields):
-    if not fields:
-        return
-    sets = ",".join(f"{k}=?" for k in fields)
+def delete_inspiration(inspiration_id: int) -> None:
     with _lock:
         conn = _get_conn()
-        conn.execute(f"UPDATE watchers SET {sets} WHERE id=?", [*fields.values(), watcher_id])
-        conn.commit()
-
-
-def delete_watcher(watcher_id: int):
-    with _lock:
-        conn = _get_conn()
-        conn.execute("DELETE FROM watchers WHERE id=?", (watcher_id,))
+        conn.execute("DELETE FROM inspirations WHERE id=?", (inspiration_id,))
         conn.commit()

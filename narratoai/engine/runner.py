@@ -23,12 +23,17 @@ if str(ROOT) not in sys.path:
 from engine.profiles import build_creative_context  # noqa: E402
 from engine.script import (  # noqa: E402
     build_markdown_from_transcript,
+    critique_and_rewrite,
     generate_items,
 )
 from engine.settings import ensure_config, env_llm_overrides  # noqa: E402
 from engine.spec import parse_timestamp_range  # noqa: E402
 from engine.pronunciation import apply as apply_pronunciation  # noqa: E402
+from engine.finishing import DIMENSIONS, polish_master  # noqa: E402
+from engine.quality import evaluate as evaluate_quality, write_report as write_quality_report  # noqa: E402
 from engine.store import TaskStore  # noqa: E402
+from engine.storyboard import build_storyboard  # noqa: E402
+from engine.understanding import build_understanding, write_understanding  # noqa: E402
 
 SCRIPT_PROGRESS_END = 30
 GENERATION_OFFSET = 30
@@ -175,6 +180,11 @@ def _asr_markdown(spec: dict[str, Any], store: TaskStore) -> str:
     segments = payload.get("segments") if isinstance(payload, dict) else None
     if not isinstance(segments, list) or not segments:
         raise RuntimeError("ASR 没有返回有效分段，请检查共享 ASR 服务")
+    analysis_dir = store.task_dir(spec["task_id"]) / "analysis"
+    analysis_dir.mkdir(parents=True, exist_ok=True)
+    (analysis_dir / "asr.json").write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
     lines = []
     for segment in segments:
         text = str(segment.get("text") or "").strip()
@@ -189,13 +199,7 @@ def _asr_markdown(spec: dict[str, Any], store: TaskStore) -> str:
     return build_markdown_from_transcript("\n\n".join(lines))
 
 
-def _material_markdown(spec: dict[str, Any], store: TaskStore) -> str:
-    if spec.get("mode") in {"transcript", "asr"}:
-        text = spec.get("transcript_text", "")
-        if text:
-            return build_markdown_from_transcript(text)
-        return _asr_markdown(spec, store)
-
+def _visual_markdown(spec: dict[str, Any], store: TaskStore) -> str:
     if spec.get("analysis_mode") == "deep":
         from engine.deep_analysis import analyze_deep
 
@@ -246,6 +250,234 @@ def _material_markdown(spec: dict[str, Any], store: TaskStore) -> str:
     if not str(markdown or "").strip():
         raise RuntimeError("画面分析结果为空")
     return markdown
+
+
+def _material_markdown(spec: dict[str, Any], store: TaskStore) -> str:
+    mode = spec.get("mode")
+    transcript = ""
+    visual = ""
+    errors: list[str] = []
+    if mode in {"transcript", "asr"}:
+        text = spec.get("transcript_text", "")
+        transcript = build_markdown_from_transcript(text) if text else _asr_markdown(spec, store)
+    elif mode == "auto":
+        try:
+            transcript = _asr_markdown(spec, store)
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"口播：{exc}")
+            log(f"auto 模式 ASR 不可用，继续分析画面：{exc}")
+
+    if mode in {"auto", "visual"}:
+        try:
+            visual = _visual_markdown(spec, store)
+        except Exception as exc:  # noqa: BLE001
+            if mode == "visual" or not transcript:
+                raise
+            errors.append(f"画面：{exc}")
+            log(f"auto 模式画面分析不可用，保留口播时间线：{exc}")
+
+    if not transcript and not visual:
+        raise RuntimeError("没有可用的素材理解结果：" + "；".join(errors))
+    asr_path = store.task_dir(spec["task_id"]) / "analysis" / "asr.json"
+    try:
+        asr_payload = json.loads(asr_path.read_text(encoding="utf-8")) if asr_path.is_file() else None
+    except (OSError, ValueError):
+        asr_payload = None
+    understanding = build_understanding(spec["video_path"], transcript, visual, asr_payload)
+    markdown = write_understanding(store.task_dir(spec["task_id"]), understanding)
+    if transcript and not understanding["tracks"]["speech"]:
+        markdown += "\n# 原始口播材料\n" + transcript
+    if visual and not understanding["tracks"]["visual"]:
+        markdown += "\n# 原始画面材料\n" + visual
+    source = "fused" if transcript and visual else ("transcript" if transcript else "visual")
+    store.update_state(
+        spec["task_id"],
+        material_source=source,
+        material_note="口播、画面与声音已融合" if source == "fused" else "；".join(errors)[:300],
+    )
+    return markdown
+
+
+def _clip_timerange(items: list[dict[str, Any]], spec: dict[str, Any]) -> list[dict[str, Any]]:
+    """给脚本项补上成片时间轴的 editedTimeRange（剪辑模式不对应成片时长，故只在 timeline 下可用）。"""
+    if spec.get("clip_mode") != "timeline":
+        return []
+    output: list[dict[str, Any]] = []
+    elapsed = 0.0
+    for item in items:
+        duration = float(item.get("clip_duration") or 0)
+        if duration <= 0:
+            try:
+                start, end = parse_timestamp_range(str(item.get("timestamp") or ""))
+                duration = max(0.1, end - start)
+            except (ValueError, TypeError):
+                duration = float(item.get("estimated_duration") or 1.0)
+        output.append({
+            **item,
+            "editedTimeRange": (
+                f"{_clock(elapsed)}-{_clock(elapsed + duration)}"
+            ),
+        })
+        elapsed += duration
+    return output
+
+
+def _clock(seconds: float) -> str:
+    minutes, rest = divmod(max(0.0, float(seconds)), 60)
+    hours, minutes = divmod(int(minutes), 60)
+    return f"{hours:02d}:{minutes:02d}:{rest:05.2f}"
+
+
+def _saved_word_timings(task_dir: Path) -> dict[str, list[dict[str, Any]]] | None:
+    """读回 TTS 落盘的词级时间戳（秒，相对该段音频起点）；文件缺失或损坏时返回 None。"""
+    try:
+        payload = json.loads((task_dir / "analysis" / "tts_words.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    items = payload.get("items") if isinstance(payload, dict) else None
+    if not isinstance(items, list):
+        return None
+    table: dict[str, list[dict[str, Any]]] = {}
+    try:
+        for item in items:
+            if not isinstance(item, dict) or item.get("_id") is None:
+                continue
+            words = item.get("words")
+            if not isinstance(words, list) or not words:
+                continue
+            table[str(item["_id"])] = [
+                {
+                    "start": max(0.0, float(word.get("start") or 0)),
+                    "end": max(0.0, float(word.get("end") or 0)),
+                    "text": str(word.get("text") or ""),
+                }
+                for word in words
+                if isinstance(word, dict)
+            ]
+    except (TypeError, ValueError):
+        return None
+    return table
+
+
+def _understanding_word_timings(understanding: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    """取理解轨迹里的词级时间戳（原片绝对时间），按口播原文归档。"""
+    table: dict[str, list[dict[str, Any]]] = {}
+    for record in (understanding.get("tracks") or {}).get("speech") or []:
+        words = record.get("words")
+        text = str(record.get("text") or "").strip()
+        if not text or not isinstance(words, list) or not words:
+            continue
+        table[text] = [
+            {
+                "start": float(word.get("start") or 0),
+                "end": float(word.get("end") or 0),
+                "text": str(word.get("text") or word.get("word") or ""),
+            }
+            for word in words
+            if isinstance(word, dict)
+        ]
+    return table
+
+
+def _word_timings(
+    task_dir: Path,
+    items: list[dict[str, Any]],
+    understanding: dict[str, Any],
+) -> dict[Any, list[dict[str, Any]]]:
+    """按脚本 _id 归档每段的词级时间戳，统一换算成相对该段音频起点的秒数。
+
+    两条来源的时间基准不同：tts_words.json 的 start/end 已经相对该段音频起点，直接用；
+    understanding.json 的 tracks.speech[].words 是原片绝对时间，必须扣掉该段 source_start。
+    """
+    saved = _saved_word_timings(task_dir)
+    if saved is not None:
+        return {
+            item.get("_id"): saved[str(item.get("_id"))]
+            for item in items
+            if str(item.get("_id")) in saved
+        }
+    table = _understanding_word_timings(understanding)
+    output: dict[Any, list[dict[str, Any]]] = {}
+    for item in items:
+        words = table.get(str(item.get("narration") or "").strip())
+        if not words:
+            continue
+        try:
+            source_start, _ = parse_timestamp_range(str(item.get("timestamp") or ""))
+        except (ValueError, TypeError):
+            source_start = 0.0
+        kept = [
+            {
+                "start": max(0.0, float(word["start"]) - source_start),
+                "end": max(0.0, float(word["end"]) - source_start),
+                "text": word["text"],
+            }
+            for word in words
+            if float(word["end"]) > source_start
+        ]
+        if kept:
+            output[item.get("_id")] = kept
+    return output
+
+
+def _designed_subtitles(
+    task_dir: Path,
+    spec: dict[str, Any],
+    items: list[dict[str, Any]],
+) -> Path | None:
+    """把逐词高亮 ASS 接进渲染管线；拿不到词级时间戳或成片时间轴时返回空，保留原有 SRT 流程。"""
+    timed = _clip_timerange(items, spec)
+    if not timed:
+        return None
+    analysis = task_dir / "analysis"
+    try:
+        understanding = json.loads((analysis / "understanding.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        understanding = {}
+    timings = _word_timings(task_dir, timed, understanding)
+    tts_results: list[dict[str, Any]] = []
+    for item in timed:
+        narration = str(item.get("narration") or "").strip()
+        words = timings.get(item.get("_id"))
+        if not narration or not words:
+            continue
+        tts_results.append({"_id": item.get("_id"), "text": narration, "words": words})
+    if not any(result["words"] for result in tts_results):
+        return None
+    try:
+        from engine.subtitle_design import write_ass
+    except ImportError:
+        return None
+    play_res_x, play_res_y = DIMENSIONS.get(str(spec.get("aspect") or ""), (1080, 1920))
+    return write_ass(
+        analysis / "designed.ass",
+        timed,
+        tts_results,
+        max_chars=int(spec.get("subtitle_max_chars") or 16),
+        play_res_x=play_res_x,
+        play_res_y=play_res_y,
+        subject_track=(understanding.get("tracks") or {}).get("visual") or None,
+    )
+
+
+def _burn_ass(source: Path, target: Path, ass_path: Path, log=print) -> bool:
+    escaped = str(ass_path).replace("\\", "\\\\").replace("'", "\\'")
+    command = [
+        "ffmpeg", "-nostdin", "-y", "-v", "error", "-i", str(source),
+        "-vf", f"subtitles='{escaped}'",
+        "-c:v", "libx264", "-crf", "20", "-preset", "fast", "-c:a", "copy",
+        "-movflags", "+faststart", str(target),
+    ]
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=3600, check=False)
+    except (OSError, subprocess.SubprocessError) as exc:
+        log(f"逐词高亮字幕烧制失败，保留原字幕：{exc}")
+        return False
+    if result.returncode != 0 or not target.is_file() or target.stat().st_size <= 0:
+        target.unlink(missing_ok=True)
+        log(f"逐词高亮字幕烧制失败，保留原字幕：{(result.stderr or '')[-300:]}")
+        return False
+    return True
 
 
 def _apply_clip_mode(items: list[dict[str, Any]], spec: dict[str, Any]) -> list[dict[str, Any]]:
@@ -329,7 +561,11 @@ def _build_script(spec: dict[str, Any], store: TaskStore) -> list[dict[str, Any]
         if not items:
             raise RuntimeError("文稿脚本为空")
         log(f"使用用户文稿，共 {len(items)} 段")
-        return apply_pronunciation(_apply_pacing(_apply_clip_mode(items, spec), spec), bool(spec.get("tts_pronunciation", True)))
+        return apply_pronunciation(
+            _apply_pacing(_apply_clip_mode(items, spec), spec),
+            bool(spec.get("tts_pronunciation", True)),
+            spec.get("pronunciation") or {},
+        )
 
     store.update_state(
         spec["task_id"],
@@ -350,9 +586,27 @@ def _build_script(spec: dict[str, Any], store: TaskStore) -> list[dict[str, Any]
         step_current=2,
         step_total=6,
     )
-    items = generate_items(markdown, spec, log=log)
-    log(f"脚本生成完成，共 {len(items)} 段")
-    return apply_pronunciation(_apply_pacing(_apply_clip_mode(items, spec), spec), bool(spec.get("tts_pronunciation", True)))
+    draft = generate_items(markdown, spec, log=log)
+    store.update_state(
+        spec["task_id"],
+        phase="reviewing_script",
+        message="正在批判剧本并重写不合格段落",
+    )
+    items, review = critique_and_rewrite(draft, markdown, spec, log=log)
+    analysis_dir = store.task_dir(spec["task_id"]) / "analysis"
+    analysis_dir.mkdir(parents=True, exist_ok=True)
+    (analysis_dir / "script_draft.json").write_text(
+        json.dumps(draft, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    (analysis_dir / "script_review.json").write_text(
+        json.dumps(review, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    log(f"剧本两轮完成，共 {len(items)} 段；需人工复核 {sum(not item['passed'] for item in review['final_reviews'])} 段")
+    return apply_pronunciation(
+            _apply_pacing(_apply_clip_mode(items, spec), spec),
+            bool(spec.get("tts_pronunciation", True)),
+            spec.get("pronunciation") or {},
+        )
 
 
 def _build_params(spec: dict[str, Any], script_path: Path):
@@ -467,6 +721,17 @@ def run(task_dir: Path) -> int:
             )
         else:
             items = _build_script(spec, store)
+            character = (spec.get("profile_snapshot") or {}).get("character") or {}
+            voice_profile = character.get("voice") if isinstance(character.get("voice"), dict) else {}
+            for item in items:
+                if not item.get("emotion") or item.get("emotion") == "平静":
+                    item["emotion"] = spec.get("voice_emotion") or "平静"
+                if voice_profile.get("voice_name"):
+                    item.setdefault("voice_name", voice_profile["voice_name"])
+                if voice_profile.get("rate"):
+                    item.setdefault("voice_rate", voice_profile["rate"])
+                if voice_profile.get("pitch"):
+                    item.setdefault("voice_pitch", voice_profile["pitch"])
             if spec.get("output_mode") == "edit":
                 # AI 剪辑：复用选段结果，全部走原声，不生成 TTS/字幕
                 for item in items:
@@ -482,15 +747,7 @@ def run(task_dir: Path) -> int:
                             "clip_mode": spec.get("clip_mode"),
                             "analysis_mode": spec.get("analysis_mode"),
                             "output_mode": spec.get("output_mode"),
-                            "items": [
-                                {
-                                    "timestamp": item.get("timestamp"),
-                                    "clip_duration": item.get("clip_duration"),
-                                    "narration": item.get("narration"),
-                                    "OST": item.get("OST"),
-                                }
-                                for item in items
-                            ],
+                            "items": items,
                         },
                         ensure_ascii=False,
                         indent=2,
@@ -499,6 +756,7 @@ def run(task_dir: Path) -> int:
                 )
             except OSError:
                 pass
+            build_storyboard(task_dir, items, spec["video_path"])
             if spec.get("review_mode", True):
                 store.update_state(
                     task_id,
@@ -531,12 +789,44 @@ def run(task_dir: Path) -> int:
         task_service.start_subclip_unified(task_id=task_id, params=params)
 
         output_path = task_dir / "combined.mp4"
+        if (
+            spec.get("subtitles", True)
+            and spec.get("output_mode") != "edit"
+            and not spec.get("subtitle_mask_enabled", False)
+        ):
+            ass_path = None
+            try:
+                ass_path = _designed_subtitles(task_dir, spec, items)
+            except Exception as exc:  # noqa: BLE001
+                log(f"逐词高亮字幕生成失败，保留原字幕：{exc}")
+            clean = task_dir / "clean.mp4"
+            if ass_path and clean.is_file():
+                burned = task_dir / "combined_designed.mp4"
+                if _burn_ass(clean, burned, ass_path, log=log):
+                    burned.replace(output_path)
+                    log(f"字幕已替换为逐词高亮版本：{ass_path.name}")
+            elif not ass_path:
+                log("没有词级时间戳，字幕保留原有 SRT 流程")
+        if spec.get("visual_polish", True) and output_path.is_file():
+            polished = task_dir / "combined_polished.mp4"
+            try:
+                style = ((spec.get("profile_snapshot") or {}).get("style") or {}).get("color_settings") or {}
+                report = polish_master(output_path, polished, style)
+                polished.replace(output_path)
+                (task_dir / "analysis" / "finishing.json").write_text(
+                    json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
+                )
+            except Exception as exc:  # noqa: BLE001
+                polished.unlink(missing_ok=True)
+                log(f"画面精修失败，保留未精修母片：{exc}")
         if spec.get("loudness_normalize", True) and output_path.is_file():
             log("正在统一成片响度")
             _normalize_loudness(output_path, log)
         if not output_path.is_file() or output_path.stat().st_size <= 0:
             raise RuntimeError("生成结束但未找到 combined.mp4")
         meta = _probe(output_path)
+        quality = evaluate_quality(task_dir, spec, items, output_path)
+        write_quality_report(task_dir, quality)
         store.write_result(
             task_id,
             {
@@ -548,6 +838,7 @@ def run(task_dir: Path) -> int:
                 "height": meta.get("height"),
                 "script_path": str(script_path),
                 "aspect": spec.get("aspect"),
+                "quality": quality,
                 "completed_at": _now(),
             },
         )
@@ -555,10 +846,10 @@ def run(task_dir: Path) -> int:
         if current.get("status") != "cancelled":
             store.update_state(
                 task_id,
-                status="success",
-                phase="done",
+                status="success" if quality["passed"] else "needs_review",
+                phase="done" if quality["passed"] else "quality_review",
                 progress=100,
-                message="视频生成完成",
+                message="视频生成完成" if quality["passed"] else f"成片有 {quality['summary']['errors']} 项严重问题，需人工复核",
                 step_current=6,
                 step_total=6,
                 finished_at=_now(),

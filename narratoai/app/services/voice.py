@@ -1791,6 +1791,17 @@ def get_audio_duration(sub_maker: submaker.SubMaker):
     return sub_maker.offset[-1][1] / 10000000
 
 
+def emotion_settings(emotion: str, rate: float, pitch: float) -> tuple[float, float]:
+    adjustments = {
+        "激动": (1.1, 1.06),
+        "哽咽": (0.88, 0.93),
+        "幽默": (1.04, 1.03),
+        "平静": (1.0, 1.0),
+    }
+    rate_factor, pitch_factor = adjustments.get(str(emotion or "平静"), (1.0, 1.0))
+    return max(0.5, min(2.0, rate * rate_factor)), max(0.5, min(2.0, pitch * pitch_factor))
+
+
 def tts_multiple(task_id: str, list_script: list, voice_name: str, voice_rate: float, voice_pitch: float, tts_engine: str = "azure"):
     """
     根据JSON文件中的多段文本进行TTS转换
@@ -1823,12 +1834,21 @@ def tts_multiple(task_id: str, list_script: list, voice_name: str, voice_rate: f
             subtitle_file = os.path.join(output_dir, f"subtitle_{timestamp}.srt")
 
             text = item.get('tts_text') or item['narration']
+            item_voice = config.normalize_indextts_voice_prefix(
+                parse_voice_name(str(item.get('voice_name') or voice_name))
+            )
+            try:
+                base_rate = float(item.get('voice_rate') or voice_rate)
+                base_pitch = float(item.get('voice_pitch') or voice_pitch)
+            except (TypeError, ValueError):
+                base_rate, base_pitch = voice_rate, voice_pitch
+            item_rate, item_pitch = emotion_settings(str(item.get('emotion') or '平静'), base_rate, base_pitch)
 
             sub_maker = tts(
                 text=text,
-                voice_name=voice_name,
-                voice_rate=voice_rate,
-                voice_pitch=voice_pitch,
+                voice_name=item_voice,
+                voice_rate=item_rate,
+                voice_pitch=item_pitch,
                 voice_file=audio_file,
                 tts_engine=tts_engine,
             )
@@ -1841,7 +1861,7 @@ def tts_multiple(task_id: str, list_script: list, voice_name: str, voice_rate: f
             else:
                 # SoulVoice、Qwen3、IndexTTS、OmniVoice、豆包语音 引擎不生成精确字幕文件
                 if (
-                    is_soulvoice_voice(voice_name)
+                    is_soulvoice_voice(item_voice)
                     or is_qwen_engine(tts_engine)
                     or tts_engine in (
                         config.INDEXTTS_ENGINE,
@@ -1893,6 +1913,14 @@ def tts_multiple(task_id: str, list_script: list, voice_name: str, voice_rate: f
                 "subtitle_file": subtitle_file,
                 "duration": duration,
                 "text": text,
+                "voice_name": item_voice,
+                "voice_rate": item_rate,
+                "voice_pitch": item_pitch,
+                "emotion": item.get('emotion') or '平静',
+                "words": [
+                    {"start": offset[0] / 10000000, "end": offset[1] / 10000000, "text": word}
+                    for offset, word in zip(getattr(sub_maker, 'offset', []), getattr(sub_maker, 'subs', []))
+                ],
             })
             logger.info(f"已生成音频文件: {audio_file}")
 

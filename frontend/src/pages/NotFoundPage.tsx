@@ -10,7 +10,7 @@ export default function NotFoundPage() {
       <h1 className="mt-4 text-[17px] font-medium text-ink-1">页面不存在</h1>
       <p className="mt-1.5 text-[13px] text-ink-3">你访问的页面不存在或已被移动</p>
       <Link to="/" className="mt-6">
-        <Button variant="primary">回到仪表盘</Button>
+        <Button variant="primary">回到工作台概览</Button>
       </Link>
     </div>
   )

@@ -237,18 +237,17 @@ def _build_ffmpeg_cmd(stream_url: str, platform: str, out_path: Path, fps: int =
         opts += ["-headers", f"User-Agent: {mobile_ua}\r\nReferer: https://live.douyin.com/\r\n"]
     if platform == "bilibili":
         opts += ["-headers", f"User-Agent: {UA}\r\nReferer: https://live.bilibili.com/\r\n"]
-    # 帧率限制需要重编码（流拷贝改不了帧率）；0 = 原始帧率直接拷贝
-    # 注意：视频重编码时音频必须一起转 aac——copy 音频进 fMP4 会被 muxer 拒绝
-    if fps > 0:
-        codec = ["-vf", f"fps={fps}", "-c:v", "libx264", "-preset", "veryfast",
-                 "-crf", "23", "-c:a", "aac", "-b:a", "128k"]
-    else:
-        # HLS 来的 AAC 是 ADTS 裸流，fMP4 封装前必须转 ASC，否则 muxer 报 Operation not permitted
-        codec = ["-c", "copy", "-bsf:a", "aac_adtstoasc"]
-    # 写成分片 mp4（fMP4）：录制中即可被预览播放；收尾时再 remux 成 faststart
-    movflags = "+frag_keyframe+empty_moov+default_base_moof"
-    return ["ffmpeg", "-y", *opts, "-i", stream_url,
-            *codec, "-f", "mp4", "-movflags", movflags, str(out_path)]
+    # fps=0 原样录制：流拷贝零转码；只有限帧率（fps>0）才重编码去锐化/响度滤镜
+    # （loudnorm 是有状态滤镜，跨 segment 是否一致未经验证，不进默认路径）
+    codec = ["-c", "copy"] if fps <= 0 else [
+        "-vf", f"fps={fps}",
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "21", "-c:a", "aac",
+    ]
+    return [
+        "ffmpeg", "-y", *opts, "-i", stream_url, *codec,
+        "-f", "segment", "-segment_time", "600", "-segment_format", "mp4",
+        "-segment_format_options", "movflags=+faststart", str(out_path),
+    ]
 
 
 def start_recording(url: str, title: str = "", quality: str = "best", fps: int = 0) -> dict:
@@ -261,7 +260,7 @@ def start_recording(url: str, title: str = "", quality: str = "best", fps: int =
 
     if not title:
         title = f"直播录制 {time.strftime('%m-%d %H:%M')}"
-    filename = f"{_safe_name(title)}_{time.strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex}.mp4"
+    filename = f"{_safe_name(title)}_{time.strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex}_%03d.mp4"
     out_path = RECORDINGS_DIR / filename
 
     rec_id = add_recording(url, platform, title, filename, quality, fps)
@@ -284,19 +283,33 @@ def start_recording(url: str, title: str = "", quality: str = "best", fps: int =
     return get_recording(rec_id)
 
 
-def _mark_started(rec_id: int, proc: subprocess.Popen, out_path: Path) -> None:
-    """只有 ffmpeg 真正写出媒体数据后才开始计时。
+def _recording_paths(rec: dict) -> list[Path]:
+    filename = str(rec.get("filename") or "")
+    if not filename:
+        return []
+    pattern = filename.replace("%03d", "*")
+    paths = [*RECORDINGS_DIR.glob(pattern), *VIDEOS_DIR.glob(pattern)]
+    return sorted({path for path in paths if path.is_file()})
 
-    直播间解析、握手、等待首个关键帧都可能耗时几十秒，不能把这段算进录制时长。
-    """
+
+def _segment_size(rec: dict) -> int:
+    try:
+        return sum(path.stat().st_size for path in _recording_paths(rec))
+    except OSError:
+        return 0
+
+
+def _mark_started(rec_id: int, proc: subprocess.Popen, out_path: Path) -> None:
+    """只有 ffmpeg 真正写出媒体数据（文件大小大于 0）后才开始计时。"""
+    del out_path
     deadline = time.monotonic() + 120
     while time.monotonic() < deadline:
         if proc.poll() is not None:
             return
         try:
-            if out_path.exists() and out_path.stat().st_size > 0:
-                rec = get_recording(rec_id)
-                if rec and rec.get("status") == "recording" and not rec.get("started_at"):
+            rec = get_recording(rec_id)
+            if rec and _segment_size(rec) > 0:
+                if rec.get("status") == "recording" and not rec.get("started_at"):
                     update_recording(rec_id, started_at=time.strftime("%Y-%m-%d %H:%M:%S"))
                 return
         except OSError:
@@ -358,7 +371,7 @@ def _remux_to_faststart(src: Path, dst: Path) -> bool:
 
 
 def _finish_success(rec_id: int, rec: dict) -> bool:
-    """录制收尾：remux + 探测信息 + 挪进视频库 + 封面。全局只允许执行一次，抢到才返回 True。"""
+    """每个录制分段独立入库、评分和生成素材卡，全局只收尾一次。"""
     with _lock:
         if rec_id in _finalized:
             return False
@@ -366,29 +379,50 @@ def _finish_success(rec_id: int, rec: dict) -> bool:
         ev = threading.Event()
         _finalize_events[rec_id] = ev
     try:
-        size = _file_size(rec["filename"])
-        src = RECORDINGS_DIR / rec["filename"]
-        dst = VIDEOS_DIR / rec["filename"]
-        # fMP4 → faststart remux；失败则直接挪原文件兜底
-        if not _remux_to_faststart(src, dst):
-            try:
-                src.replace(dst)
-            except Exception:
-                dst = src  # 跨设备等极端情况就留在原地
-        else:
-            src.unlink(missing_ok=True)
-        info = _probe_with_retry(dst)
-        cover_name = None
-        cover_path = COVERS_DIR / (Path(rec["filename"]).stem + ".jpg")
-        if make_cover(dst, cover_path):
-            cover_name = cover_path.name
-        video = add_video(title=rec["title"], filename=dst.name, size=size,
-                          duration=info.get("duration"), width=info.get("width"),
-                          height=info.get("height"), cover=cover_name,
-                          source_platform=f"live_{rec['platform']}", source_url=rec["url"])
-        update_recording(rec_id, status="completed", size=size,
-                         duration=info.get("duration"), video_id=video["id"],
-                         finished_at=time.strftime("%Y-%m-%d %H:%M:%S"))
+        from app.services.quality import update_quality
+        from app.services.understanding import start_analysis
+
+        paths = _recording_paths(rec)
+        if not paths:
+            raise RuntimeError("录制结束但没有有效媒体分段")
+        segments = []
+        total_size = 0
+        total_duration = 0.0
+        for index, src in enumerate(paths, 1):
+            dst = VIDEOS_DIR / src.name
+            if src != dst:
+                if not _remux_to_faststart(src, dst):
+                    src.replace(dst)
+                else:
+                    src.unlink(missing_ok=True)
+            info = _probe_with_retry(dst)
+            size = dst.stat().st_size
+            cover_path = COVERS_DIR / f"{dst.stem}.jpg"
+            cover = cover_path.name if make_cover(dst, cover_path) else None
+            title = rec["title"] + (f" · 第 {index:02d} 段" if len(paths) > 1 else "")
+            video = add_video(
+                title=title, filename=dst.name, size=size,
+                duration=info.get("duration"), width=info.get("width"),
+                height=info.get("height"), cover=cover,
+                source_platform=f"live_{rec['platform']}", source_url=rec["url"],
+            )
+            quality = update_quality(video["id"], dst)
+            start_analysis(video["id"])
+            total_size += size
+            total_duration += float(info.get("duration") or 0)
+            segments.append({
+                "index": index,
+                "video_id": video["id"],
+                "duration": info.get("duration"),
+                "size": size,
+                "quality_score": quality["score"],
+                "summary_status": "running",
+            })
+        update_recording(
+            rec_id, status="completed", size=total_size, duration=total_duration,
+            video_id=segments[0]["video_id"], segments_json=json.dumps(segments, ensure_ascii=False),
+            finished_at=time.strftime("%Y-%m-%d %H:%M:%S"),
+        )
         return True
     finally:
         ev.set()
@@ -435,10 +469,12 @@ def stop_recording(rec_id: int) -> bool:
 def _file_size(filename: str | None) -> int:
     if not filename:
         return 0
+    if "%03d" in filename:
+        return sum(path.stat().st_size for path in _recording_paths({"filename": filename}))
     for base in (RECORDINGS_DIR, VIDEOS_DIR):
-        p = base / filename
-        if p.exists():
-            return p.stat().st_size
+        path = base / filename
+        if path.exists():
+            return path.stat().st_size
     return 0
 
 
@@ -452,10 +488,5 @@ def _last_error_line(rec_id: int) -> str:
 
 
 def recording_file_path(rec: dict) -> Path | None:
-    if not rec.get("filename"):
-        return None
-    for base in (RECORDINGS_DIR, VIDEOS_DIR):
-        p = base / rec["filename"]
-        if p.exists():
-            return p
-    return None
+    paths = _recording_paths(rec)
+    return paths[-1] if paths else None

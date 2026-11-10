@@ -1,353 +1,128 @@
-"""多视频剪辑拼接：时间线片段 → ffmpeg 拼接渲染（后台任务）→ 入库视频库。
+"""智能剪辑：分析切点、精彩保留、模型精排、按时间线导出。"""
 
-另含 AI 智能剪辑分析（whisper 转写 + LLM 标废片段）与拆分导出。
-"""
-import hashlib
-import re
-import subprocess
-import threading
-from pathlib import Path
+from typing import Literal
 
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from fastapi import APIRouter
+from pydantic import BaseModel, Field
 
-from app.config import COVERS_DIR, VIDEOS_DIR, ensure_dirs
-from app.db import add_video, get_video
-from app.services.ai_edit import (
-    AIResponseError,
-    AIServiceError,
-    DEFAULT_LLM_KINDS,
-    KIND_DESCS,
-    analyze_transcript,
-    clean_intervals,
-    keep_segments,
-    plan_edit,
-    transcribe,
-)
-from app.services.audio_analysis import detect_silence
-from app.services.media import concat_clips, make_cover, probe_video
-from app.services.video_analysis import detect_scene_cuts
-from app.services.tasks import task_manager
+from engine.schemas import Suggestion
+from app.jobs import create, submit
+from app.services.edit_flow import analyze_videos, build_highlight, export_clips, plan_suggestions
+from app.services.videos import fetch
 
 router = APIRouter(prefix="/api/edit", tags=["edit"])
 
 
-class Clip(BaseModel):
-    """一个时间线片段：截取 video_id 视频的 [start, end) 秒。"""
+class AnalyzeBody(BaseModel):
+    video_ids: list[int] = Field(min_length=1, max_length=12)
+    silence_db: float = -32
+    min_silence: float = Field(default=0.45, ge=0.2, le=5)
+    min_black: float = Field(default=0.3, ge=0.15, le=5)
+    scene_threshold: float = Field(default=0.3, ge=0.05, le=0.8)
 
+
+class PlanBody(BaseModel):
     video_id: int
-    start: float
-    end: float
+    suggestions: list[Suggestion]
+    instruction: str = ""
+    use_llm: bool = False
 
 
-class ConcatRequest(BaseModel):
+class ExportClip(BaseModel):
+    video_id: int = 0
+    start: float = Field(default=0, ge=0)
+    end: float = Field(default=0, ge=0)
+    speed: float = Field(default=1.0, ge=0.5, le=2.0)
+    freeze: float = Field(default=0.0, ge=0, le=30)
+    kind: Literal["video", "image"] = "video"
+    image_id: int = 0
+    image_name: str = ""
+    video_name: str = ""
+    overlay: bool = False
     title: str = ""
-    clips: list[Clip]
-    """导出后拆分成几段（1 = 不拆分，>1 时成片再均分入库，每段标题带序号）"""
-    split_parts: int = 1
+
+    model_config = {"extra": "ignore"}
 
 
-def _unique_path(directory: Path, stem: str, suffix: str = ".mp4") -> Path:
-    p = directory / f"{stem}{suffix}"
-    n = 1
-    while p.exists():
-        p = directory / f"{stem}_{n}{suffix}"
-        n += 1
-    return p
+class ExportBody(BaseModel):
+    title: str = "剪辑成片"
+    clips: list[ExportClip] = Field(min_length=1, max_length=40)
 
 
-def _ingest(task, path: Path, title: str) -> dict:
-    """渲染产物探测元数据 + 封面 + 入库。"""
-    meta = probe_video(path)
-    cover_name = path.stem + ".jpg"
-    cover = cover_name if make_cover(path, COVERS_DIR / cover_name) else None
-    video = add_video(
-        title=title,
-        filename=path.name,
-        size=path.stat().st_size,
-        duration=meta.get("duration"),
-        width=meta.get("width"),
-        height=meta.get("height"),
-        cover=cover,
-        source_platform="edited",
-        source_url=None,
-    )
-    dur = meta.get("duration")
-    task.log(f"已入库：「{title}」{f'（{dur:.1f}s）' if dur else ''}")
-    return video
-
-
-@router.post("/concat")
-def concat_videos(req: ConcatRequest):
-    """创建拼接渲染任务（异步），立即返回 task_id，进度在任务中心查看。"""
-    if not req.clips:
-        raise HTTPException(400, "时间线为空")
-    if len(req.clips) > 50:
-        raise HTTPException(400, "片段过多（最多 50 个）")
-    if not 1 <= req.split_parts <= 20:
-        raise HTTPException(400, "拆分段数需在 1-20 之间")
-    sources = []
-    for c in req.clips:
-        v = get_video(c.video_id)
-        if not v:
-            raise HTTPException(404, f"视频 {c.video_id} 不存在")
-        path = VIDEOS_DIR / v["filename"]
-        if not path.exists():
-            raise HTTPException(404, f"视频「{v['title']}」文件已丢失")
-        start, end = round(c.start, 2), round(c.end, 2)
-        dur = v.get("duration")
-        if start < 0 or end <= start:
-            raise HTTPException(400, f"「{v['title']}」时间区间不合法（需 0 ≤ start < end）")
-        if dur and end > dur + 0.5:
-            raise HTTPException(400, f"「{v['title']}」结束时间超出视频时长（{dur:.1f}s）")
-        sources.append({"path": path, "start": start, "end": end})
-
-    title = re.sub(r'[\\/:*?"<>|#\n\r]', "_", req.title.strip())[:80] or "拼接视频"
-    total = sum(s["end"] - s["start"] for s in sources)
-    if req.split_parts > 1 and total / req.split_parts < 0.5:
-        raise HTTPException(400, f"拆成 {req.split_parts} 段后每段不足 0.5s，减少段数")
-    task_title = f"拼接 {len(sources)} 段 → {title}"
-    if req.split_parts > 1:
-        task_title += f"（再拆 {req.split_parts} 段）"
-    task = task_manager.create("edit", task_title, input={
-        "mode": "concat",
-        "title": title,
-        "clips": [
-            {"video_id": clip.video_id, "start": round(clip.start, 2), "end": round(clip.end, 2)}
-            for clip in req.clips
-        ],
-        "split_parts": req.split_parts,
-    })
-    task.log(f"共 {len(sources)} 个片段，预计总时长 {total:.1f}s")
-    threading.Thread(target=_render, args=(task, sources, title, req.split_parts), daemon=True).start()
-    return {"task_id": task.id}
-
-
-def _render(task, sources: list[dict], title: str, split_parts: int = 1):
-    ensure_dirs()
-    final = _unique_path(VIDEOS_DIR, title)
-    task.status = "running"
-    try:
-        concat_clips(
-            sources,
-            final,
-            on_progress=lambda p: setattr(task, "progress", p * (0.7 if split_parts > 1 else 1.0)),
-        )
-    except Exception as e:
-        task.log(f"渲染失败：{e}")
-        task.finish("failed")
-        return
-
-    if split_parts <= 1:
-        task.result["video"] = _ingest(task, final, title)
-        task.progress = 100.0
-        task.finish("success")
-        return
-
-    # 拆分成 N 段入库（重编码保证切点精确）；母片不留库
-    meta = probe_video(final)
-    total = meta.get("duration") or 0
-    if total <= 0:
-        task.result["video"] = _ingest(task, final, title)
-        task.finish("success")
-        return
-    part_dur = total / split_parts
-    videos = []
-    for i in range(split_parts):
-        a, b = i * part_dur, (total if i == split_parts - 1 else (i + 1) * part_dur)
-        part = _unique_path(VIDEOS_DIR, f"{title}_第{i + 1}段")
-        task.log(f"拆分第 {i + 1}/{split_parts} 段（{a:.1f}s-{b:.1f}s）…")
-        r = subprocess.run(
-            ["ffmpeg", "-y", "-v", "error", "-ss", f"{a:.3f}", "-to", f"{b:.3f}", "-i", str(final),
-             "-c:v", "libx264", "-crf", "20", "-preset", "fast", "-c:a", "aac", "-b:a", "128k",
-             "-movflags", "+faststart", str(part)],
-            capture_output=True, timeout=1800,
-        )
-        if r.returncode != 0 or not part.exists() or part.stat().st_size == 0:
-            part.unlink(missing_ok=True)
-            task.log(f"第 {i + 1} 段拆分失败：{r.stderr.decode('utf-8', errors='replace')[-200:]}")
-            task.finish("failed")
-            return
-        videos.append(_ingest(task, part, f"{title}（第{i + 1}/{split_parts}段）"))
-        task.progress = 70 + (i + 1) / split_parts * 30
-    final.unlink(missing_ok=True)
-    task.result["videos"] = videos
-    task.progress = 100.0
-    task.finish("success")
-
-
-class AnalyzeRequest(BaseModel):
-    video_ids: list[int]
-    """要识别的废片类型：intro 开头 / outro 结尾 / ad 广告 / silence 静音 / repeat 重复"""
-    kinds: list[str] = ["intro", "outro", "ad"]
-    """用户自定义剪辑要求（原样拼进 prompt）"""
-    custom_prompt: str = ""
-
-
-class PlanRequest(BaseModel):
+class HighlightSource(BaseModel):
     video_id: int
-    target_duration: float = 60
-    custom_prompt: str = ""
+    duration: float = 0
+    title: str = ""
+    segments: list[dict] = Field(default_factory=list)
+    scenes: list = Field(default_factory=list)
+    silence: list[dict] = Field(default_factory=list)
+    black: list[dict] = Field(default_factory=list)
+    frames: list[dict] = Field(default_factory=list)
+    suggestions: list[dict] = Field(default_factory=list)
+
+    model_config = {"extra": "ignore"}
 
 
-@router.post("/plan")
-def plan_video(req: PlanRequest):
-    """按目标时长做 AI 选段，返回可应用到时间线的保留片段。"""
-    v = get_video(req.video_id)
-    if not v:
-        raise HTTPException(404, "视频不存在")
-    path = VIDEOS_DIR / v["filename"]
-    if not path.exists():
-        raise HTTPException(404, "视频文件已丢失")
-    target = max(5.0, min(float(req.target_duration), 1800.0))
-    task = task_manager.create("edit", f"AI 成片规划 → {v['title'][:20]} · {target:.0f}s", input={
-        "mode": "plan",
-        "video_ids": [req.video_id],
-        "target_duration": target,
-        "custom_prompt": req.custom_prompt,
-    })
-    threading.Thread(target=_plan, args=(task, v, path, target, req.custom_prompt), daemon=True).start()
-    return {"task_id": task.id}
-
-
-def _plan(task, video: dict, path: Path, target: float, custom_prompt: str):
-    task.status = "running"
-    try:
-        duration = float(video.get("duration") or probe_video(path).get("duration") or 0)
-        if duration <= 0:
-            raise ValueError("无法读取视频时长")
-        target = min(target, duration)
-        task.log(f"转写「{video['title']}」…")
-        segments = transcribe(path, log=task.log)
-        task.progress = 35
-        task.log(f"AI 正在按 {target:.0f}s 目标选段…")
-        cuts = detect_scene_cuts(path)
-        task.log(f"镜头切换点：{len(cuts)} 个")
-        plan = plan_edit(segments, duration, target, custom_prompt, log=task.log, cuts=cuts)
-        task.result = {"plan": {"video_id": video["id"], "title": video["title"], **plan}}
-        task.progress = 100
-        task.finish("success")
-    except Exception as exc:  # noqa: BLE001
-        task.log(f"AI 成片规划失败：{exc}")
-        task.finish("failed")
+class HighlightBody(BaseModel):
+    videos: list[HighlightSource] = Field(min_length=1, max_length=12)
+    instruction: str = ""
+    use_llm: bool = True
 
 
 @router.post("/analyze")
-def analyze_video(req: AnalyzeRequest):
-    """AI 分析（本地静音/转写 + LLM 标废片段），支持多个视频，结果在 task.result。"""
-    if not req.video_ids:
-        raise HTTPException(400, "未指定视频")
-    if len(req.video_ids) > 20:
-        raise HTTPException(400, "一次最多分析 20 个视频")
-    kinds = [k for k in req.kinds if k in KIND_DESCS] or list(DEFAULT_LLM_KINDS)
-    items = []
-    for vid in req.video_ids:
-        v = get_video(vid)
-        if not v:
-            raise HTTPException(404, f"视频 {vid} 不存在")
-        path = VIDEOS_DIR / v["filename"]
-        if not path.exists():
-            raise HTTPException(404, f"视频「{v['title']}」文件已丢失")
-        items.append((v, path))
-    names = "、".join(v["title"][:12] for v, _ in items)
-    task = task_manager.create("edit", f"AI 分析 {len(items)} 个视频 → {names}", input={
-        "mode": "analyze",
-        "video_ids": req.video_ids,
-        "kinds": kinds,
-        "custom_prompt": req.custom_prompt,
-    })
-    threading.Thread(target=_analyze, args=(task, items, kinds, req.custom_prompt), daemon=True).start()
-    return {"task_id": task.id}
+def analyze(body: AnalyzeBody):
+    for video_id in body.video_ids:
+        fetch(video_id)
+    job = create("edit.analyze", "分析切点", {"video_ids": list(body.video_ids)})
+
+    def run(job_id: str) -> None:
+        analyze_videos(
+            job_id,
+            body.video_ids,
+            silence_db=body.silence_db,
+            min_silence=body.min_silence,
+            min_black=body.min_black,
+            scene_threshold=body.scene_threshold,
+        )
+
+    return submit(job, run)
 
 
-def _analyze(task, items: list[tuple[dict, Path]], kinds: list[str], custom_prompt: str):
-    task.status = "running"
-    analyses = []
-    errors = []
-    successful_steps = 0
-    current_video_id = None
-    try:
-        for i, (video, path) in enumerate(items, 1):
-            current_video_id = video["id"]
-            task.log(f"[{i}/{len(items)}] 分析「{video['title']}」…")
-            duration = video.get("duration") or (probe_video(path).get("duration") or 0)
-            waste = []
-            video_errors = []
+@router.post("/plan")
+def plan(body: PlanBody):
+    return plan_suggestions(
+        body.video_id,
+        [item.model_dump() for item in body.suggestions],
+        instruction=body.instruction,
+        use_llm=body.use_llm,
+    )
 
-            def fail(error_type: str, exc: Exception):
-                error = {"video_id": video["id"], "type": error_type, "message": str(exc)}
-                video_errors.append(error)
-                errors.append(error)
-                task.log(f"「{video['title']}」{error_type} 错误：{exc}")
 
-            if "silence" in kinds:
-                try:
-                    waste.extend(detect_silence(path, log=task.log))
-                    successful_steps += 1
-                except Exception as exc:
-                    fail("audio", exc)
+@router.post("/highlight")
+def highlight(body: HighlightBody):
+    for item in body.videos:
+        fetch(item.video_id)
+    return build_highlight(
+        [item.model_dump() for item in body.videos],
+        instruction=body.instruction,
+        use_llm=body.use_llm,
+    )
 
-            llm_kinds = [kind for kind in kinds if kind != "silence"]
-            if llm_kinds:
-                try:
-                    segments = transcribe(path, log=task.log)
-                except Exception as exc:
-                    fail("transcription", exc)
-                else:
-                    try:
-                        waste.extend(analyze_transcript(
-                            segments, duration, kinds=llm_kinds,
-                            custom_prompt=custom_prompt, log=task.log,
-                        ))
-                        successful_steps += 1
-                    except AIResponseError as exc:
-                        fail("parse", exc)
-                    except AIServiceError as exc:
-                        fail("ai", exc)
-                    except Exception as exc:
-                        fail("ai", exc)
 
-            cleaned = clean_intervals(waste, duration, kinds=kinds)
-            enriched = []
-            for item in cleaned:
-                source = item.get("source") or "llm"
-                fingerprint = (
-                    f"{video['id']}:{item['kind']}:{item['start']:.2f}:"
-                    f"{item['end']:.2f}:{source}"
-                ).encode("utf-8")
-                enriched.append({
-                    **item,
-                    "id": "suggestion-" + hashlib.sha256(fingerprint).hexdigest()[:20],
-                    "video_id": video["id"],
-                    "source": source,
-                })
-            analysis = {
-                "video_id": video["id"],
-                "title": video["title"],
-                "duration": duration,
-                "waste": enriched,
-                "keep": keep_segments(enriched, duration),
-            }
-            if video_errors:
-                analysis["errors"] = video_errors
-            analyses.append(analysis)
+@router.post("/export")
+def export(body: ExportBody):
+    clips = [item.model_dump() for item in body.clips]
+    title = body.title.strip()[:80] or "剪辑成片"
+    for clip in clips:
+        video_id = int(clip.get("video_id") or 0)
+        if clip.get("kind") == "image" or video_id <= 0:
+            continue
+        fetch(video_id)
+    job = create("edit.export", "导出成片", {"title": title, "clips": clips})
+    return submit(job, lambda job_id: export_clips(job_id, title, clips))
 
-            if not enriched and not video_errors:
-                task.log(f"「{video['title']}」未发现可剪区间")
-            for item in enriched:
-                task.log(
-                    f"「{video['title']}」建议剪除 {item['start']:.1f}s-{item['end']:.1f}s"
-                    f"（{item['kind']}：{item['reason']}）"
-                )
-            task.progress = i / len(items) * 100
-    except Exception as exc:
-        errors.append({"video_id": current_video_id, "type": "internal", "message": str(exc)})
-        task.log(f"分析失败：{exc}")
-    finally:
-        task.result = {"analyses": analyses, "errors": errors}
-        if not errors:
-            task.finish("success")
-        elif successful_steps:
-            task.finish("partial")
-        else:
-            task.finish("failed")
+
+@router.post("/concat")
+def concat(body: ExportBody):
+    """旧路径别名。新页面走 /export。"""
+    return export(body)

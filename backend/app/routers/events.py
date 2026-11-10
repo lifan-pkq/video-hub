@@ -5,7 +5,8 @@ import json
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from app.services.events import event_hub
-from app.services.tasks import task_manager
+from app.services.job_bridge import merged_tasks
+from app.auth import ws_authorized
 
 router = APIRouter(prefix="/api", tags=["events"])
 
@@ -14,13 +15,16 @@ PING_INTERVAL = 25  # 秒；应用层保活，避免反代空闲断连
 
 @router.websocket("/ws")
 async def ws_events(ws: WebSocket):
+    if not ws_authorized(ws):
+        await ws.close(code=1008)  # policy violation
+        return
     await ws.accept()
     queue = event_hub.subscribe()
     try:
         # 先订阅再发快照：期间到达的事件进入队列，随后由 writer 按序补发，不丢不乱
         await ws.send_json({
             "type": "snapshot",
-            "tasks": [t.to_dict(with_logs=False) for t in task_manager.list(limit=20)],
+            "tasks": merged_tasks(with_logs=False, limit=20),
         })
         writer = asyncio.create_task(_writer(ws, queue))
         try:

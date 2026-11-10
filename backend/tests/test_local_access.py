@@ -1,12 +1,8 @@
-import tempfile
 import unittest
-from pathlib import Path
-from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
 from app import main
-from app.routers import sms
 
 
 class LocalAccessTests(unittest.TestCase):
@@ -18,21 +14,19 @@ class LocalAccessTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), [])
 
-    def test_cors_allows_any_origin(self):
+    def test_cors_uses_local_frontend_allowlist(self):
         response = self.client.options(
             "/api/tasks",
             headers={"Origin": "http://localhost:5173", "Access-Control-Request-Method": "GET"},
         )
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.headers["access-control-allow-origin"], "*")
+        self.assertEqual(response.headers["access-control-allow-origin"], "http://localhost:5173")
 
-    def test_sms_accepts_local_webhook_without_token(self):
-        with tempfile.TemporaryDirectory() as directory:
-            with patch.object(sms, "PUBLISHER_DIR", Path(directory)):
-                response = self.client.post("/api/sms-code", json={"code": "123456"})
-            self.assertEqual(response.status_code, 200)
-            self.assertTrue(response.json()["ok"])
-            self.assertNotIn("123456", response.text)
+    def test_removed_automation_routes_are_not_mounted(self):
+        self.assertEqual(self.client.post("/api/sms-code", json={"code": "123456"}).status_code, 404)
+        self.assertEqual(self.client.get("/api/accounts").status_code, 404)
+        self.assertEqual(self.client.get("/api/watchers").status_code, 404)
+        self.assertEqual(self.client.get("/api/narrate/legacy-tasks").status_code, 404)
 
 
 if __name__ == "__main__":

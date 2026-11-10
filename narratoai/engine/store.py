@@ -11,8 +11,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-TERMINAL = {"success", "failed", "cancelled"}
-STATUSES = {"queued", "running", "awaiting_review", "success", "failed", "cancelled"}
+TERMINAL = {"success", "needs_review", "failed", "cancelled"}
+STATUSES = {"queued", "running", "awaiting_review", "success", "needs_review", "failed", "cancelled"}
 MAX_LOG_CHARS = 12000
 
 
@@ -262,6 +262,8 @@ class TaskStore:
             "aspect": spec.get("aspect") or "",
             "voice_name": spec.get("voice_name") or "",
             "target_duration": spec.get("target_duration") or 0,
+            "material_source": state.get("material_source") or "",
+            "material_note": state.get("material_note") or "",
             "result": result if result else None,
             "has_script": (directory / "script.json").is_file(),
         }

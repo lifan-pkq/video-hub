@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.venv/
+__pycache__/
+.pytest_cache/
+data/
+*.pyc
+.env
+*.tsbuildinfo
+.DS_Store
+frontend/src/assets/

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Video Hub + NarratoAI 统一部署；密码只从 SSHPASS 环境变量读取。
+# Video Hub + NarratoAI 统一部署；仅用 SSH 私钥（BatchMode，无密码交互）。
 set -euo pipefail
 
 SERVER_USER="${SERVER_USER:-root}"
@@ -7,16 +7,24 @@ SERVER_IP="${SERVER_IP:-39.105.112.189}"
 REMOTE_DIR="/opt/video-hub"
 PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-: "${SSHPASS:?请先设置环境变量 SSHPASS=服务器SSH密码}"
+SSH_KEY="${SSH_KEY:-$HOME/.ssh/id_ed25519_grokbot}"
+SSH_OPTS=(-i "$SSH_KEY" -o IdentitiesOnly=yes -o BatchMode=yes
+          -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10)
 
-SSH_CMD=(sshpass -e ssh -o StrictHostKeyChecking=accept-new "$SERVER_USER@$SERVER_IP")
-RSYNC_SSH="sshpass -e ssh -o StrictHostKeyChecking=accept-new"
+if [[ ! -r "$SSH_KEY" ]]; then
+  echo "缺少可用私钥：$SSH_KEY（可 export SSH_KEY=/path/to/key）" >&2
+  exit 1
+fi
+# BatchMode=yes：服务器关掉密码登录后，缺 key 会立刻失败而不是卡在提示符
+SSH_CMD=(ssh "${SSH_OPTS[@]}" "$SERVER_USER@$SERVER_IP")
+RSYNC_SSH="ssh ${SSH_OPTS[*]}"
 
 echo "=== [1/4] 本地测试与前端构建 ==="
+# 后端跑在项目根目录 venv（systemd：ExecStart=$REMOTE_DIR/.venv/bin/python），backend/ 下没有 .venv
 cd "$PROJECT_DIR/backend"
-.venv/bin/python -m unittest discover -s tests -v
-cd "$PROJECT_DIR"
-python3 -m unittest discover -s narratoai/engine/tests -v
+VIDEO_HUB_AUTH_MODE=off "$PROJECT_DIR/.venv/bin/python" -m unittest discover -s tests -v
+cd "$PROJECT_DIR/narratoai"
+.venv/bin/python -m unittest discover -s engine/tests -v
 cd "$PROJECT_DIR/frontend"
 npm run build
 
@@ -53,7 +61,6 @@ for attempt in {1..30}; do
 done
 curl -sf -o /dev/null -w 'Video Hub HTTP %{http_code}\n' http://localhost/
 curl -sf http://127.0.0.1:8601/health
-curl -sf http://localhost/narrato/_stcore/health
 curl -sf http://localhost/preview/health
 EOF
 

@@ -1,3 +1,4 @@
+import json
 import sqlite3
 import tempfile
 import unittest
@@ -60,11 +61,12 @@ class NarratoImportTests(unittest.TestCase):
         narrato_import._observed_sizes.clear()
         self.tempdir.cleanup()
 
-    def make_final(self, task_id="task-1234", content=b"video"):
+    def make_final(self, task_id="task-1234", content=b"video", quality_passed=True):
         task_dir = self.tasks_dir / task_id
         task_dir.mkdir()
         source = task_dir / "combined.mp4"
         source.write_bytes(content)
+        (task_dir / "quality_report.json").write_text(json.dumps({"passed": quality_passed}))
         return source
 
     def test_stable_final_imports_once_and_preserves_source(self):
@@ -135,6 +137,12 @@ class NarratoImportTests(unittest.TestCase):
 
         self.add_narrato_video.assert_not_called()
         self.assertEqual(list(self.videos_dir.iterdir()), [])
+
+    def test_failed_quality_report_never_auto_imports(self):
+        self.make_final(quality_passed=False)
+        self.assertEqual(narrato_import.scan_once(self.tasks_dir), [])
+        self.assertEqual(narrato_import.scan_once(self.tasks_dir), [])
+        self.add_narrato_video.assert_not_called()
 
 
 class NarratoImportDatabaseTests(unittest.TestCase):

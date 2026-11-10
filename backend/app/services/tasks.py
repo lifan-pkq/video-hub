@@ -20,6 +20,7 @@ class Task:
         self.logs: list[str] = []
         self.input = input or {}
         self.result: dict = {}       # download → video；AI → 生成结果
+        self.error: dict | None = None
         self.cancelled = False       # 超时取消标志（下载线程的 progress hook 检查它）
         self.created_at = time.strftime("%Y-%m-%d %H:%M:%S")
         self.finished_at = None
@@ -84,6 +85,7 @@ class Task:
             "progress": round(self.progress, 1),
             "input": self.input,
             "result": self.result,
+            "error": self.error,
             "created_at": self.created_at,
             "finished_at": self.finished_at,
         }
@@ -122,7 +124,7 @@ class TaskManager:
         task.cancel()
         return True
 
-    def list(self, limit: int = 30) -> list[Task]:
+    def list(self, limit: int | None = 30) -> list[Task]:
         with self._lock:
             return sorted(self._tasks.values(), key=lambda x: x.created_at, reverse=True)[:limit]
 

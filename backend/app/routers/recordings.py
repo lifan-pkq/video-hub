@@ -1,5 +1,6 @@
 """直播录制：开始/停止/列表/改名/删除/边录边看预览。录制完成自动入库视频库。"""
 import asyncio
+import json
 import time
 
 from fastapi import APIRouter, HTTPException, Request
@@ -26,6 +27,10 @@ class RenameRecordingRequest(BaseModel):
 
 def _enrich(rec: dict) -> dict:
     """录制中的任务实时补充文件大小和已录时长。"""
+    try:
+        rec["segments"] = json.loads(rec.get("segments_json") or "[]")
+    except (TypeError, ValueError):
+        rec["segments"] = []
     if rec["status"] == "recording":
         path = recorder.recording_file_path(rec)
         rec["size"] = path.stat().st_size if path else 0
@@ -45,11 +50,23 @@ def _enrich(rec: dict) -> dict:
 @router.post("")
 async def start(req: RecordRequest):
     if not req.url.strip():
-        raise HTTPException(400, "直播间链接不能为空")
+        raise HTTPException(400, detail={
+            "code": "url_missing",
+            "message": "直播间或媒体流链接不能为空。",
+            "action": "粘贴直播间、m3u8 或 flv 地址后再开始。",
+        })
     if req.quality not in recorder.QUALITY_LEVELS:
-        raise HTTPException(400, f"画质档位不合法（可选：{'/'.join(recorder.QUALITY_LEVELS)}）")
+        raise HTTPException(400, detail={
+            "code": "quality_invalid",
+            "message": "画质档位不合法。",
+            "action": "请选择原画、高清、标清或流畅。",
+        })
     if req.fps not in (0, 24, 30, 60):
-        raise HTTPException(400, "帧率仅支持 0（原始）/24/30/60")
+        raise HTTPException(400, detail={
+            "code": "fps_invalid",
+            "message": "帧率不合法。",
+            "action": "请选择原始帧率、24、30 或 60。",
+        })
     try:
         rec = await asyncio.to_thread(
             recorder.start_recording, req.url, req.title.strip(), req.quality, req.fps)
@@ -120,8 +137,7 @@ def remove(rec_id: int, delete_file: bool = False):
     if rec["status"] == "recording":
         recorder.stop_recording(rec_id)
     if delete_file:
-        path = recorder.recording_file_path(rec)
-        if path:
+        for path in recorder._recording_paths(rec):
             try:
                 path.unlink()
             except Exception:

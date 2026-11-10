@@ -10,7 +10,6 @@ export default defineConfig({
         manualChunks: {
           react: ['react', 'react-dom', 'react-router-dom'],
           icons: ['@phosphor-icons/react'],
-          timeline: ['@xzdarcy/react-timeline-editor'],
         },
       },
     },
@@ -20,11 +19,6 @@ export default defineConfig({
       '/api': {
         target: process.env.VIDEO_HUB_API_TARGET || 'http://127.0.0.1:8000',
         changeOrigin: true,
-      },
-      '/narrato': {
-        target: 'http://127.0.0.1:8501',
-        changeOrigin: true,
-        ws: true,
       },
       '/preview': {
         target: 'http://127.0.0.1:8502',

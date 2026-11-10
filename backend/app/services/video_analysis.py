@@ -30,31 +30,46 @@ def detect_scene_cuts(path: Path, threshold: float = 0.32, timeout: int = 300) -
     return sorted(cuts)
 
 
-def snap_plan_to_cuts(clips: list[dict], cuts: list[float], duration: float, tolerance: float = 2.0) -> list[dict]:
-    """把选段边界吸附到附近镜头切换点，避免从镜头中间开始/结束。"""
-    boundaries = [0.0, float(duration), *sorted(c for c in cuts if 0 < c < duration)]
+def snap_plan_to_cuts(
+    clips: list[dict],
+    cuts: list[float],
+    duration: float,
+    tolerance: float = 2.0,
+    beats: list[float] | None = None,
+    sentence_ends: list[float] | None = None,
+) -> list[dict]:
+    """保持故事顺序，边界按句末、镜头、节拍的优先级吸附。"""
+    scene_boundaries = [0.0, float(duration), *sorted(c for c in cuts if 0 < c < duration)]
+    sentences = sentence_ends or []
+    beat_points = beats or []
+
+    def nearest(value: float, points: list[float], limit: float) -> float | None:
+        candidates = [point for point in points if abs(point - value) <= limit]
+        return min(candidates, key=lambda point: abs(point - value)) if candidates else None
+
     snapped: list[dict] = []
-    previous_end = 0.0
-    for clip in sorted(clips, key=lambda item: item["start"]):
-        start = float(clip["start"])
-        end = float(clip["end"])
-        start_candidates = [b for b in boundaries if abs(b - start) <= tolerance and b >= previous_end]
-        end_candidates = [b for b in boundaries if abs(b - end) <= tolerance and b > start]
-        if start_candidates:
-            start = min(start_candidates, key=lambda b: abs(b - start))
-        if end_candidates:
-            end = min(end_candidates, key=lambda b: abs(b - end))
+    for clip in clips:
+        original_start, original_end = float(clip["start"]), float(clip["end"])
+        start = nearest(original_start, sentences, 0.8)
+        if start is None:
+            start = nearest(original_start, scene_boundaries, tolerance)
+        if start is None:
+            start = nearest(original_start, beat_points, 0.3)
+        end = nearest(original_end, sentences, 0.8)
+        if end is None:
+            end = nearest(original_end, scene_boundaries, tolerance)
+        if end is None:
+            end = nearest(original_end, beat_points, 0.3)
+        start = original_start if start is None else start
+        end = original_end if end is None else end
         if end - start < 0.8:
-            start, end = float(clip["start"]), float(clip["end"])
-        if start < previous_end:
-            start = previous_end
-        if end <= start:
+            start, end = original_start, original_end
+        if any(start < item["end"] and end > item["start"] for item in snapped):
             continue
         item = dict(clip)
         item["start"] = round(start, 2)
         item["end"] = round(end, 2)
-        if abs(start - float(clip["start"])) > 0.01 or abs(end - float(clip["end"])) > 0.01:
-            item["reason"] = (str(item.get("reason") or "") + "；对齐镜头边界").strip("；")
+        if abs(start - original_start) > 0.01 or abs(end - original_end) > 0.01:
+            item["reason"] = (str(item.get("reason") or "") + "；对齐句末/镜头/节拍").strip("；")
         snapped.append(item)
-        previous_end = end
     return snapped

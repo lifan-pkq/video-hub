@@ -3,6 +3,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
@@ -210,7 +211,11 @@ class SettingsTests(unittest.TestCase):
         self.assertTrue(updated["text"]["configured"])
         self.assertTrue(updated["vision"]["configured"])
         self.assertNotIn("sk-test", json.dumps(updated))
-        again = settings.settings_payload(self.root)
+        with patch("engine.settings.env_llm_overrides", return_value={
+            "text_base_url": "", "text_api_key": "", "text_model": "",
+            "vision_base_url": "", "vision_api_key": "", "vision_model": "",
+        }):
+            again = settings.settings_payload(self.root)
         self.assertEqual(again["text"]["model"], "demo-model")
         self.assertEqual(again["vision"]["model"], "demo-vl")
 

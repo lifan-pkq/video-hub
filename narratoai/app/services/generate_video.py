@@ -260,8 +260,8 @@ def is_valid_subtitle_file(subtitle_path: str) -> bool:
         if not content:
             return False
 
-        # 检查是否包含时间戳格式（SRT格式的基本特征）
-        # SRT格式应该包含类似 "00:00:00,000 --> 00:00:00,000" 的时间戳
+        if '[Script Info]' in content and 'Dialogue:' in content:
+            return True
         import re
         time_pattern = r'\d{2}:\d{2}:\d{2},\d{3}\s*-->\s*\d{2}:\d{2}:\d{2},\d{3}'
         if not re.search(time_pattern, content):
@@ -1090,6 +1090,8 @@ def _build_ffmpeg_merge_command(
     audio_filters = []
     audio_labels = []
     temp_files = []
+    voice_sidechain_label = ""
+    bgm_label = ""
 
     if keep_original_audio and original_audio_volume > 0 and video_meta["has_audio"]:
         label = f"a{len(audio_labels)}"
@@ -1106,31 +1108,41 @@ def _build_ffmpeg_merge_command(
         label = f"a{len(audio_labels)}"
         audio_filters.append(
             f"[{voice_input_index}:a]volume={voice_volume},atrim=0:{duration_arg},"
-            f"asetpts=PTS-STARTPTS[{label}]"
+            f"asetpts=PTS-STARTPTS,asplit=2[{label}][voice_sc]"
         )
         audio_labels.append(f"[{label}]")
+        voice_sidechain_label = "[voice_sc]"
 
     if _has_existing_file(bgm_path) and bgm_volume > 0:
         bgm_input_index = next_input_index
         next_input_index += 1
         input_args.extend(["-stream_loop", "-1", "-i", bgm_path])
         fade_start = max(0.0, duration - 3.0)
-        label = f"a{len(audio_labels)}"
+        bgm_label = "[bgm]"
         audio_filters.append(
             f"[{bgm_input_index}:a]volume={bgm_volume},atrim=0:{duration_arg},"
             f"afade=t=out:st={_format_ffmpeg_float(fade_start)}:d=3,"
-            f"asetpts=PTS-STARTPTS[{label}]"
+            f"asetpts=PTS-STARTPTS{bgm_label}"
         )
-        audio_labels.append(f"[{label}]")
+        if voice_sidechain_label:
+            audio_filters.append(
+                f"{bgm_label}{voice_sidechain_label}sidechaincompress="
+                "threshold=0.025:ratio=8:attack=20:release=450:makeup=1[bgm_ducked]"
+            )
+            audio_labels.append("[bgm_ducked]")
+        else:
+            audio_labels.append(bgm_label)
 
     if len(audio_labels) == 1:
         audio_filters.append(
-            f"{audio_labels[0]}atrim=0:{duration_arg},asetpts=PTS-STARTPTS[aout]"
+            f"{audio_labels[0]}afftdn,deesser,loudnorm=I=-16:TP=-1.5:LRA=11,"
+            f"atrim=0:{duration_arg},asetpts=PTS-STARTPTS[aout]"
         )
     elif len(audio_labels) > 1:
         audio_filters.append(
             f"{''.join(audio_labels)}amix=inputs={len(audio_labels)}:"
             f"duration=longest:dropout_transition=0:normalize=0,"
+            "afftdn,deesser,loudnorm=I=-16:TP=-1.5:LRA=11,"
             f"atrim=0:{duration_arg},asetpts=PTS-STARTPTS[aout]"
         )
 
@@ -1147,6 +1159,8 @@ def _build_ffmpeg_merge_command(
         has_subtitles=has_subtitles_filter,
         has_overlay=has_overlay_filter,
     ) if valid_subtitle else None
+    if valid_subtitle and str(subtitle_path).lower().endswith(('.ass', '.ssa')) and has_subtitles_filter:
+        subtitle_renderer = "subtitles"
     if subtitle_renderer == "png":
         logger.warning("当前 ffmpeg 缺少 drawtext，改用 PNG 字幕叠加快路径")
 

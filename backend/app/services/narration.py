@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -35,7 +36,7 @@ from app.services import narrato_import
 logger = logging.getLogger(__name__)
 
 ENGINE_TIMEOUT = max(2.0, float(NARRATO_ENGINE_TIMEOUT or 8))
-TERMINAL = {"success", "failed", "cancelled"}
+TERMINAL = {"success", "needs_review", "failed", "cancelled"}
 CONTENT_TYPES = {"auto", "knowledge", "documentary", "vlog", "product", "tutorial", "interview", "film", "custom"}
 PERSONAS = {"auto", "chenze", "chenbo"}
 PERSONA_STRENGTHS = {"natural", "signature", "strong"}
@@ -64,27 +65,46 @@ def _headers() -> dict[str, str]:
 
 
 def _request(method: str, path: str, payload: dict[str, Any] | None = None, timeout: float | None = None) -> dict[str, Any]:
+    """引擎请求：瞬时错误（超时、502/503/504）最多重试 2 次，间隔约 1 秒。
+
+    400 类参数错误不重试。EngineRejected 会带上 status_code，供 _sync
+    判断瞬时错误时使用。
+    """
     url = f"{NARRATO_ENGINE_URL}{path}"
-    try:
-        response = requests.request(
-            method,
-            url,
-            json=payload,
-            headers=_headers(),
-            timeout=timeout or ENGINE_TIMEOUT,
-        )
-    except requests.RequestException as exc:
-        raise EngineUnavailable(f"AI 解说引擎不可用：{exc}") from exc
-    try:
-        data = response.json()
-    except ValueError as exc:
-        raise EngineRejected(f"引擎返回了无效响应（HTTP {response.status_code}）") from exc
-    if response.status_code >= 400 or not isinstance(data, dict):
-        detail = ""
-        if isinstance(data, dict):
-            detail = str(data.get("detail") or data.get("error") or "")
-        raise EngineRejected(detail or f"引擎请求失败（HTTP {response.status_code}）")
-    return data
+    last_exc: Exception | None = None
+    for attempt in range(3):
+        try:
+            response = requests.request(
+                method,
+                url,
+                json=payload,
+                headers=_headers(),
+                timeout=timeout or ENGINE_TIMEOUT,
+            )
+        except requests.RequestException as exc:
+            last_exc = exc
+            if attempt < 2:
+                time.sleep(1)
+                continue
+            raise EngineUnavailable(f"AI 解说引擎不可用：{exc}") from exc
+        if response.status_code in (502, 503, 504) and attempt < 2:
+            last_exc = RuntimeError(f"HTTP {response.status_code}")
+            time.sleep(1)
+            continue
+        try:
+            data = response.json()
+        except ValueError as exc:
+            raise EngineRejected(f"引擎返回了无效响应（HTTP {response.status_code}）") from exc
+        if response.status_code >= 400 or not isinstance(data, dict):
+            detail = ""
+            if isinstance(data, dict):
+                detail = str(data.get("detail") or data.get("error") or "")
+            exc = EngineRejected(detail or f"引擎请求失败（HTTP {response.status_code}）")
+            exc.status_code = response.status_code  # type: ignore[attr-defined]
+            raise exc
+        return data
+    # 正常情况下循环内已返回或抛错；这里只为类型检查兜底。
+    raise EngineUnavailable(f"AI 解说引擎不可用：{last_exc}")
 
 
 def health() -> dict[str, Any]:
@@ -106,6 +126,16 @@ def settings() -> dict[str, Any]:
 def update_settings(payload: dict[str, Any]) -> dict[str, Any]:
     data = _request("PUT", "/settings", payload=payload, timeout=10)
     return data.get("settings") or {}
+
+
+def preview_voice(payload: dict[str, Any]) -> Path:
+    data = _request("POST", "/tts/preview", payload=payload, timeout=180)
+    preview = data.get("preview") or {}
+    name = Path(str(preview.get("name") or "")).name
+    path = NARRATO_TASKS_DIR.parent / "previews" / name
+    if not name or not path.is_file():
+        raise NarrationError("试听文件未生成")
+    return path
 
 
 def _aspect_for(video: dict[str, Any], requested: str) -> str:
@@ -130,6 +160,11 @@ def _text(value: Any, limit: int = 2000) -> str:
 
 
 def _engine_spec(video: dict[str, Any], payload: dict[str, Any], task_id: str) -> dict[str, Any]:
+    # 截断标记：先按原始长度判断，再截断。_public 会原样回显这些标记，
+    # 让前端能看到“文稿被截断了”，而不是静默丢尾巴。
+    script_truncated = len(str(payload.get("script_text") or "").strip()) > 20000
+    transcript_truncated = len(str(payload.get("transcript_text") or "").strip()) > 50000
+    tone_truncated = len(str(payload.get("tone") or "").strip()) > 200
     script_text = _text(payload.get("script_text"), 20000)
     transcript_text = _text(payload.get("transcript_text"), 50000)
     requested_mode = str(payload.get("mode") or "auto").strip().lower()
@@ -171,6 +206,23 @@ def _engine_spec(video: dict[str, Any], payload: dict[str, Any], task_id: str) -
     if output_mode == "edit" and not title.startswith("AI 剪辑"):
         title = f"AI 剪辑 · {title}"
     title = title[:80]
+    from app.services.profiles import resolve_bundle
+
+    bundle = resolve_bundle(
+        _text(payload.get("character_profile_id"), 80),
+        _text(payload.get("scene_profile_id"), 80),
+        _text(payload.get("style_profile_id"), 80),
+    )
+    engine_bundle = dict(bundle)
+    if bundle.get("character"):
+        engine_bundle["character"] = {
+            **bundle["character"],
+            "references": [
+                {key: value for key, value in reference.items() if key != "data_uri"}
+                for reference in bundle["character"].get("references") or []
+            ],
+        }
+    engine_bundle["references"] = engine_bundle["character"].get("references", []) if engine_bundle.get("character") else []
 
     return {
         "task_id": task_id,
@@ -185,6 +237,9 @@ def _engine_spec(video: dict[str, Any], payload: dict[str, Any], task_id: str) -
         "topic": _text(payload.get("topic"), 500),
         "instruction": _text(payload.get("instruction"), 1500),
         "tone": _text(payload.get("tone"), 200),
+        "script_truncated": script_truncated,
+        "transcript_truncated": transcript_truncated,
+        "tone_truncated": tone_truncated,
         "target_duration": int(number("target_duration", 60, 5, 1800)),
         "language": language,
         "mode": mode,
@@ -200,6 +255,7 @@ def _engine_spec(video: dict[str, Any], payload: dict[str, Any], task_id: str) -
         "voice_name": _text(payload.get("voice_name"), 80) or "zh-CN-XiaoxiaoNeural",
         "tts_engine": _text(payload.get("tts_engine"), 40) or "edge_tts",
         "voice_rate": number("voice_rate", 1.0, 0.5, 2.0),
+        "voice_emotion": _text(payload.get("voice_emotion"), 20) if _text(payload.get("voice_emotion"), 20) in {"平静", "激动", "哽咽", "幽默"} else "平静",
         "original_volume": number("original_volume", 0.35, 0.0, 1.5),
         "subtitles": bool(payload.get("subtitles", True)),
         "font_name": _text(payload.get("font_name"), 120),
@@ -218,6 +274,13 @@ def _engine_spec(video: dict[str, Any], payload: dict[str, Any], task_id: str) -
         "subtitle_mask_opacity": int(number("subtitle_mask_opacity", 82, 0, 100)),
         "script_text": script_text,
         "transcript_text": transcript_text,
+        "character_profile_id": _text(payload.get("character_profile_id"), 80),
+        "scene_profile_id": _text(payload.get("scene_profile_id"), 80),
+        "style_profile_id": _text(payload.get("style_profile_id"), 80),
+        "profile_snapshot": engine_bundle,
+        "pronunciation": bundle.get("pronunciation") or {},
+        "variant_group_id": _text(payload.get("variant_group_id"), 80),
+        "variant_key": _text(payload.get("variant_key"), 20),
     }
 
 
@@ -300,7 +363,11 @@ def import_result(task_id: str) -> dict[str, Any]:
 
 def _sync(row: dict[str, Any], force: bool = False) -> dict[str, Any]:
     status = row.get("status")
-    if status in TERMINAL and (status != "success" or row.get("output_video_id") or row.get("error")):
+    # 本地已 cancelled 的任务永远以 cancelled 为准，force 也不复活。
+    if status == "cancelled":
+        return row
+    # force=True 时跳过终态提前返回（approve 流程用），非 force 时保持原有终态短路。
+    if not force and status in TERMINAL and (status != "success" or row.get("output_video_id") or row.get("error")):
         return row
     engine_task_id = row.get("engine_task_id") or row.get("id")
     try:
@@ -309,6 +376,19 @@ def _sync(row: dict[str, Any], force: bool = False) -> dict[str, Any]:
         update_narration_task(row["id"], message=str(exc))
         return get_narration_task(row["id"]) or row
     except NarrationError as exc:
+        # 瞬时错误不直接置 failed：保持原状态、只记 message，等下次同步。
+        # 500/502/503/504、无效 JSON、超时都算瞬时；其他（如 400/404）仍按原逻辑置 failed。
+        text = str(exc)
+        transient = (
+            getattr(exc, "status_code", None) in (500, 502, 503, 504)
+            or "无效响应" in text
+            or "超时" in text
+            or "timeout" in text.lower()
+            or any(code in text for code in ("HTTP 500", "HTTP 502", "HTTP 503", "HTTP 504"))
+        )
+        if transient:
+            update_narration_task(row["id"], message=f"引擎同步暂失败，等待下次同步：{exc}")
+            return get_narration_task(row["id"]) or row
         update_narration_task(row["id"], status="failed", message=str(exc), error=str(exc))
         return get_narration_task(row["id"]) or row
 
@@ -364,6 +444,14 @@ def _public(row: dict[str, Any], with_source: bool = False) -> dict[str, Any]:
                 "mode",
                 "topic",
                 "instruction",
+                "tone",
+                "tone_truncated",
+                "script_truncated",
+                "transcript_truncated",
+                "voice_name",
+                "voice_rate",
+                "voice_emotion",
+                "tts_engine",
                 "target_duration",
                 "aspect",
                 "language",
@@ -386,13 +474,18 @@ def _public(row: dict[str, Any], with_source: bool = False) -> dict[str, Any]:
                 "pause_seconds",
                 "review_mode",
                 "tts_pronunciation",
+                "character_profile_id",
+                "scene_profile_id",
+                "style_profile_id",
+                "variant_group_id",
+                "variant_key",
             )
             if request.get(key) not in (None, "")
         }
     if isinstance(result, dict):
         item["result"] = {
             key: result.get(key)
-            for key in ("duration", "width", "height", "size", "filename", "completed_at")
+            for key in ("duration", "width", "height", "size", "filename", "completed_at", "quality")
             if result.get(key) not in (None, "")
         }
     if with_source:
@@ -490,6 +583,16 @@ def approve_task(task_id: str) -> dict[str, Any]:
     return _sync(get_narration_task(task_id) or row, force=True)
 
 
+def update_task_plan(task_id: str, items: list[dict[str, Any]]) -> dict[str, Any]:
+    """保存完整审片结构，由引擎校验时间戳、排序和渲染字段。"""
+    row = get_narration_task(task_id)
+    if not row:
+        raise NarrationError("任务不存在")
+    engine_task_id = row.get("engine_task_id") or row.get("id")
+    data = _request("PUT", f"/tasks/{engine_task_id}/script", payload={"items": items}, timeout=15)
+    return {"task_id": task_id, "items": data.get("items") or []}
+
+
 def task_plan(task_id: str) -> dict[str, Any]:
     row = get_narration_task(task_id)
     if not row:
@@ -506,13 +609,78 @@ def task_plan(task_id: str) -> dict[str, Any]:
             raise NarrationError("规划尚未生成") from exc
         data = {"items": items}
     data["task_id"] = task_id
+    analysis_dir = Path(NARRATO_TASKS_DIR) / str(engine_task_id) / "analysis"
+    for filename, key in (("storyboard.json", "storyboard"), ("script_review.json", "script_review")):
+        try:
+            data[key] = json.loads((analysis_dir / filename).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            pass
     return data
+
+
+def compose_variants(base_task_id: str, selections: list[dict[str, Any]]) -> dict[str, Any]:
+    base = get_narration_task(base_task_id)
+    if not base:
+        raise NarrationError("基础方案不存在")
+    if not selections or len(selections) > 200:
+        raise NarrationError("请选择要拼接的方案段落")
+    combined: list[dict[str, Any]] = []
+    segment_ids: set[str] = set()
+    for selection in selections:
+        source_id = str(selection.get("source_task_id") or "")
+        segment_id = str(selection.get("segment_id") or "")
+        if not source_id or not segment_id:
+            raise NarrationError("跨版拼段缺少来源方案或段落 ID")
+        plan = task_plan(source_id)
+        source = next((item for item in plan.get("items") or [] if str(item.get("segment_id") or item.get("_id")) == segment_id), None)
+        if not source:
+            raise NarrationError(f"方案 {source_id} 中找不到段落 {segment_id}")
+        composed_id = f"{source_id}:{segment_id}"
+        if composed_id in segment_ids:
+            raise NarrationError(f"同一段落被重复选择：{segment_id}")
+        segment_ids.add(composed_id)
+        combined.append({**source, "origin_segment_id": segment_id, "segment_id": composed_id})
+    for index, item in enumerate(combined):
+        item["_id"] = index + 1
+    task_id = "narrate-" + uuid.uuid4().hex[:12]
+    request = dict(base.get("request") or {})
+    request.update({
+        "task_id": task_id,
+        "title": f"{base.get('title') or 'AI 解说'} · 跨版精选"[:80],
+        "mode": "script",
+        "script_text": "",
+        "transcript_text": "",
+        "script_items": combined,
+        "review_mode": True,
+        "variant_key": "composed",
+    })
+    engine = _request("POST", "/tasks", payload=request, timeout=max(15.0, ENGINE_TIMEOUT))
+    engine_task = engine.get("task") or {}
+    now = datetime.now().isoformat(timespec="seconds")
+    row = create_narration_task(
+        id=task_id,
+        video_id=base["video_id"],
+        title=request["title"],
+        content_type=request.get("content_type") or "auto",
+        mode="script",
+        aspect=request.get("aspect"),
+        voice_name=request.get("voice_name"),
+        target_duration=request.get("target_duration"),
+        status=str(engine_task.get("status") or "queued"),
+        progress=float(engine_task.get("progress") or 0),
+        message=str(engine_task.get("message") or "跨版拼段已提交"),
+        engine_task_id=task_id,
+        request_json=request,
+        created_at=now,
+        updated_at=now,
+    )
+    return _public(row, with_source=True)
 
 
 def retry_import(task_id: str) -> dict[str, Any]:
     row = get_narration_task(task_id)
     if not row:
         raise NarrationError("任务不存在")
-    if row.get("status") != "success":
-        raise NarrationError("任务尚未成功完成")
+    if row.get("status") not in {"success", "needs_review"}:
+        raise NarrationError("成片尚未生成，不能复核入库")
     return import_result(task_id)

@@ -59,4 +59,7 @@ def save_settings(body: MaintenanceSettingsBody):
 
 @router.post("/run")
 def run_now():
-    return maintenance.run_cleanup(trigger="manual", force=True)
+    # 此前这里写死 force=True，会连带绕过视频清空的进行中任务保护。
+    # 改为 force=False：日志仍按设置清理，视频清空有进行中任务时会被
+    # 跳过并在结果里标注 videos_skipped，而不是被强行清空。
+    return maintenance.run_cleanup(trigger="manual", force=False)

@@ -642,6 +642,36 @@ def start_subclip(task_id: str, params: VideoClipParams, subclip_path_videos: di
     return kwargs
 
 
+def _save_tts_words(task_id: str, tts_results: list) -> None:
+    """把 TTS 词级时间戳（秒，相对该段音频起点）落盘，供引擎逐词高亮字幕回读。"""
+    items = [
+        {
+            "_id": result.get("_id"),
+            "text": str(result.get("text") or ""),
+            "words": [
+                {
+                    "start": float(word.get("start") or 0),
+                    "end": float(word.get("end") or 0),
+                    "text": str(word.get("text") or ""),
+                }
+                for word in result["words"]
+                if isinstance(word, dict)
+            ],
+        }
+        for result in tts_results or []
+        if isinstance(result, dict) and isinstance(result.get("words"), list) and result["words"]
+    ]
+    if not items:
+        return
+    try:
+        analysis_dir = path.join(utils.task_dir(task_id), "analysis")
+        os.makedirs(analysis_dir, exist_ok=True)
+        with open(path.join(analysis_dir, "tts_words.json"), "w", encoding="utf-8") as handle:
+            json.dump({"schema_version": 1, "items": items}, handle, ensure_ascii=False)
+    except Exception as exc:
+        logger.warning(f"词级时间戳落盘失败，逐词高亮字幕将回落到原有流程：{exc}")
+
+
 def start_subclip_unified(task_id: str, params: VideoClipParams):
     """
     统一视频裁剪处理函数 - 完全基于OST类型的新实现
@@ -724,6 +754,7 @@ def start_subclip_unified(task_id: str, params: VideoClipParams):
             "TTS 配音全部失败：请检查配音引擎、网络与音色配置"
             "（Edge TTS 需要能访问 speech.platform.bing.com，或改用 Azure/腾讯云/本地 TTS）"
         )
+    _save_tts_words(task_id, tts_results)
 
     _update_video_generation_task(
         task_id,
@@ -828,6 +859,23 @@ def start_subclip_unified(task_id: str, params: VideoClipParams):
                 )
             except Exception as e:
                 logger.warning(f"程序化字幕生成失败: {e}")
+    if merged_subtitle_path and any(item.get('words') for item in tts_results):
+        try:
+            from engine.subtitle_design import write_ass
+
+            exported_srt = path.join(utils.task_dir(task_id), 'subtitle.srt')
+            with open(merged_subtitle_path, 'rb') as source, open(exported_srt, 'wb') as target:
+                target.write(source.read())
+            merged_subtitle_path = str(write_ass(
+                Path(utils.task_dir(task_id)) / 'designed.ass',
+                new_script_list,
+                tts_results,
+                font_name=params.font_name,
+                font_size=params.font_size,
+                max_chars=params.subtitle_max_chars,
+            ))
+        except Exception as e:
+            logger.warning(f"动态字幕生成失败，保留 SRT: {e}")
     _update_video_generation_task(
         task_id,
         progress=70,
@@ -962,6 +1010,16 @@ def start_subclip_unified(task_id: str, params: VideoClipParams):
         options=options,
         progress_callback=update_final_merge_progress,
     )
+    if params.subtitle_enabled and merged_subtitle_path:
+        clean_options = {**options, 'subtitle_enabled': False, 'subtitle_mask_enabled': False}
+        generate_video.merge_materials(
+            video_path=combined_video_path,
+            audio_path=merged_audio_path,
+            subtitle_path='',
+            bgm_path=bgm_path,
+            output_path=path.join(utils.task_dir(task_id), 'clean.mp4'),
+            options=clean_options,
+        )
 
     auto_subtitle_path = ""
     if auto_transcription_enabled:

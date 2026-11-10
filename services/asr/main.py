@@ -15,6 +15,7 @@ import numpy as np
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import PlainTextResponse
 from faster_whisper import WhisperModel
+from starlette.concurrency import run_in_threadpool
 
 MODEL_SIZE = os.environ.get("ASR_MODEL", "small")
 MODEL_IDLE_SECONDS = max(60, int(os.environ.get("ASR_IDLE_UNLOAD_SECONDS", "300") or 300))
@@ -99,7 +100,7 @@ def _transcribe(path: str, language: str | None):
             audio,
             language=language or None,
             vad_filter=True,
-            beam_size=5,
+            beam_size=int(os.environ.get("ASR_BEAM_SIZE", "3")),
         )
         segments = [
             {
@@ -150,7 +151,8 @@ async def transcriptions(
         fmt = "json"
     path = _save_upload(file)
     try:
-        segments, info = _transcribe(path, language)
+        # 同步转写放到线程池，避免占满 uvicorn 事件循环导致 /health 与后续请求全部超时
+        segments, info = await run_in_threadpool(_transcribe, path, language)
     finally:
         try:
             os.remove(path)
@@ -187,7 +189,7 @@ async def asr_rest(
     """FunASR-Pack style fallback endpoint."""
     path = _save_upload(file)
     try:
-        segments, info = _transcribe(path, language)
+        segments, info = await run_in_threadpool(_transcribe, path, language)
     finally:
         try:
             os.remove(path)

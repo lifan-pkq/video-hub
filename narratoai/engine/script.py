@@ -21,8 +21,10 @@ from engine.personas import (
 from engine.profiles import build_creative_context
 
 SYSTEM_PROMPT = (
-    "你是一名中文短视频解说编导。你擅长从画面、口播或操作过程中提炼亮点和叙事，"
-    "让观众在短时间内理解发生了什么、为什么值得看。你不编造事实，也不写空洞套话或看图说话。"
+    "你是一名中文短视频解说编导，写的是给人耳朵听的口播稿，不是给人眼睛看的说明文。"
+    "你擅长从画面、口播或操作过程中提炼亮点和叙事，让观众在短时间内理解发生了什么、为什么值得看。"
+    "你的句子要像真人在边看边讲：有停顿、有语气、有情绪起伏，短句为主，偶尔用反问或感叹带一下节奏，"
+    "但不堆模板套话、不写书面报告体。你不编造事实，也不写空洞套话或看图说话。"
 )
 
 TEMPLATE = """请根据下面的素材，写一条可直接配音的中文解说脚本。
@@ -37,11 +39,12 @@ TEMPLATE = """请根据下面的素材，写一条可直接配音的中文解说
 ## 写作规则
 1. 只使用素材中确实出现的信息；不确定的内容不要补充，不要虚构人物、数字或因果。
 2. 按时间顺序分段，每段对应素材里的一个时间范围；段与段自然衔接。
-3. 每段 1-2 句、约 15-45 字，口语化，适合直接朗读；使用自然句末标点，复合句用逗号划分意群，每个意群尽量不超过 16 字。
-4. 不要写"大家好""欢迎来到我的频道""记得点赞关注"之类的开场/结尾套话。
+3. 写给耳朵听，不是写给眼睛看：每段 1-2 句、约 15-45 字，短句为主，用逗号、问号、感叹号控制停顿和语气；复合句用逗号划分意群，每个意群尽量不超过 16 字。允许在关键处用一句反问或感叹带节奏，但不要每段都感叹。
+4. 不要写"大家好""欢迎来到我的频道""记得点赞关注"之类的开场/结尾套话，也不要写"值得一提的是""不得不说""让人不禁感慨""总而言之"这类书面模板句。
 5. 不要逐镜头流水账，也不要重复观众已经看到的性别、动作、滤镜等表面细节；优先提炼亮点、反差、上下文和结果。表面动作只在推动叙事时提及，没有依据时不要猜测原因。
-6. 第一段直接进入内容，不要铺垫。
-7. 每段的 timestamp 必须从素材中原样选取，格式为 "HH:MM:SS,mmm-HH:MM:SS,mmm"。
+6. 第一段直接进入内容，不要铺垫；开头一句话就要像人在说话，先点出最抓人的画面或问题，再展开讲。
+7. 写完后自己默读一遍：如果像书面报告、像 AI 念稿，就改成更口语的说法，删掉生硬的连接词，换成自然的转折。
+8. 每段的 timestamp 必须从素材中原样选取，格式为 "HH:MM:SS,mmm-HH:MM:SS,mmm"。
 
 ## 素材
 {material}
@@ -122,7 +125,14 @@ def _text_settings() -> tuple[str, str, list[str]]:
     return model, base_url, keys
 
 
-def _chat_text(model: str, base_url: str, keys: list[str], messages: list[dict], log) -> str:
+def _chat_text(
+    model: str,
+    base_url: str,
+    keys: list[str],
+    messages: list[dict],
+    log,
+    temperature: float = 0.5,
+) -> str:
     try:
         from openai import OpenAI
     except Exception as exc:  # pragma: no cover
@@ -137,7 +147,7 @@ def _chat_text(model: str, base_url: str, keys: list[str], messages: list[dict],
                 response = client.chat.completions.create(
                     model=model,
                     messages=messages,
-                    temperature=0.8,
+                    temperature=temperature,
                     response_format={"type": "json_object"},
                 )
             except Exception as exc:
@@ -151,7 +161,7 @@ def _chat_text(model: str, base_url: str, keys: list[str], messages: list[dict],
                 response = client.chat.completions.create(
                     model=model,
                     messages=messages,
-                    temperature=0.8,
+                    temperature=temperature,
                 )
             content = response.choices[0].message.content if response.choices else ""
             if not content:
@@ -250,15 +260,20 @@ def _normalize_items(payload: dict[str, Any], duration: float) -> list[dict[str,
             step += 0.1
             timestamp = _timestamp_range("", index * step, min(total, (index + 1) * step))
         used_timestamps.add(timestamp)
-        items.append(
-            {
-                "_id": len(items) + 1,
-                "timestamp": timestamp,
-                "picture": str(raw.get("picture") or narration).strip()[:500],
-                "narration": narration[:500],
-                "OST": 2,
-            }
-        )
+        item = {
+            "_id": len(items) + 1,
+            "segment_id": str(raw.get("segment_id") or f"segment-{len(items) + 1}"),
+            "timestamp": timestamp,
+            "picture": str(raw.get("picture") or narration).strip()[:500],
+            "narration": narration[:500],
+            "story_role": str(raw.get("story_role") or "setup"),
+            "reason": str(raw.get("reason") or "")[:300],
+            "evidence": raw.get("evidence") if isinstance(raw.get("evidence"), list) else [],
+            "emotion": str(raw.get("emotion") or "平静")[:40],
+            "OST": 2,
+        }
+        item["estimated_duration"] = round(len(item["narration"]) / 4.2, 2)
+        items.append(item)
     if not items:
         raise ScriptGenerationError("模型返回的脚本为空")
     return items
@@ -352,13 +367,15 @@ def generate_items(material_markdown: str, spec: dict[str, Any], log=print) -> l
         coverage=spec.get("coverage", "highlights"),
         video_duration=spec.get("video_duration", 0),
     )
+    profile_prompt = str((spec.get("profile_snapshot") or {}).get("prompt") or "")
+    creative_instruction = "\n".join(part for part in (context["prompt"], profile_prompt) if part)
     material_limit = 240000 if spec.get("analysis_mode") == "deep" else 120000
     prompt = TEMPLATE.format(
         label=context["label"],
         theme=context["theme"] or "由素材决定",
         duration=int(spec.get("target_duration") or 60),
         language=spec.get("language", "中文"),
-        instruction=context["prompt"],
+        instruction=creative_instruction,
         material=material_markdown[:material_limit],
     )
     model, base_url, keys = _text_settings()
@@ -376,3 +393,235 @@ def generate_items(material_markdown: str, spec: dict[str, Any], log=print) -> l
     payload = _extract_json(content)
     items = _normalize_items(payload, spec.get("video_duration") or spec.get("target_duration") or 60)
     return _apply_persona(items, spec, model, base_url, keys, log)
+
+
+CLICHES = ("值得一提的是", "不得不说", "总而言之", "让人不禁", "众所周知")
+# 开场问候与结尾引导是正常口播结构，只有出现在正文中间时才算套话。
+OPENER_CLICHES = ("大家好", "欢迎来到我的频道")
+CLOSER_CLICHES = ("记得点赞", "点赞关注", "记得关注")
+# 长素材按预算切片，避免一次把全片塞进单个提示词。
+CRITIC_MATERIAL_BUDGET = 40000
+CRITIC_BATCH_SIZE = 12
+
+
+def _local_reviews(items: list[dict[str, Any]], spec: dict[str, Any]) -> list[dict[str, Any]]:
+    from difflib import SequenceMatcher
+
+    from engine.spec import parse_timestamp_range
+
+    reviews: list[dict[str, Any]] = []
+    previous = ""
+    last_index = len(items) - 1
+    for index, item in enumerate(items):
+        narration = str(item.get("narration") or "").strip()
+        flags: list[str] = []
+        phrases = [*CLICHES]
+        if index > 0:
+            phrases.extend(OPENER_CLICHES)
+        if index < last_index:
+            phrases.extend(CLOSER_CLICHES)
+        if any(phrase in narration for phrase in phrases):
+            flags.append("cliche")
+        normalized = re.sub(r"[\W_]+", "", narration)
+        if previous and normalized and SequenceMatcher(None, normalized, previous).ratio() >= 0.9:
+            flags.append("repetition")
+        previous = normalized or previous
+        estimated = round(len(narration) / (4.2 * float(spec.get("voice_rate") or 1.0)), 2)
+        item["estimated_duration"] = estimated
+        if spec.get("clip_mode", "timeline") == "timeline" and item.get("OST") != 1:
+            try:
+                start, end = parse_timestamp_range(str(item.get("timestamp") or ""))
+                picture_duration = end - start
+                if estimated > picture_duration * 1.25 + 0.5:
+                    flags.append("duration_overrun")
+                elif estimated < picture_duration * 0.25 and picture_duration > 4:
+                    flags.append("duration_underfill")
+            except (TypeError, ValueError):
+                flags.append("invalid_timestamp")
+        score = max(0, 100 - 25 * len(flags))
+        reviews.append({
+            "_id": item.get("_id"),
+            "segment_id": item.get("segment_id"),
+            "score": score,
+            "passed": not flags,
+            "flags": flags,
+            "estimated_duration": estimated,
+        })
+    return reviews
+
+
+def _critic_payload(items: list[dict[str, Any]], reviews: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {
+            "_id": item.get("_id"),
+            "segment_id": item.get("segment_id"),
+            "timestamp": item.get("timestamp"),
+            "picture": item.get("picture"),
+            "narration": item.get("narration"),
+            "story_role": item.get("story_role"),
+            "local_review": review,
+        }
+        for item, review in zip(items, reviews)
+    ]
+
+
+def _material_chunks(material_markdown: str, budget: int = CRITIC_MATERIAL_BUDGET) -> list[str]:
+    """把长素材按行切成每段不超过预算的片段，避免单个提示词塞进全片。"""
+    chunks: list[str] = []
+    current: list[str] = []
+    size = 0
+    for raw in str(material_markdown or "").splitlines():
+        line = raw if len(raw) <= budget else raw[:budget]
+        if current and size + len(line) + 1 > budget:
+            chunks.append("\n".join(current))
+            current, size = [], 0
+        current.append(line)
+        size += len(line) + 1
+    if current:
+        chunks.append("\n".join(current))
+    return chunks or [""]
+
+
+def _material_for_batch(chunks: list[str], index: int, total: int) -> str:
+    if not chunks:
+        return ""
+    return chunks[min(len(chunks) - 1, index * len(chunks) // max(1, total))]
+
+
+def _batches(items: list[dict[str, Any]], reviews: list[dict[str, Any]], size: int):
+    for start in range(0, len(items), size):
+        yield items[start:start + size], reviews[start:start + size]
+
+
+def _critic_batch(model, base_url, keys, material: str, payload: list[dict[str, Any]], log) -> dict[int, dict]:
+    critic_prompt = (
+        "你是严格的短视频剧本审校，不是原作者。逐段核对事实是否能在素材中找到，"
+        "找出空话、重复、开头缺少钩子、故事角色不清和时长不匹配。不得因为文风个人喜好扣分。"
+        "只输出 JSON：{\"reviews\":[{\"_id\":1,\"score\":0,\"passed\":true,\"flags\":[],\"reason\":\"\"}]}\n"
+        "本地检查仅供参考，你还需要独立检查事实。\n素材：\n" + material
+        + "\n剧本与本地检查：\n" + json.dumps(payload, ensure_ascii=False)
+    )
+    content = _chat_text(
+        model, base_url, keys,
+        [{"role": "system", "content": "你只输出可校验的 JSON 审校结果。"},
+         {"role": "user", "content": critic_prompt}],
+        log,
+        temperature=0.1,
+    )
+    parsed = _extract_json(content)
+    reviews = parsed.get("reviews") if isinstance(parsed, dict) else []
+    return {int(item.get("_id")): item for item in reviews or [] if isinstance(item, dict)}
+
+
+def critique_and_rewrite(
+    items: list[dict[str, Any]],
+    material_markdown: str,
+    spec: dict[str, Any],
+    log=print,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """初稿之后独立批判；只重写不合格段，并保留未通过标记供审片。"""
+    model, base_url, keys = _text_settings()
+    local = _local_reviews(items, spec)
+    chunks = _material_chunks(material_markdown)
+    critic_unavailable = False
+    by_id: dict[int, dict] = {}
+    try:
+        pairs = list(_batches(items, local, CRITIC_BATCH_SIZE))
+        for index, (batch_items, batch_reviews) in enumerate(pairs):
+            by_id.update(_critic_batch(
+                model, base_url, keys,
+                _material_for_batch(chunks, index, len(pairs)),
+                _critic_payload(batch_items, batch_reviews),
+                log,
+            ))
+    except Exception as exc:  # noqa: BLE001
+        log(f"剧本批判模型不可用，保留本地审校并标红：{exc}")
+        critic_unavailable = True
+    initial: list[dict[str, Any]] = []
+    for review in local:
+        if critic_unavailable:
+            initial.append({**review, "flags": [*review["flags"], "critic_unavailable"], "passed": False})
+            continue
+        extra = by_id.get(int(review["_id"]), {})
+        flags = list(dict.fromkeys([*review["flags"], *[str(value) for value in extra.get("flags", [])]]))
+        initial.append({
+            **review,
+            "score": min(int(review["score"]), int(extra.get("score", 100))),
+            "passed": not flags,
+            "flags": flags,
+            "reason": str(extra.get("reason") or "")[:500],
+        })
+
+    failed_ids = {int(review["_id"]) for review in initial if not review["passed"]}
+    final = [dict(item) for item in items]
+    rewrite_error = ""
+    if failed_ids:
+        candidates = [item for item in final if int(item["_id"]) in failed_ids]
+        rewrite_batches = [
+            candidates[start:start + CRITIC_BATCH_SIZE]
+            for start in range(0, len(candidates), CRITIC_BATCH_SIZE)
+        ]
+        try:
+            for index, batch in enumerate(rewrite_batches):
+                rewrite_prompt = (
+                    "只重写下面这些未通过审校的段落。保持每段 _id、timestamp、picture、story_role 不变，"
+                    "不新增素材外事实，改成自然短句口播，并让朗读时长贴近画面。"
+                    "每段返回剩余 quality_flags；只有确实解决所有问题时才返回空数组。"
+                    "只输出 JSON：{\"items\":[{\"_id\":1,\"narration\":\"\",\"estimated_duration\":0,"
+                    "\"emotion\":\"平静\",\"quality_flags\":[],\"score\":100,\"reason\":\"\"}]}\n"
+                    "素材：\n" + _material_for_batch(chunks, index, len(rewrite_batches))
+                    + "\n待重写：\n" + json.dumps(batch, ensure_ascii=False)
+                )
+                content = _chat_text(
+                    model, base_url, keys,
+                    [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": rewrite_prompt}],
+                    log,
+                    temperature=0.35,
+                )
+                rewritten = _extract_json(content).get("items") or []
+                rewritten_by_id = {
+                    int(item.get("_id")): item for item in rewritten if isinstance(item, dict)
+                }
+                for item in batch:
+                    replacement = rewritten_by_id.get(int(item["_id"]))
+                    narration = str((replacement or {}).get("narration") or "").strip()
+                    if not narration:
+                        item["quality_flags"] = ["rewrite_missing"]
+                        continue
+                    item["narration"] = narration[:500]
+                    item["estimated_duration"] = float((replacement or {}).get("estimated_duration") or len(narration) / 4.2)
+                    item["emotion"] = str((replacement or {}).get("emotion") or item.get("emotion") or "平静")[:40]
+                    item["quality_flags"] = [str(value) for value in (replacement or {}).get("quality_flags", [])]
+                    item["score"] = int((replacement or {}).get("score") or 0)
+                    item["review_reason"] = str((replacement or {}).get("reason") or "")[:500]
+        except Exception as exc:  # noqa: BLE001
+            rewrite_error = str(exc)
+            log(f"定向重写失败，保留原稿并标红：{exc}")
+
+    final_reviews = _local_reviews(final, spec)
+    initial_by_id = {int(review["_id"]): review for review in initial}
+    for item, review in zip(final, final_reviews):
+        item_id = int(review["_id"])
+        existing_flags = [str(value) for value in item.get("quality_flags", [])]
+        flags = list(dict.fromkeys([*review["flags"], *existing_flags]))
+        if critic_unavailable:
+            # 批判没跑成的结论必须留到最终报告，不能靠本地检查洗成通过。
+            flags = list(dict.fromkeys([*flags, "critic_unavailable"]))
+        previous = initial_by_id.get(item_id, {})
+        item["quality_flags"] = flags
+        item["score"] = min(int(item.get("score", 100)), int(review["score"])) if flags else 100
+        item["review_reason"] = item.get("review_reason") or previous.get("reason") or ""
+        review["flags"] = flags
+        review["passed"] = not flags
+        review["score"] = item["score"]
+        review["previous_flags"] = previous.get("flags") or []
+    report = {
+        "schema_version": 1,
+        "draft_reviews": initial,
+        "final_reviews": final_reviews,
+        "rewrite_attempted": bool(failed_ids),
+        "rewrite_error": rewrite_error,
+        "critic_unavailable": critic_unavailable,
+        "passed": not critic_unavailable and all(review["passed"] for review in final_reviews),
+    }
+    return final, report

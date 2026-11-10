@@ -59,7 +59,7 @@ class RemoteTranscriptionTests(unittest.TestCase):
         with self.assertRaises(AIResponseError):
             transcribe_remote(self.video_path, "http://127.0.0.1:8600/v1/audio/transcriptions")
 
-    @patch("app.services.asr_client.transcribe_remote")
+    @patch("app.services.ai_edit._transcribe_shared")
     def test_configured_remote_service_does_not_load_local_model(self, remote):
         remote.return_value = [{"start": 0.0, "end": 1.0, "text": "远端转写"}]
         cache = Path(self.tempdir.name) / "cache.json"

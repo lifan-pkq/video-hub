@@ -1,696 +1,123 @@
-import { useCallback, useEffect, useMemo, useState, type KeyboardEvent, type ReactNode } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
-import {
-  Broadcast,
-  ChartLine,
-  Cpu,
-  DownloadSimple,
-  HardDrives,
-  PaperPlaneTilt,
-  UserCircle,
-  VideoCamera,
-} from '@phosphor-icons/react'
+import { useCallback, useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
+import { Broadcast, DownloadSimple, FilmSlate, MagicWand, Package, SquaresFour } from '@phosphor-icons/react'
 import {
   errorMessage,
-  fetchPublishRecords,
+  fetchHealth,
   fetchStats,
-  fetchSystemStatus,
   fetchTasks,
-  fetchVideos,
   formatRelative,
   formatSize,
-  type PublishRecord,
+  type HealthReport,
   type Stats,
-  type SystemStatus,
   type TaskSummary,
-  type Video,
 } from '../api'
-import {
-  Button,
-  EmptyState,
-  PageHeader,
-  Panel,
-  PlatformIcon,
-  Progress,
-  StatCard,
-} from '../ui'
-import StatusBadge from '../components/StatusBadge'
+import { Button, EmptyState, PageHeader, Panel, StatCard } from '../ui'
 import RequestState from '../ui/RequestState'
+import StatusBadge from '../components/StatusBadge'
 
-/** 日期问候：8月22日 星期六 */
-function todayText(): string {
-  const d = new Date()
-  const weekday = d.toLocaleDateString('zh-CN', { weekday: 'long' })
-  return `${d.getMonth() + 1}月${d.getDate()}日 ${weekday}`
-}
-
-/** 面板加载骨架：4 行，末行 60% 宽 */
-function PanelSkeleton() {
-  return (
-    <div className="space-y-3 py-1">
-      {['100%', '100%', '100%', '60%'].map((w, i) => (
-        <div key={i} className="skeleton" style={{ width: w, height: 14 }} />
-      ))}
-    </div>
-  )
-}
-
-interface TrendDay {
-  label: string
-  count: number
-}
-
-/** 近 14 天发布次数按日聚合 */
-function buildTrend(records: PublishRecord[]): TrendDay[] {
-  const now = new Date()
-  const days: (TrendDay & { key: string })[] = []
-  for (let i = 13; i >= 0; i--) {
-    const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i)
-    days.push({
-      key: `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`,
-      label: `${d.getMonth() + 1}/${d.getDate()}`,
-      count: 0,
-    })
-  }
-  const index = new Map(days.map((d, i) => [d.key, i]))
-  for (const r of records) {
-    const d = new Date(r.created_at)
-    if (Number.isNaN(d.getTime())) continue
-    const i = index.get(`${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`)
-    if (i != null) days[i].count++
-  }
-  return days
-}
-
-/** Catmull-Rom 转三次贝塞尔，生成平滑折线路径 */
-function smoothPath(pts: { x: number; y: number }[]): string {
-  if (pts.length < 2) return ''
-  let d = `M ${pts[0].x} ${pts[0].y}`
-  for (let i = 0; i < pts.length - 1; i++) {
-    const p0 = pts[Math.max(0, i - 1)]
-    const p1 = pts[i]
-    const p2 = pts[i + 1]
-    const p3 = pts[Math.min(pts.length - 1, i + 2)]
-    const c1x = p1.x + (p2.x - p0.x) / 6
-    const c1y = p1.y + (p2.y - p0.y) / 6
-    const c2x = p2.x - (p3.x - p1.x) / 6
-    const c2y = p2.y - (p3.y - p1.y) / 6
-    d += ` C ${c1x} ${c1y}, ${c2x} ${c2y}, ${p2.x} ${p2.y}`
-  }
-  return d
-}
-
-/** 发布趋势面积图（纯 SVG，无依赖） */
-function TrendChart({ days }: { days: TrendDay[] }) {
-  const W = 560
-  const H = 190
-  const PAD_X = 12
-  const PAD_TOP = 28 // 顶部留给最高点标注
-  const PAD_BOTTOM = 24 // 底部留给日期刻度
-  const max = Math.max(...days.map((d) => d.count), 1)
-  const innerH = H - PAD_TOP - PAD_BOTTOM
-  const pts = days.map((d, i) => ({
-    x: PAD_X + (i * (W - PAD_X * 2)) / (days.length - 1),
-    y: PAD_TOP + (1 - d.count / max) * innerH,
-  }))
-  const line = smoothPath(pts)
-  const base = H - PAD_BOTTOM
-  const area = `${line} L ${pts[pts.length - 1].x} ${base} L ${pts[0].x} ${base} Z`
-  const peakIdx = days.findIndex((d) => d.count === max && max > 0)
-  const tickIdx = [0, 4, 9, 13]
-
-  return (
-    <svg viewBox={`0 0 ${W} ${H}`} className="w-full" role="img" aria-label="近 14 天发布趋势">
-      <defs>
-        <linearGradient id="trendFill" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" style={{ stopColor: 'var(--accent)' }} stopOpacity={0.35} />
-          <stop offset="100%" style={{ stopColor: 'var(--accent)' }} stopOpacity={0} />
-        </linearGradient>
-      </defs>
-      <line
-        x1={PAD_X}
-        y1={base}
-        x2={W - PAD_X}
-        y2={base}
-        strokeWidth={1}
-        style={{ stroke: 'var(--border)' }}
-      />
-      <path d={area} fill="url(#trendFill)" />
-      <path
-        d={line}
-        fill="none"
-        strokeWidth={2}
-        strokeLinecap="round"
-        style={{ stroke: 'var(--accent)' }}
-      />
-      {peakIdx >= 0 && (
-        <g>
-          <circle
-            cx={pts[peakIdx].x}
-            cy={pts[peakIdx].y}
-            r={3.5}
-            style={{ fill: 'var(--accent)' }}
-          />
-          <text
-            x={Math.min(Math.max(pts[peakIdx].x, 24), W - 24)}
-            y={pts[peakIdx].y - 10}
-            textAnchor="middle"
-            fontSize={11}
-            fontWeight={600}
-            style={{ fill: 'var(--ink-1)' }}
-          >
-            {days[peakIdx].count}
-          </text>
-        </g>
-      )}
-      {tickIdx.map((i) => (
-        <text
-          key={i}
-          x={pts[i].x}
-          y={H - 6}
-          textAnchor={i === 0 ? 'start' : i === 13 ? 'end' : 'middle'}
-          fontSize={10}
-          style={{ fill: 'var(--ink-4)' }}
-        >
-          {days[i].label}
-        </text>
-      ))}
-    </svg>
-  )
-}
-
-/** 近 14 天发布结果占比环形图 */
-function PublishDonut({ records }: { records: PublishRecord[] }) {
-  const since = Date.now() - 14 * 86400000
-  let success = 0
-  let partial = 0
-  let failed = 0
-  for (const r of records) {
-    const t = new Date(r.created_at).getTime()
-    if (Number.isNaN(t) || t < since) continue
-    if (r.status === 'success') success++
-    else if (r.status === 'partial') partial++
-    else if (r.status === 'failed') failed++
-  }
-  const total = success + partial + failed
-  if (total === 0) {
-    return <p className="py-8 text-center text-[13px] text-ink-3">近 14 天暂无发布记录</p>
-  }
-  const rate = Math.round((success / total) * 100)
-  const R = 54
-  const C = 2 * Math.PI * R
-  let offset = 0
-  const segs = [
-    { label: '成功', count: success, color: 'var(--success)' },
-    { label: '部分成功', count: partial, color: 'var(--warning)' },
-    { label: '失败', count: failed, color: 'var(--danger)' },
-  ].filter((s) => s.count > 0)
-
-  return (
-    <div className="flex items-center gap-6">
-      <div className="relative h-32 w-32 shrink-0">
-        <svg viewBox="0 0 132 132" className="h-full w-full -rotate-90">
-          <circle
-            cx={66}
-            cy={66}
-            r={R}
-            fill="none"
-            strokeWidth={12}
-            style={{ stroke: 'var(--fill-deep)' }}
-          />
-          {segs.map((s) => {
-            const len = (s.count / total) * C
-            const el = (
-              <circle
-                key={s.label}
-                cx={66}
-                cy={66}
-                r={R}
-                fill="none"
-                strokeWidth={12}
-                strokeDasharray={`${len} ${C - len}`}
-                strokeDashoffset={-offset}
-                style={{ stroke: s.color }}
-              />
-            )
-            offset += len
-            return el
-          })}
-        </svg>
-        <div className="absolute inset-0 flex flex-col items-center justify-center">
-          <div className="stat-value tnum text-[26px] leading-none text-ink-1">{rate}%</div>
-          <div className="mt-1 text-xs text-ink-3">成功率</div>
-        </div>
-      </div>
-      <div className="space-y-2.5 text-[13px]">
-        {segs.map((s) => (
-          <div key={s.label} className="flex items-center gap-2 text-ink-2">
-            <span className="h-2 w-2 rounded-full" style={{ background: s.color }} />
-            {s.label}
-            <span className="tnum text-ink-1">{s.count}</span>
-          </div>
-        ))}
-        <div className="text-xs text-ink-4">
-          近 14 天共 <span className="tnum">{total}</span> 次
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function formatUptime(seconds: number | null): string {
-  if (seconds == null) return '-'
-  const days = Math.floor(seconds / 86400)
-  const hours = Math.floor((seconds % 86400) / 3600)
-  const minutes = Math.floor((seconds % 3600) / 60)
-  if (days > 0) return days + ' 天 ' + hours + ' 小时'
-  if (hours > 0) return hours + ' 小时 ' + minutes + ' 分'
-  return minutes + ' 分钟'
-}
-
-function SystemPanel({ system, loading }: { system: SystemStatus | null; loading: boolean }) {
-  return (
-    <Panel
-      className="h-full"
-      title={
-        <>
-          服务器状态
-          <span className="ml-2 text-xs font-normal text-ink-4">内存 / 磁盘 / 服务</span>
-        </>
-      }
-    >
-      {loading && !system ? (
-        <PanelSkeleton />
-      ) : !system ? (
-        <p className="py-6 text-center text-[13px] text-ink-3">暂时读不到服务器状态</p>
-      ) : (
-        <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-3">
-            <div className="rounded-xl border border-line-soft bg-fill px-3 py-2.5">
-              <div className="flex items-center gap-1.5 text-xs text-ink-3"><Cpu size={14} />内存</div>
-              <div className="mt-1.5 flex items-baseline justify-between">
-                <span className="tnum text-lg font-medium text-ink-1">
-                  {system.memory.used_mb != null ? (system.memory.used_mb / 1024).toFixed(1) : '-'}
-                  <span className="ml-0.5 text-xs font-normal text-ink-4">GB</span>
-                </span>
-                <span className="tnum text-xs text-ink-4">
-                  / {system.memory.total_mb != null ? (system.memory.total_mb / 1024).toFixed(1) : '-'} GB
-                </span>
-              </div>
-              <Progress percent={(system.memory.percent ?? 0) / 100} status="normal" className="mt-2" />
-              <div className="mt-1 text-[11px] text-ink-4">
-                可用 {system.memory.available_mb != null ? (system.memory.available_mb / 1024).toFixed(1) : '-'} GB
-                {system.memory.swap_total_mb ? ' · Swap ' + (system.memory.swap_used_mb ?? 0) + ' MB' : ''}
-              </div>
-            </div>
-            <div className="rounded-xl border border-line-soft bg-fill px-3 py-2.5">
-              <div className="flex items-center gap-1.5 text-xs text-ink-3"><HardDrives size={14} />磁盘</div>
-              <div className="mt-1.5 flex items-baseline justify-between">
-                <span className="tnum text-lg font-medium text-ink-1">
-                  {system.disk.used_gb != null ? system.disk.used_gb.toFixed(1) : '-'}
-                  <span className="ml-0.5 text-xs font-normal text-ink-4">GB</span>
-                </span>
-                <span className="tnum text-xs text-ink-4">
-                  / {system.disk.total_gb != null ? system.disk.total_gb.toFixed(1) : '-'} GB
-                </span>
-              </div>
-              <Progress percent={(system.disk.percent ?? 0) / 100} status="normal" className="mt-2" />
-              <div className="mt-1 text-[11px] text-ink-4">剩余 {system.disk.free_gb ?? '-'} GB</div>
-            </div>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-ink-4">
-            <span>负载 {system.load.length ? system.load.join(' / ') : '-'}</span>
-            <span>运行 {formatUptime(system.uptime_seconds)}</span>
-          </div>
-
-          <div className="grid grid-cols-2 gap-2">
-            {system.services.map((service) => (
-              <div key={service.key} className="flex items-center gap-2 rounded-lg border border-line-soft bg-fill px-2.5 py-2">
-                <span className={service.active ? 'status-dot' : 'status-dot is-off'} />
-                <div className="min-w-0 flex-1">
-                  <div className="truncate text-[11px] text-ink-2">{service.name}</div>
-                  <div className="tnum text-[10px] text-ink-4">
-                    {service.active ? '正常' : '异常'}
-                    {service.memory_mb != null ? ' · ' + service.memory_mb + ' MB' : ''}
-                    {service.active && service.latency_ms > 0 ? ' · ' + service.latency_ms + 'ms' : ''}
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-    </Panel>
-  )
+function healthRows(health: HealthReport): Array<{ label: string; ok: boolean; detail: string }> {
+  const tts = (health.tts || []).filter((item) => item.id !== 'tone' && item.available)
+  const asrLabel = health.asr === 'remote' ? '共享 ASR 已接通' : health.asr === 'whisper' ? '使用本地 whisper' : '未配置，解说转写会失败'
+  return [
+    { label: 'ffmpeg', ok: !!health.ffmpeg, detail: health.ffmpeg ? '剪辑、解说和导出可用' : '未安装，剪辑与导出无法出片' },
+    { label: '文本模型', ok: !!health.llm, detail: health.llm ? '模型精排和写稿可用' : '未配置 VIDEO_HUB_AI_*，只能用本地信号和骨架稿' },
+    { label: '画面模型', ok: !!health.vision, detail: health.vision ? '抽帧说明可用' : '未配置视觉模型，抽帧仍会保留' },
+    { label: '语音识别', ok: health.asr === 'remote' || health.asr === 'whisper', detail: asrLabel },
+    { label: '语音合成', ok: tts.length > 0, detail: tts.length ? tts.map((item) => item.id).join('、') + ' 可用' : '未安装 edge-tts，也没有 TTS 接口' },
+  ]
 }
 
 export default function DashboardPage() {
-  const navigate = useNavigate()
   const [stats, setStats] = useState<Stats | null>(null)
-  const [system, setSystem] = useState<SystemStatus | null>(null)
-  const [videos, setVideos] = useState<Video[]>([])
   const [tasks, setTasks] = useState<TaskSummary[]>([])
-  const [records, setRecords] = useState<PublishRecord[]>([])
+  const [health, setHealth] = useState<HealthReport | null>(null)
   const [loading, setLoading] = useState(true)
   const [hasData, setHasData] = useState(false)
-  const [loadError, setLoadError] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const [s, v, t, r, sys] = await Promise.all([
-        fetchStats(),
-        fetchVideos(),
-        fetchTasks(),
-        fetchPublishRecords(),
-        fetchSystemStatus().catch(() => null),
-      ])
-      setStats(s)
-      setVideos(v)
-      setTasks(t)
-      setRecords(r)
-      if (sys) setSystem(sys)
+      const [statsValue, taskRows, healthValue] = await Promise.all([fetchStats(), fetchTasks(), fetchHealth()])
+      setStats(statsValue)
+      setTasks(taskRows)
+      setHealth(healthValue)
       setHasData(true)
-      setLoadError(null)
-    } catch (e) {
-      setLoadError(errorMessage(e))
+      setError(null)
+    } catch (cause) {
+      setError(errorMessage(cause))
     } finally {
       setLoading(false)
     }
   }, [])
 
-  useEffect(() => {
-    load()
-  }, [load])
-
-  // 服务器状态独立刷新，不跟随任务轮询
-  useEffect(() => {
-    const timer = window.setInterval(() => {
-      fetchSystemStatus().then(setSystem).catch(() => undefined)
-    }, 15000)
-    return () => window.clearInterval(timer)
-  }, [])
-
-  // 有进行中任务/录制时每 5 秒轮询，全部结束后自动停止
-  const polling = !!stats && (stats.tasks.running > 0 || stats.recordings.active > 0)
-  useEffect(() => {
-    if (!polling) return
-    const timer = window.setInterval(() => load(), 5000)
-    return () => window.clearInterval(timer)
-  }, [polling, load])
-
-  const activeTasks = tasks.filter((t) => t.status === 'pending' || t.status === 'running')
-  const recentVideos = videos.slice(0, 8)
-  const finishedRecords = records.filter(
-    (r) => r.status === 'success' || r.status === 'partial' || r.status === 'failed',
-  )
-  const publishSuccesses = finishedRecords.filter((r) => r.status === 'success').length
-  const successRate = finishedRecords.length > 0
-    ? `${Math.round((publishSuccesses / finishedRecords.length) * 100)}%`
-    : '-'
-
-  const trend = useMemo(() => buildTrend(records), [records])
-  const trendTotal = trend.reduce((sum, d) => sum + d.count, 0)
-
-  const statCards: {
-    label: string
-    value: ReactNode
-    sub: ReactNode
-    icon: ReactNode
-    to: string
-  }[] = stats
-    ? [
-        {
-          label: '视频库',
-          value: stats.videos.count,
-          sub: <>共占用 <span className="tnum">{formatSize(stats.videos.size)}</span></>,
-          icon: <VideoCamera size={18} />,
-          to: '/videos',
-        },
-        {
-          label: '平台账号',
-          value: (
-            <>
-              <span className="tnum">{stats.accounts.with_cookie}</span>
-              <span className="tnum text-[16px] text-ink-4">/{stats.accounts.total}</span>
-            </>
-          ),
-          sub: '已配置登录态 / 总账号数',
-          icon: <UserCircle size={18} />,
-          to: '/accounts',
-        },
-        {
-          label: '录制中',
-          value: (
-            <span className={`tnum ${stats.recordings.active > 0 ? 'text-accent' : ''}`}>
-              {stats.recordings.active}
-            </span>
-          ),
-          sub: <>共 <span className="tnum">{stats.recordings.total}</span> 条录制记录</>,
-          icon: <Broadcast size={18} />,
-          to: '/record',
-        },
-        {
-          label: '发布成功率',
-          value: <span className="tnum">{successRate}</span>,
-          sub: (
-            <>
-              累计 <span className="tnum">{finishedRecords.length}</span> 次
-            </>
-          ),
-          icon: <PaperPlaneTilt size={18} />,
-          to: '/publish',
-        },
-      ]
-    : []
+  useEffect(() => { void load() }, [load])
+  const recentTasks = tasks.slice(0, 6)
 
   return (
     <div>
       <PageHeader
-        title="仪表盘"
-        desc={`${todayText()} · 今天已发布 ${stats?.publish.today ?? 0} 个视频`}
-        extra={
-          <>
-            <Button
-              variant="primary"
-              icon={<DownloadSimple size={15} />}
-              onClick={() => navigate('/download')}
-            >
-              下载视频
-            </Button>
-            <Button
-              variant="ghost"
-              icon={<Broadcast size={15} />}
-              onClick={() => navigate('/record')}
-            >
-              开始录制
-            </Button>
-          </>
-        }
+        title="工作台概览"
+        desc="看库存、任务和本机能力。要处理具体素材，去创作工作台。"
+        extra={<Link to="/workbench"><Button variant="primary" icon={<SquaresFour size={15} />}>打开工作台</Button></Link>}
       />
-
-      <RequestState error={loadError} hasData={hasData} loading={loading} onRetry={load} className="mb-4" />
-      {hasData || loading ? (
-        <div className="bento-grid">
-        {/* 发布趋势（大格） */}
-        <div className="bento-2x2 enter-item">
-          <Panel
-            className="flex h-full flex-col"
-            title={
-              <>
-                发布趋势
-                <span className="ml-2 text-xs font-normal text-ink-4">
-                  近 14 天 · 共 <span className="tnum">{trendTotal}</span> 次
-                </span>
-              </>
-            }
-          >
-            {loading && !hasData ? (
-              <PanelSkeleton />
-            ) : trendTotal === 0 ? (
-              <div className="flex flex-1 items-center justify-center">
-                <EmptyState
-                  icon={<ChartLine size={26} />}
-                  title="暂无发布数据"
-                  desc="近 14 天还没有发布记录"
-                />
-              </div>
-            ) : (
-              <div className="flex flex-1 items-center">
-                <TrendChart days={trend} />
-              </div>
-            )}
-          </Panel>
+      <div className="vh-quick-actions" aria-label="快捷入口">
+        <Link to="/workbench">创作工作台</Link>
+        <Link to="/edit">智能剪辑</Link>
+        <Link to="/narrate">AI 解说</Link>
+        <Link to="/download">下载素材</Link>
+        <Link to="/tasks">任务中心</Link>
+      </div>
+      <RequestState error={error} hasData={hasData} loading={loading} onRetry={load} className="mb-4" />
+      {stats && (
+        <div className="mb-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          <Link to="/videos"><StatCard label="视频素材" value={stats.videos.count} sub={`${stats.videos.high_quality} 条高质 · ${formatSize(stats.videos.size)}`} icon={<FilmSlate size={18} />} /></Link>
+          <Link to="/videos"><StatCard label="已理解素材" value={stats.videos.analyzed} sub="可直接进剪辑或解说" icon={<MagicWand size={18} />} /></Link>
+          <Link to="/record"><StatCard label="录制中" value={stats.recordings.active} sub={`共 ${stats.recordings.total} 条记录`} icon={<Broadcast size={18} />} /></Link>
+          <Link to="/tasks"><StatCard label="进行中任务" value={stats.tasks.running} sub={`今天新增 ${stats.tasks.today} 个`} icon={<DownloadSimple size={18} />} /></Link>
         </div>
-
-        {/* 服务器状态 */}
-        <div className="bento-2x1 enter-item" style={{ animationDelay: '60ms' }}>
-          <SystemPanel system={system} loading={loading} />
-        </div>
-
-        {/* 统计卡 ×4 */}
-        {(loading && !hasData) || !stats
-          ? [0, 1, 2, 3].map((i) => (
-              <div key={i} className="vh-card p-5">
-                <div className="skeleton" style={{ width: '40%', height: 13 }} />
-                <div className="skeleton mt-3" style={{ width: '70%', height: 26 }} />
-              </div>
-            ))
-          : statCards.map((c, i) => (
-              <div
-                key={c.label}
-                role="button"
-                tabIndex={0}
-                onClick={() => navigate(c.to)}
-                onKeyDown={(e: KeyboardEvent<HTMLDivElement>) => {
-                  if (e.key === 'Enter') navigate(c.to)
-                }}
-                className="enter-item cursor-pointer transition-[border-color] hover:border-accent"
-                style={{ animationDelay: `${Math.min(40 + i * 40, 200)}ms` }}
-              >
-                <StatCard label={c.label} value={c.value} sub={c.sub} icon={c.icon} />
-              </div>
-            ))}
-
-        {/* 发布占比 */}
-        <div className="bento-2x1 enter-item" style={{ animationDelay: '220ms' }}>
-          <Panel
-            className="h-full"
-            title={
-              <>
-                发布成功率
-                <span className="ml-2 text-xs font-normal text-ink-4">近 14 天</span>
-              </>
-            }
-          >
-            {loading && !hasData ? <PanelSkeleton /> : <PublishDonut records={records} />}
-          </Panel>
-        </div>
-
-        {/* 进行中的任务 */}
-        <div className="bento-2x1 enter-item" style={{ animationDelay: '260ms' }}>
-          <Panel
-            title="进行中的任务"
-            className="h-full"
-            extra={
-              <Link to="/tasks" className="text-[13px] text-accent hover:underline">
-                任务中心 →
-              </Link>
-            }
-          >
-            {loading && !hasData ? (
-              <PanelSkeleton />
-            ) : activeTasks.length === 0 ? (
-              <p className="py-6 text-center text-[13px] text-ink-3">暂无进行中的任务</p>
-            ) : (
-              <div className="space-y-3">
-                {activeTasks.map((t, i) => (
-                  <div
-                    key={t.id}
-                    className="enter-item"
-                    style={{ animationDelay: `${Math.min(i * 40, 240)}ms` }}
-                  >
-                    <div className="flex items-center gap-2">
-                      <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-fill text-ink-3">
-                        {t.type === 'download' ? (
-                          <DownloadSimple size={13} />
-                        ) : (
-                          <PaperPlaneTilt size={13} />
-                        )}
-                      </span>
-                      <span className="min-w-0 flex-1 truncate text-[13px] text-ink-1">{t.title}</span>
-                      <StatusBadge status={t.status} />
-                    </div>
-                    <div className="mt-1.5 pl-8">
-                      {t.type === 'download' ? (
-                        <Progress
-                          percent={t.progress / 100}
-                          status={t.status === 'failed' ? 'error' : 'normal'}
-                        />
-                      ) : (
-                        <span className="text-xs text-ink-4">
-                          {t.status === 'pending' ? '排队等待中' : '发布执行中'}
-                        </span>
-                      )}
-                      <div className="mt-1 flex items-center justify-between text-xs text-ink-4">
-                        {t.needs_verify ? (
-                          <span className="text-accent">等待短信验证码</span>
-                        ) : (
-                          <span className="tnum">
-                            {t.type === 'download' ? `${Math.round(t.progress)}%` : ''}
-                          </span>
-                        )}
-                        <span>{formatRelative(t.created_at)}</span>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </Panel>
-        </div>
-
-        {/* 最近视频（横向滚动） */}
-        <div className="bento-2x1 enter-item" style={{ animationDelay: '300ms' }}>
-          <Panel
-            title="最近视频"
-            className="h-full"
-            extra={
-              <Link to="/videos" className="text-[13px] text-accent hover:underline">
-                全部视频 →
-              </Link>
-            }
-          >
-            {loading && !hasData ? (
-              <PanelSkeleton />
-            ) : recentVideos.length === 0 ? (
-              <EmptyState
-                icon={<VideoCamera size={26} />}
-                title="视频库还是空的"
-                desc="去下载抖音视频，或上传本地视频"
-                action={
-                  <>
-                    <Button variant="primary" onClick={() => navigate('/download')}>
-                      去下载
-                    </Button>
-                    <Button onClick={() => navigate('/videos')}>上传视频</Button>
-                  </>
-                }
-              />
-            ) : (
-              <div className="flex gap-3 overflow-x-auto pb-2">
-                {recentVideos.map((v, i) => (
-                  <Link
-                    key={v.id}
-                    to="/videos"
-                    className="enter-item group w-36 shrink-0"
-                    style={{ animationDelay: `${Math.min(i * 40, 240)}ms` }}
-                  >
-                    <div className="aspect-video overflow-hidden rounded-lg bg-fill">
-                      {v.cover_url ? (
-                        <img
-                          src={v.cover_url}
-                          alt={v.title}
-                          loading="lazy"
-                          className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
-                        />
-                      ) : (
-                        <div className="flex h-full w-full items-center justify-center">
-                          <PlatformIcon platform={v.source_platform} size={30} />
-                        </div>
-                      )}
-                    </div>
-                    <div className="mt-2 truncate text-[13px] text-ink-1">{v.title}</div>
-                    <div className="mt-0.5 text-xs text-ink-4">{formatRelative(v.created_at)}</div>
-                  </Link>
-                ))}
-              </div>
-            )}
-          </Panel>
-        </div>
-        </div>
-      ) : null}
+      )}
+      <div className="grid gap-5 xl:grid-cols-2">
+        <Panel title="最近任务" extra={<Link to="/tasks" className="text-xs text-accent">任务中心 →</Link>}>
+          {recentTasks.length === 0 ? (
+            <EmptyState icon={<DownloadSimple size={24} />} title="还没有任务" desc="下载、剪辑或解说开始后，进度会出现在这里。" action={<Link to="/download"><Button size="sm">去下载</Button></Link>} />
+          ) : (
+            <ul className="divide-y divide-line-soft">
+              {recentTasks.map((task) => (
+                <li key={task.id} className="flex items-center gap-2 py-2.5">
+                  <span className="min-w-0 flex-1 truncate text-[13px] text-ink-1">{task.title}</span>
+                  <StatusBadge status={task.status} />
+                  <span className="shrink-0 text-[11px] text-ink-4">{formatRelative(task.created_at)}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Panel>
+        <Panel title="本机能力" extra={<Link to="/settings/system" className="text-xs text-accent">系统维护 →</Link>}>
+          {!health ? (
+            <p className="py-8 text-center text-[13px] text-ink-3">还没有读到健康状态</p>
+          ) : (
+            <ul className="space-y-2">
+              {healthRows(health).map((row) => (
+                <li key={row.label} className="flex items-start gap-2 rounded-lg bg-fill px-3 py-2">
+                  <span className={row.ok ? 'status-dot mt-1' : 'status-dot is-off mt-1'} />
+                  <span className="min-w-0">
+                    <strong className="block text-[13px] text-ink-1">{row.label}</strong>
+                    <span className="text-[11px] text-ink-4">{row.detail}</span>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Panel>
+      </div>
+      <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <Link to="/download" className="vh-card flex items-center gap-3 p-4 hover:border-accent"><DownloadSimple size={18} /><span className="text-sm text-ink-1">获取视频</span></Link>
+        <Link to="/record" className="vh-card flex items-center gap-3 p-4 hover:border-accent"><Broadcast size={18} /><span className="text-sm text-ink-1">直播录制</span></Link>
+        <Link to="/narrate" className="vh-card flex items-center gap-3 p-4 hover:border-accent"><MagicWand size={18} /><span className="text-sm text-ink-1">AI 解说</span></Link>
+        <Link to="/export" className="vh-card flex items-center gap-3 p-4 hover:border-accent"><Package size={18} /><span className="text-sm text-ink-1">封面与导出</span></Link>
+      </div>
     </div>
   )
 }

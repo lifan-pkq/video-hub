@@ -28,18 +28,16 @@ done
 echo "配置备份：$BACKUP_DIR"
 
 apt-get update
-apt-get install -y --no-install-recommends python3-venv python3-pip ffmpeg xvfb xauth curl rsync unzip git
+apt-get install -y --no-install-recommends python3-venv python3-pip ffmpeg curl rsync unzip git
 
 if ! id -u narratoai >/dev/null 2>&1; then
   useradd --system --user-group --home-dir "$REMOTE_DIR" --shell /usr/sbin/nologin narratoai
 fi
 
-# 直播录制依赖独立项目 DouyinLiveRecorder（不放进主仓库）
 DLR_DIR="${VIDEO_HUB_DLR_DIR:-/opt/DouyinLiveRecorder}" bash "$REMOTE_DIR/deploy/install-dlr.sh"
 
 mkdir -p "$REMOTE_DIR"/{data,models}
 mkdir -p "$REMOTE_DIR/narratoai"
-
 if [ ! -f "$REMOTE_DIR/narratoai/config.toml" ]; then
   if [ -f /opt/NarratoAI/config.toml ]; then
     cp -a /opt/NarratoAI/config.toml "$REMOTE_DIR/narratoai/config.toml"
@@ -50,7 +48,7 @@ fi
 if [ ! -d "$REMOTE_DIR/narratoai/storage" ] && [ -d /opt/NarratoAI/storage ]; then
   cp -a /opt/NarratoAI/storage "$REMOTE_DIR/narratoai/storage"
 fi
-mkdir -p "$REMOTE_DIR/narratoai/storage"/{temp,tasks,json,narration_scripts,drama_analysis}
+mkdir -p "$REMOTE_DIR/narratoai/storage"/{temp,tasks,json,narration_scripts,drama_analysis,previews}
 for directory in videos scripts bgm songs srt fonts safe_areas tts_reference_audio; do
   if [ -d "/opt/NarratoAI/resource/$directory" ]; then
     mkdir -p "$REMOTE_DIR/narratoai/resource/$directory"
@@ -85,10 +83,14 @@ if [ -f "$REMOTE_DIR/.env" ]; then
   chmod 600 "$REMOTE_DIR/.env"
 fi
 
+runuser -u narratoai -- "$REMOTE_DIR/.venv/bin/python" "$REMOTE_DIR/backend/scripts/migrate_legacy.py" || true
+systemctl stop narratoai 2>/dev/null || true
+systemctl disable narratoai 2>/dev/null || true
+rm -f /etc/systemd/system/narratoai.service
 install -m 644 "$REMOTE_DIR"/deploy/systemd/*.service /etc/systemd/system/
 systemctl daemon-reload
-systemctl enable video-hub-backend narratoai narrato-engine narrato-preview narrato-asr
-systemctl restart narrato-asr narrato-engine narrato-preview narratoai video-hub-backend
+systemctl enable video-hub-backend narrato-engine narrato-preview narrato-asr
+systemctl restart narrato-asr narrato-engine narrato-preview video-hub-backend
 
 wait_for() {
   local url="$1"
@@ -112,10 +114,8 @@ curl -sf --max-time 300 \
   -F 'response_format=json' \
   http://127.0.0.1:8600/v1/audio/transcriptions >/dev/null
 rm -f /tmp/video-hub-asr-smoke.wav
-wait_for http://127.0.0.1:8600/health narrato-asr-ready
 wait_for http://127.0.0.1:8601/health narrato-engine
 wait_for http://127.0.0.1:8502/health narrato-preview
-wait_for http://127.0.0.1:8501/narrato/_stcore/health narratoai
 wait_for http://127.0.0.1:8000/api/health video-hub-backend
 
 TEST_NGINX_CONF=/tmp/video-hub-nginx-check.conf
@@ -140,7 +140,7 @@ rollback() {
     restore_path "/etc/systemd/system/$unit.service"
   done
   systemctl daemon-reload
-  systemctl restart narratoai narrato-engine narrato-preview narrato-asr || true
+  systemctl restart narrato-engine narrato-preview narrato-asr || true
   if [ ! -f /etc/systemd/system/video-hub-backend.service ]; then
     systemctl stop video-hub-backend 2>/dev/null || true
   else
@@ -159,7 +159,6 @@ if ! nginx -t; then
 fi
 systemctl reload nginx
 if ! wait_for http://localhost/api/health video-hub-public || \
-   ! wait_for http://localhost/narrato/_stcore/health narrato-public || \
    ! wait_for http://localhost/preview/health preview-public; then
   rollback
   exit 1

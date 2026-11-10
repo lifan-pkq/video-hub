@@ -1,5 +1,6 @@
 import json
 import unittest
+from pathlib import Path
 from unittest.mock import Mock, patch
 
 from app.services.ai_edit import (
@@ -159,6 +160,52 @@ class TranscriptAnalysisTests(unittest.TestCase):
                     [{"start": 0.0, "end": 1.0, "text": "内容"}],
                     1.0, kinds=["intro"], log=lambda _: None,
                 )
+
+
+class LocalChunkedTranscriptionTests(unittest.TestCase):
+    def test_long_audio_is_transcribed_in_chunks(self):
+        from app.services.ai_edit import _transcribe_local
+
+        class Info:
+            language = "zh"
+            duration = 300
+
+        model = Mock()
+        model.transcribe.return_value = ([], Info())
+        with patch("app.services.ai_edit._get_model", return_value=model), \
+                patch("app.services.ai_edit.shutil.which", return_value="/usr/bin/ffmpeg"), \
+                patch("app.services.ai_edit.probe_video", return_value={"duration": 650}), \
+                patch("app.services.ai_edit._extract_audio") as extract, \
+                patch("app.services.ai_edit._cut_audio_segment") as cut, \
+                patch("app.services.ai_edit._decode_audio_array", return_value=object()) as decode:
+            result = _transcribe_local(Path("long.mp4"), log=lambda _: None)
+
+        self.assertEqual(result, [])
+        extract.assert_called_once()
+        self.assertEqual(cut.call_count, 3)
+        self.assertEqual(decode.call_count, 3)
+        self.assertEqual(model.transcribe.call_count, 3)
+
+    def test_short_audio_stays_one_pass(self):
+        from app.services.ai_edit import _transcribe_local
+
+        class Info:
+            language = "zh"
+            duration = 8
+
+        model = Mock()
+        model.transcribe.return_value = ([], Info())
+        with patch("app.services.ai_edit._get_model", return_value=model), \
+                patch("app.services.ai_edit.shutil.which", return_value="/usr/bin/ffmpeg"), \
+                patch("app.services.ai_edit.probe_video", return_value={"duration": 8}), \
+                patch("app.services.ai_edit._extract_audio") as extract, \
+                patch("app.services.ai_edit._cut_audio_segment") as cut, \
+                patch("app.services.ai_edit._decode_audio_array", return_value=object()):
+            _transcribe_local(Path("short.mp4"), log=lambda _: None)
+
+        extract.assert_not_called()
+        cut.assert_not_called()
+        model.transcribe.assert_called_once()
 
 
 if __name__ == "__main__":

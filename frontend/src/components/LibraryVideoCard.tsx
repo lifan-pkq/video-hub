@@ -40,6 +40,7 @@ interface CardAction {
 /** 无封面占位渐变的平台主色 */
 const PLATFORM_COLORS: Record<string, string> = {
   douyin: '#fe2c55',
+  douyin_short: '#fe2c55',
   xiaohongshu: '#ff2442',
   kuaishou: '#ff7e00',
   bilibili: '#00a1d6',

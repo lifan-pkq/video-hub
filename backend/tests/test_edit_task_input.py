@@ -12,3 +12,6 @@ class EditRouteSurfaceTests(unittest.TestCase):
         self.assertIn("/api/edit/plan", paths)
         self.assertIn("/api/edit/export", paths)
         self.assertIn("/api/edit/concat", paths)
+        self.assertIn("/api/edit/douyin", paths)
+        self.assertIn("/api/edit/douyin/{job_id}/pack", paths)
+        self.assertIn("/api/edit/douyin/{job_id}/library", paths)

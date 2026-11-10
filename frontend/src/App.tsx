@@ -16,6 +16,7 @@ const VideosPage = lazy(() => import('./pages/VideosPage'))
 const ImagesPage = lazy(() => import('./pages/ImagesPage'))
 const EditPage = lazy(() => import('./pages/EditPage'))
 const EditResultPage = lazy(() => import('./pages/EditResultPage'))
+const DouyinProducePage = lazy(() => import('./pages/DouyinProducePage'))
 const DownloadPage = lazy(() => import('./pages/DownloadPage'))
 const RecordPage = lazy(() => import('./pages/RecordPage'))
 const ExportPage = lazy(() => import('./pages/ExportPage'))
@@ -117,6 +118,7 @@ function AppContent() {
                 <Route path="/library" element={<VideosPage />} />
                 <Route path="/library/import" element={<ImportWizardPage />} />
                 <Route path="/edit" element={<EditPage />} />
+                <Route path="/edit/douyin/:jobId" element={<DouyinProducePage />} />
                 <Route path="/edit/new" element={<EditResultPage />} />
                 <Route path="/edit/:taskId" element={<EditResultPage />} />
                 <Route path="/narrate" element={<NarratePage />} />

@@ -19,7 +19,7 @@
 
 - 视频/图片素材库：质量分、素材卡、标题与内容搜索。
 - 视频下载与灵感：只走 yt-dlp；灵感库只存链接和笔记，不抓作者视频。
-- 智能剪辑：故事弧选段、句末/镜头/节拍吸附、理解分轨、撤销/重做和命名快照。
+- 智能剪辑：默认是抖音一键成片。选一条素材库原片，转写后抽出多条竖屏短视频（字幕、封面、标题/话题/简介），在页面里预览、下载，或入库后走封面与导出。不自动发布。手动切点、废片和单条时间线留在「高级」。
 - AI 解说：融合理解、剧本批判、分镜、三版与跨版拼段、结构审片、TTS 试听。
 - AI 素材：人物/场景/风格档案、一致性检查、morph、最多 10 个连续镜头批量生成。
 - 封面与导出：封面/标题选择和整套下载。
@@ -61,7 +61,9 @@ npm run dev
 
 打开 http://127.0.0.1:5173/ 。前端把 `/api` 代理到 8000。
 
-共享 ASR（8600）和字幕预览（8502）是可选服务，不启动不会影响主工作台。自动转写未配置共享 ASR 时使用后端本地 faster-whisper。旧 Streamlit（8501）已下线，不要作为生产入口。
+共享 ASR（8600）和字幕预览（8502）是可选服务，不启动不会影响主工作台。自动转写未配置共享 ASR 时使用后端本地 faster-whisper；超过 5 分钟会先抽音频再按 300 秒分段，避免整段波形进内存。旧 Streamlit（8501）已下线，不要作为生产入口。
+
+抖音一键成片在「智能剪辑」页：选原片，可选写一句想留的内容，点「生成抖音短视频」。任务页里可以预览竖屏成片，下载单条或整包（视频、封面、`copy.txt`），或入库后到「封面与导出」打包。AI 解说仍是单独的配音流程。需要自己剪时，展开「高级：手动切点和单条时间线」。
 
 ## 主要配置
 
@@ -74,7 +76,12 @@ npm run dev
 | `VIDEO_HUB_VISION_BASE_URL` | 文本接口 | 视觉接口 |
 | `VIDEO_HUB_VISION_API_KEY` | 文本 Key | 视觉 Key |
 | `VIDEO_HUB_VISION_MODEL` | 无 | 视觉模型名；未配置时视觉检查标 unknown |
-| `VIDEO_HUB_ASR_URL` | 无 | 可选共享 ASR transcriptions URL |
+| `VIDEO_HUB_ASR_URL` | 无 | 可选共享 ASR transcriptions URL。未配置时本机 faster-whisper 会按 300 秒分段转写 |
+| `VIDEO_HUB_DOUYIN_MAX_CLIPS` | `10` | 一键成片最多条数，1–10。长原片大约每 70 秒一条，短片更少 |
+| `VIDEO_HUB_DOUYIN_MIN_SECONDS` | `12` | 单条最短秒数 |
+| `VIDEO_HUB_DOUYIN_MAX_SECONDS` | `60` | 单条最长秒数 |
+| `VIDEO_HUB_DOUYIN_WIDTH` / `VIDEO_HUB_DOUYIN_HEIGHT` | `1080` / `1920` | 竖屏输出。内存紧时可改成 `720` / `1280` |
+| `VIDEO_HUB_DOUYIN_FFMPEG_THREADS` | `1` | 单条编码线程，最大 2 |
 | `VIDEO_HUB_NARRATO_ENGINE_URL` | `http://127.0.0.1:8601` | 解说引擎 |
 | `AGNES_MEDIA_BASE_URL` | `https://api.agnes-ai.cn/v1` | AI 图片/视频 |
 | `AGNES_IMAGE_MODEL` | `agnes-image-2.5-flash` | 图片模型 |

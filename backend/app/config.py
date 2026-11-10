@@ -81,6 +81,43 @@ except ValueError:
     AGNES_VIDEO_CREATE_TIMEOUT = 1800
 
 
+def _bounded_int(name: str, default: int, low: int, high: int) -> int:
+    try:
+        value = int(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        value = default
+    return max(low, min(high, value))
+
+
+def _bounded_float(name: str, default: float, low: float, high: float) -> float:
+    try:
+        value = float(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        value = default
+    return max(low, min(high, value))
+
+
+def douyin_settings() -> dict:
+    """抖音一键成片的可调上限。默认竖屏 1080x1920、单条 12–60 秒、最多 10 条。
+
+    生产机内存紧，编码线程默认 1，输出最长边不超过 1080p。
+    """
+    min_seconds = _bounded_float("VIDEO_HUB_DOUYIN_MIN_SECONDS", 12, 5, 45)
+    max_seconds = _bounded_float("VIDEO_HUB_DOUYIN_MAX_SECONDS", 60, 15, 90)
+    if max_seconds < min_seconds + 3:
+        max_seconds = min(90.0, min_seconds + 3)
+    width = _bounded_int("VIDEO_HUB_DOUYIN_WIDTH", 1080, 270, 1080) // 2 * 2
+    height = _bounded_int("VIDEO_HUB_DOUYIN_HEIGHT", 1920, 480, 1920) // 2 * 2
+    return {
+        "max_clips": _bounded_int("VIDEO_HUB_DOUYIN_MAX_CLIPS", 10, 1, 10),
+        "min_seconds": min_seconds,
+        "max_seconds": max_seconds,
+        "width": max(2, width),
+        "height": max(2, height),
+        "threads": _bounded_int("VIDEO_HUB_DOUYIN_FFMPEG_THREADS", 1, 1, 2),
+    }
+
+
 def ensure_dirs():
     for d in (DATA_DIR, VIDEOS_DIR, COVERS_DIR, TMP_DIR, RECORDINGS_DIR, COOKIES_DIR):
         d.mkdir(parents=True, exist_ok=True)

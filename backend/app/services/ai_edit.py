@@ -190,28 +190,87 @@ def _decode_audio_array(video_path: Path):
     return np.frombuffer(result.stdout, np.int16).astype(np.float32) / 32768.0
 
 
+def _collect_whisper_segments(segments, offset: float) -> list[dict]:
+    out = []
+    for seg in segments:
+        text = str(getattr(seg, "text", "") or "").strip()
+        if not text:
+            continue
+        out.append({
+            "start": round(float(seg.start) + offset, 2),
+            "end": round(float(seg.end) + offset, 2),
+            "text": text,
+        })
+    return out
+
+
+def _run_whisper(model, audio, offset: float):
+    """在渲染锁内把生成器消费完。faster-whisper 的计算发生在迭代时，不能出了锁再读。"""
+    with render_semaphore:
+        segments, info = model.transcribe(audio, language="zh", vad_filter=True)
+        return _collect_whisper_segments(segments, offset), info
+
+
+def _transcribe_local_chunked(video_path: Path, model, duration: float, log) -> list[dict]:
+    """长音频按 300s 分段解码再转写，避免整段 float32 波形和模型同时占满内存。"""
+    import tempfile
+
+    TMP_DIR.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=f"whisper-{video_path.stem}-", dir=TMP_DIR) as tmp:
+        tmpdir = Path(tmp)
+        audio_path = tmpdir / "audio.mp3"
+        _extract_audio(video_path, audio_path)
+        heard = float(probe_video(audio_path).get("duration") or duration or 0)
+        if heard <= 0:
+            heard = duration
+        total = max(1, int(math.ceil(heard / _CHUNK_SECONDS)))
+        log(f"本地转写按 {_CHUNK_SECONDS}s 分段，共 {total} 段，避免整段音频进内存")
+        out: list[dict] = []
+        info = None
+        for index in range(total):
+            start = index * _CHUNK_SECONDS
+            length = min(_CHUNK_SECONDS, max(0.1, heard - start))
+            seg_path = tmpdir / f"seg{index + 1}.mp3"
+            _cut_audio_segment(audio_path, start, length, seg_path)
+            audio = _decode_audio_array(seg_path)
+            try:
+                part, info = _run_whisper(model, audio, start)
+            finally:
+                del audio
+                seg_path.unlink(missing_ok=True)
+            out.extend(part)
+            log(
+                f"本地转写进度：第 {index + 1}/{total} 段完成（{len(part)} 句），"
+                f"已转写 {min(heard, start + length):.0f}s/{heard:.0f}s"
+            )
+        out.sort(key=lambda item: item["start"])
+        if info is not None:
+            log(f"转写完成：{len(out)} 句（检测语言 {info.language}）")
+        return out
+
+
 def _transcribe_local(video_path: Path, log=print) -> list[dict]:
-    """本地 whisper 路径：优先传解码后的 numpy 数组，避开 av bug。"""
+    """本地 whisper 路径：优先传解码后的 numpy 数组，避开 av bug。长文件走分段。"""
     model = _get_model()
-    if shutil.which("ffmpeg"):
-        audio = _decode_audio_array(video_path)
-        with render_semaphore:
-            segments, info = model.transcribe(audio, language="zh", vad_filter=True)
-    else:
+    if not shutil.which("ffmpeg"):
         log("未找到 ffmpeg，回落到文件路径直接转写（可能撞 av TypeError）")
         try:
-            with render_semaphore:
-                segments, info = model.transcribe(str(video_path), language="zh", vad_filter=True)
+            out, info = _run_whisper(model, str(video_path), 0.0)
         except Exception as exc:  # noqa: BLE001 - 回落失败必须报出真实错误
             raise AIServiceError(
                 "本地 whisper 转写失败（ffmpeg 不可用，已回落文件路径）："
                 f"{str(exc) or type(exc).__name__}"
             ) from exc
-    out = []
-    for seg in segments:
-        text = seg.text.strip()
-        if text:
-            out.append({"start": round(seg.start, 2), "end": round(seg.end, 2), "text": text})
+        log(f"转写完成：{len(out)} 句（检测语言 {info.language}，时长 {info.duration:.0f}s）")
+        return out
+    duration = float(probe_video(video_path).get("duration") or 0)
+    if duration > _CHUNK_SECONDS:
+        return _transcribe_local_chunked(video_path, model, duration, log)
+    audio = _decode_audio_array(video_path)
+    try:
+        out, info = _run_whisper(model, audio, 0.0)
+    finally:
+        del audio
     log(f"转写完成：{len(out)} 句（检测语言 {info.language}，时长 {info.duration:.0f}s）")
     return out
 

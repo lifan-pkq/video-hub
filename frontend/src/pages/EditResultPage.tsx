@@ -512,7 +512,7 @@ export default function EditResultPage() {
       </div>
       <PageHeader
         title="智能剪辑"
-        desc="先分析切点，再 AI 精彩剪辑；时间线可变速、静止，也能插入图片或视频。"
+        desc="手动时间线：分析切点、删废片、拼成一条成片。抖音多条竖屏在智能剪辑首页一键生成。"
         extra={<span className="tnum text-xs text-ink-3">原片 {formatTime(total)} · 成片 {formatTime(kept)} · {planSource}</span>}
       />
       {banner ? (

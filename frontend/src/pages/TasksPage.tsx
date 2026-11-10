@@ -141,7 +141,7 @@ export default function TasksPage() {
       return
     }
     if (t.type === 'edit' || kind.startsWith('edit')) {
-      navigate(`/edit/${encodeURIComponent(t.id)}`)
+      navigate(kind === 'edit.douyin' ? `/edit/douyin/${encodeURIComponent(t.id)}` : `/edit/${encodeURIComponent(t.id)}`)
       return
     }
     if (t.type === 'download') {

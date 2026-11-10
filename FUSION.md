@@ -8,7 +8,7 @@
 - `backend/app/routers/narrate.py` 换成四步：理解 → 文稿 → 审阅 → 渲染。不再请求 NarratoAI :8601。
 - 长任务写在 `{DATA_DIR}/jobs/*.json`，解说产物在 `{DATA_DIR}/narrate/{id}/`。`GET /api/tasks` 和 `/api/ws` 快照会把这些任务并进任务中心。失败体是 `{code, message, action}`。
 - `engine/` 放在仓库根。`app.main` 会把仓库根加入 `sys.path`，因此 `uvicorn app.main:app --app-dir backend` 也能 `import engine`。
-- 前端 `/edit`、`/edit/new`、`/edit/:taskId` 都是同一剪辑台。素材库的「智能剪辑」仍用 `state.videoIds`。`/narrate?video=` 和 `/narrate?task=` 仍可用。
+- 前端 `/edit` 是抖音一键成片。手动时间线在 `/edit/new` 和 `/edit/:taskId`。生成结果在 `/edit/douyin/:jobId`。素材库的「智能剪辑」仍用 `state.videoIds`。`/narrate?video=` 和 `/narrate?task=` 仍可用。
 - `/workbench` 不再复制概览页，改成最近素材并跳进剪辑、解说、导出。
 - 剪映草稿按钮保留为「暂未接入」，避免点进已删除的导出接口。
 - 旧的 `backend/app/services/narration.py` 还在，只给历史导入循环和档案快照用。新页面不调用它。

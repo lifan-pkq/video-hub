@@ -37,7 +37,7 @@ export default function WorkbenchPage() {
       />
       <RequestState error={error} hasData={hasData} loading={loading} onRetry={load} className="mb-4" />
       <div className="mb-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <Link to="/edit" className="vh-card flex items-center gap-3 p-4 hover:border-accent"><FilmSlate size={20} /><span><strong className="block text-sm text-ink-1">智能剪辑</strong><small className="text-ink-3">按信号切点再导出</small></span></Link>
+        <Link to="/edit" className="vh-card flex items-center gap-3 p-4 hover:border-accent"><FilmSlate size={20} /><span><strong className="block text-sm text-ink-1">智能剪辑</strong><small className="text-ink-3">一键生成抖音竖屏短视频</small></span></Link>
         <Link to="/narrate" className="vh-card flex items-center gap-3 p-4 hover:border-accent"><MagicWand size={20} /><span><strong className="block text-sm text-ink-1">AI 解说</strong><small className="text-ink-3">理解、文稿、审阅、成片</small></span></Link>
         <Link to="/export" className="vh-card flex items-center gap-3 p-4 hover:border-accent"><Package size={20} /><span><strong className="block text-sm text-ink-1">封面与导出</strong><small className="text-ink-3">给成片做封面和套装</small></span></Link>
         <Link to="/download" className="vh-card flex items-center gap-3 p-4 hover:border-accent"><DownloadSimple size={20} /><span><strong className="block text-sm text-ink-1">下载素材</strong><small className="text-ink-3">链接解析后进入素材库</small></span></Link>

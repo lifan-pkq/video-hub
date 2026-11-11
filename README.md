@@ -51,13 +51,14 @@ npm run dev
 
 抖音一键出片在「智能剪辑」页：选原片，可选写一句想留的内容，点「生成抖音短视频」。进度按转写、选段、渲染、成片显示。没配文本模型时，选段改用口播密度，不会因为缺少 Key 整单失败；Key 无效或接口报错仍会失败，并在页面上写出原因。失败或取消后可以按同一条原片再试一次，任务中心里的下载和抖音成片也能重试。完成后点开 9:16 卡片，在手机画幅里预览，下载视频、封面和文案。不会自动发布。
 
-要用一条带人声的短片把转写、选段、渲染和封面打包走通：
+中文口播走查在 `backend/tests/fixtures/zh_talk.mp3`（edge-tts 晓晓合成的四句中文，已放进仓库）。espeak-ng 的中文声线 Whisper 听不懂，所以不用它。日常测试不跑这条，需要时：
 
 ```bash
-sudo apt-get install -y espeak-ng ffmpeg
 cd backend
 VIDEO_HUB_AUTH_MODE=off VIDEO_HUB_RUN_E2E=1 VIDEO_HUB_WHISPER_MODEL=tiny PYTHONPATH=.. .venv/bin/python -m unittest tests.test_douyin_speech_e2e -v
 ```
+
+它会核对转写里有「今天 / 结论 / 原因 / 最后」，字幕稿含「结论」，并导出横屏、竖屏、方形和带汉字的封面。`tests.test_main_workflows` 在普通测试里跑：yt-dlp 下载本机短片、本地上传、漫剧规划后取消、ffmpeg 分段录制。
 
 转写不另起服务。`VIDEO_HUB_ASR_URL` 留空时，后端在这次任务里加载 faster-whisper，超过 300 秒会先抽音频再分段，避免整段波形进内存。取消成片任务时，抽音频的 ffmpeg 会一起停掉。失败或取消后，成片页可以按同一条原片再试一次。
 

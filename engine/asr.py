@@ -83,7 +83,7 @@ def _transcribe_remote(audio: Path, url: str, timeout: float = 900) -> dict:
         raise EngineError(
             f"共享 ASR 无响应：{exc}",
             code="asr_http",
-            action=f"检查 VIDEO_HUB_ASR_URL={url} 是否就是转写接口，服务是否在 8600。",
+            action=f"检查 VIDEO_HUB_ASR_URL={url} 是否就是转写接口，以及那台服务是否在线。留空则改用本机 faster-whisper。",
             status=502,
         ) from exc
     if response.status_code >= 400:

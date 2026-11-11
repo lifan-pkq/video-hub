@@ -5,6 +5,7 @@ import {
   cancelJob,
   errorMessage,
   fetchJob,
+  retryDouyinProduce,
   fetchVideos,
   saveDouyinToLibrary,
   type DouyinShort,
@@ -69,6 +70,17 @@ export default function DouyinProducePage() {
     try {
       setJob(await cancelJob(job.id))
       toast.success('已请求取消')
+    } catch (cause) {
+      toast.error(errorMessage(cause))
+    }
+  }
+
+  async function retry() {
+    if (!job || running) return
+    try {
+      const next = await retryDouyinProduce(job.id)
+      toast.success('已按同样的原片和提示重新生成')
+      navigate(`/edit/douyin/${encodeURIComponent(next.id)}`)
     } catch (cause) {
       toast.error(errorMessage(cause))
     }
@@ -158,7 +170,15 @@ export default function DouyinProducePage() {
       )}
 
       {job && running && <p className="studio-now" aria-live="polite">{job.label || '正在处理'}</p>}
+      {job && !running && (job.status === 'failed' || job.status === 'cancelled') && (job.logs || []).length > 0 && (
+        <ul className="studio-fine">
+          {(job.logs || []).slice(-4).map((line) => <li key={line}>{line}</li>)}
+        </ul>
+      )}
       {job && running && <button type="button" className="studio-quiet studio-cancel" onClick={() => void cancel()}>取消这次生成</button>}
+      {job && !running && (job.status === 'failed' || job.status === 'cancelled') && (
+        <button type="button" className="studio-cta" onClick={() => void retry()}>用同样的原片再试一次</button>
+      )}
 
       {job?.error?.message && (
         <p className={shorts.length ? 'studio-fine' : 'studio-error'}>

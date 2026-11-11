@@ -51,7 +51,7 @@ npm run dev
 
 抖音一键出片在「智能剪辑」页：选原片，可选写一句想留的内容，点「生成抖音短视频」。进度按转写、选段、渲染、成片显示。完成后点开 9:16 卡片，在手机画幅里预览，下载视频、封面和文案。不会自动发布。
 
-转写不另起服务。`VIDEO_HUB_ASR_URL` 留空时，后端在这次任务里加载 faster-whisper，超过 300 秒会先抽音频再分段，避免整段波形进内存。旧的共享 ASR（8600）、解说引擎（8601）、字幕预览（8502）和 `edit-narrate` 旁路都不再启动。
+转写不另起服务。`VIDEO_HUB_ASR_URL` 留空时，后端在这次任务里加载 faster-whisper，超过 300 秒会先抽音频再分段，避免整段波形进内存。取消成片任务时，抽音频的 ffmpeg 会一起停掉。失败或取消后，成片页可以按同一条原片再试一次。
 
 ## 主要配置
 
@@ -109,18 +109,22 @@ cd backend
 
 默认部署到 `root@39.105.112.189:/opt/video-hub`，可用 `SERVER_USER`、`SERVER_IP` 覆盖。脚本运行测试和前端构建，再同步代码、安装依赖、执行迁移、只启动 `video-hub-backend`，并停用 `narrato-engine`、`narrato-preview`、`narrato-asr`、`video-hub-edit-narrate`。Nginx 只反代 `/api/`。
 
-同步排除 `.env`、数据库、媒体和模型。配置备份在 `/opt/video-hub-backups/<时间戳>`。这些目录里的旧媒体不会删除。
+同步排除 `.env`、数据库、媒体、模型和整个 `narratoai/` 目录，避免 `--delete` 清掉服务器上还留着的旧成片。配置备份在 `/opt/video-hub-backups/<时间戳>`。这些目录里的旧媒体不会删除。迁移脚本仍读取 `narratoai/storage/tasks`（或 `VIDEO_HUB_NARRATO_TASKS_DIR`）。
 
-Docker Compose 只有 `backend` 和 `web`。生产机用的是 systemd，不是 Compose。
+Docker Compose 只有 `backend` 和 `web`。镜像里带上 `engine/` 和后端。生产机用的是 systemd，不是 Compose。封面与导出在后端进程内完成，不再调用独立的 Narrato 解释器。
 
 若 `/opt/video-hub/.env` 里还有 `VIDEO_HUB_ASR_URL=http://127.0.0.1:8600/...`，部署脚本会删掉这一行，否则后端还会去连已经停掉的 ASR。指向其他主机的 `VIDEO_HUB_ASR_URL` 会保留。内存紧时可以在 `.env` 加 `VIDEO_HUB_DOUYIN_WIDTH=720` 和 `VIDEO_HUB_DOUYIN_HEIGHT=1280`，不必改仓库默认值。
 
 ## 已移除的旧链路
 
-- 常驻解说引擎（8601）、共享 ASR（8600）、字幕预览（8502），以及 `edit-narrate` 旁路（8765）。转写改到后端进程内按需执行。
-- 工作台里的「AI 解说」入口。旧地址 `/narrate` 会回到智能剪辑。
+仓库里不再包含这些目录和入口。服务器上已有的 `narratoai/storage` 仍由部署脚本原样保留，只给迁移脚本读，不会再启动。
+
+- `narratoai/` 源码、`edit-narrate/` 旁路、`browser-use-demo/`、`services/asr`、`services/subtitle-preview`。
+- 常驻解说引擎（8601）、共享 ASR（8600）、字幕预览（8502）。转写改到后端进程内按需执行。`/api/narrate` 不再提供。
+- 工作台里的「AI 解说」入口。旧地址 `/narrate` 和 `/narrato` 会回到智能剪辑。
 - 旧 Streamlit 与 `legacy-tasks` 页面/API。
 - 浏览器自动发布、扫码登录、短信验证码和平台账号页；发布替换为“封面与导出”。
 - 主播监控自动开录；保留手动录制。
 - 作者主页抓取；替换为只存链接和笔记的灵感库。
 - 抖音/快手手写 HTML 下载器；下载只保留 yt-dlp 与本地上传。
+- 解说用人声（edge-tts）。当前成片直接用原片口播，不再合成旁白。

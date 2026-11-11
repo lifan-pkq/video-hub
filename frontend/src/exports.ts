@@ -7,6 +7,8 @@ export interface ExportManifest {
   /** running/failed 记录只有状态字段；success 才带完整清单。 */
   status?: ExportStatus
   error?: string
+  progress?: number
+  label?: string
   without_subtitles_note?: string
   title: string
   complete: boolean

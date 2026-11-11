@@ -15,7 +15,9 @@ COPY backend/requirements.txt /tmp/requirements.txt
 RUN python -m venv /opt/venv \
     && /opt/venv/bin/pip install --no-cache-dir -r /tmp/requirements.txt
 
+COPY engine /app/engine
 COPY backend /app/backend
+ENV PYTHONPATH=/app
 WORKDIR /app/backend
 
 EXPOSE 8000

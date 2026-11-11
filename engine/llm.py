@@ -136,14 +136,14 @@ def complete_json(
             raise EngineError(
                 "没有配置文本模型",
                 code="llm_unconfigured",
-                action="设置 VIDEO_HUB_AI_BASE_URL、VIDEO_HUB_AI_API_KEYS、VIDEO_HUB_AI_MODEL 后重试。剪辑可以继续用信号建议；解说可以改用逐句骨架。",
+                action="设置 VIDEO_HUB_AI_BASE_URL、VIDEO_HUB_AI_API_KEYS、VIDEO_HUB_AI_MODEL 后重试。剪辑可以继续用信号建议。",
                 status=409,
             )
     if not base or not name:
         raise EngineError(
             "没有配置文本模型",
             code="llm_unconfigured",
-            action="设置 VIDEO_HUB_AI_BASE_URL、VIDEO_HUB_AI_API_KEYS、VIDEO_HUB_AI_MODEL 后重试。剪辑可以继续用信号建议；解说可以改用逐句骨架。",
+            action="设置 VIDEO_HUB_AI_BASE_URL、VIDEO_HUB_AI_API_KEYS、VIDEO_HUB_AI_MODEL 后重试。剪辑可以继续用信号建议。",
             status=409,
         )
     url = base if base.endswith("/chat/completions") else base + "/chat/completions"

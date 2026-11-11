@@ -217,7 +217,6 @@ export interface HealthReport {
   llm: boolean
   vision: boolean
   asr: string
-  tts: Array<{ id: string; available: boolean; detail: string }>
 }
 
 export async function fetchHealth(): Promise<HealthReport> {
@@ -415,22 +414,6 @@ export async function fetchVideos(): Promise<Video[]> {
   return data
 }
 
-export interface VideoUnderstanding {
-  video_id: number
-  duration: number
-  tracks: {
-    speech: Array<{ start: number; end: number; text: string; speaker?: string }>
-    visual: Array<{ start: number; end: number; text: string; subject_box?: { x: number; y: number; width: number; height: number } }>
-    audio: Array<{ start: number; end: number; kind: 'silence' | 'beat' }>
-  }
-  emotion_curve?: Array<{ timestamp: number; score: number; label?: string }>
-}
-
-export async function fetchUnderstanding(videoId: number): Promise<VideoUnderstanding> {
-  const { data } = await http.get<VideoUnderstanding>(`/understanding/${videoId}`, { timeout: 30000 })
-  return data
-}
-
 export async function uploadVideo(
   file: File,
   title: string | undefined,
@@ -569,64 +552,6 @@ export interface TranscriptSegment {
   text: string
 }
 
-export interface NarrateFrame {
-  time: number
-  image: string
-  caption: string
-  caption_error: string
-  brightness: number | null
-}
-
-export interface NarrateBeat {
-  id: string
-  start: number
-  end: number
-  narration: string
-  purpose: 'hook' | 'explain' | 'evidence' | 'turn' | 'close'
-  pause?: boolean
-  speed?: number
-  freeze?: number
-  insert_kind?: 'none' | 'image' | 'video'
-  insert_mode?: 'overlay' | 'fullscreen'
-  image_id?: number
-  image_name?: string
-  video_id?: number
-  video_name?: string
-}
-
-export interface NarrateVoice {
-  engine: 'auto' | 'edge' | 'openai' | 'espeak' | 'tone'
-  voice: string
-  rate: number
-  original_volume: number
-  subtitles: boolean
-  font_size: number
-  margin_v: number
-}
-
-export interface SignalNarrateTask {
-  id: string
-  video_id: number
-  title: string
-  duration: number
-  width: number
-  height: number
-  transcript: { source: string; warning: string; segments: TranscriptSegment[]; error?: TaskError }
-  frames: NarrateFrame[]
-  script: { beats: NarrateBeat[]; warnings: string[]; mode?: string; instruction?: string; tone?: string; target_duration?: number } | null
-  voice: NarrateVoice
-  output: { file: string; duration: number; tts_engine: string; warnings: string[]; video_id?: number } | null
-  warnings?: string[]
-  step: string
-  instruction?: string
-  tone?: string
-}
-
-export interface NarrateEngines {
-  engines: { id: string; available: boolean; detail: string }[]
-  voices: { engine: string; id: string; label: string }[]
-}
-
 export async function fetchJob(id: string): Promise<EditJob> {
   try {
     const { data } = await http.get<EditJob>(`/jobs/${id}`)
@@ -660,6 +585,15 @@ export async function startDouyinProduce(
       max_clips: maxClips,
       layout,
     }, { timeout: 0 })
+    return data
+  } catch (error) {
+    raiseApi(error)
+  }
+}
+
+export async function retryDouyinProduce(jobId: string): Promise<EditJob> {
+  try {
+    const { data } = await http.post<EditJob>(`/edit/douyin/${encodeURIComponent(jobId)}/retry`, {}, { timeout: 0 })
     return data
   } catch (error) {
     raiseApi(error)
@@ -745,115 +679,6 @@ export async function highlightEdit(
 export async function exportEdit(title: string, clips: EditClip[]): Promise<EditJob> {
   try {
     const { data } = await http.post<EditJob>('/edit/export', { title, clips }, { timeout: 0 })
-    return data
-  } catch (error) {
-    raiseApi(error)
-  }
-}
-
-export async function fetchNarrateVoices(): Promise<NarrateEngines> {
-  try {
-    const { data } = await http.get<NarrateEngines>('/narrate/voices')
-    return data
-  } catch (error) {
-    raiseApi(error)
-  }
-}
-
-export async function fetchSignalNarrateTasks(limit = 20): Promise<SignalNarrateTask[]> {
-  try {
-    const { data } = await http.get<SignalNarrateTask[]>('/narrate/tasks', { params: { limit } })
-    return data
-  } catch (error) {
-    raiseApi(error)
-  }
-}
-
-export async function fetchSignalNarrateTask(taskId: string): Promise<SignalNarrateTask> {
-  try {
-    const { data } = await http.get<SignalNarrateTask>(`/narrate/tasks/${taskId}`)
-    return data
-  } catch (error) {
-    raiseApi(error)
-  }
-}
-
-export async function startNarrateUnderstand(
-  videoId: number,
-  opts?: { instruction?: string; tone?: string; framesPerSecond?: number },
-): Promise<{ job: EditJob; task: SignalNarrateTask | null }> {
-  try {
-    const { data } = await http.post(
-      '/narrate/tasks',
-      {
-        video_id: videoId,
-        frames_per_second: opts?.framesPerSecond ?? 2,
-        instruction: opts?.instruction || '',
-        tone: opts?.tone || '',
-      },
-      { timeout: 0 },
-    )
-    return data
-  } catch (error) {
-    raiseApi(error)
-  }
-}
-
-export async function saveNarrateTranscript(taskId: string, segments: TranscriptSegment[]): Promise<SignalNarrateTask> {
-  try {
-    const { data } = await http.put<SignalNarrateTask>(`/narrate/tasks/${taskId}/transcript`, { segments })
-    return data
-  } catch (error) {
-    raiseApi(error)
-  }
-}
-
-export async function draftNarrateScript(
-  taskId: string,
-  body: { mode: 'llm' | 'skeleton' | 'manual'; instruction: string; tone: string; target_duration: number },
-): Promise<{ job: EditJob; task: SignalNarrateTask | null }> {
-  try {
-    const { data } = await http.post(`/narrate/tasks/${taskId}/script`, body, { timeout: 0 })
-    return data
-  } catch (error) {
-    raiseApi(error)
-  }
-}
-
-export async function saveNarrateScript(taskId: string, beats: NarrateBeat[], voice: NarrateVoice): Promise<SignalNarrateTask> {
-  try {
-    const { data } = await http.put<SignalNarrateTask>(`/narrate/tasks/${taskId}/script`, { beats, voice })
-    return data
-  } catch (error) {
-    raiseApi(error)
-  }
-}
-
-export async function renderNarrate(taskId: string): Promise<{ job: EditJob; task: SignalNarrateTask | null }> {
-  try {
-    const { data } = await http.post(`/narrate/tasks/${taskId}/render`, {}, { timeout: 0 })
-    return data
-  } catch (error) {
-    raiseApi(error)
-  }
-}
-
-export async function importNarrateOutput(taskId: string): Promise<{ video: Video; task: SignalNarrateTask }> {
-  try {
-    const { data } = await http.post(`/narrate/tasks/${taskId}/import`)
-    return data
-  } catch (error) {
-    raiseApi(error)
-  }
-}
-
-export async function previewNarrateVoice(text: string, voice: NarrateVoice): Promise<Blob> {
-  try {
-    const { data } = await http.post<Blob>(
-      '/narrate/tts-preview',
-      { text, engine: voice.engine, voice: voice.voice, rate: voice.rate },
-      { responseType: 'blob', timeout: 60000 },
-    )
     return data
   } catch (error) {
     raiseApi(error)

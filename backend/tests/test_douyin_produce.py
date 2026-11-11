@@ -502,6 +502,45 @@ class DouyinRouteTests(unittest.TestCase):
         self.assertEqual(podcast.json()["input"]["layout"], "podcast")
         self.assertEqual(podcast.json()["result"]["layout"], "podcast")
 
+    def test_retry_reuses_input_and_refuses_a_running_job(self):
+        from app.jobs import update
+
+        def run(job_id, video_id, instruction, max_clips, layout="interview"):
+            update(job_id, status="failed", stage="failed", label="失败", error={"message": "转写失败"})
+
+        with patch("app.routers.edit.fetch", return_value={"id": 3, "title": "原片"}), \
+                patch("app.routers.edit.produce_douyin", side_effect=run):
+            created = self.client.post("/api/edit/douyin", json={
+                "video_id": 3, "instruction": "留开头", "layout": "podcast", "max_clips": 2,
+            })
+        self.assertEqual(created.status_code, 200, created.text)
+        failed = created.json()
+        self.assertEqual(failed["status"], "failed")
+
+        def succeed(job_id, video_id, instruction, max_clips, layout="interview"):
+            update(
+                job_id, status="success", progress=100, stage="done", label="完成",
+                result={"video_id": video_id, "layout": layout, "shorts": [], "pack_url": ""},
+            )
+
+        with patch("app.routers.edit.fetch", return_value={"id": 3, "title": "原片"}), \
+                patch("app.routers.edit.produce_douyin", side_effect=succeed):
+            retried = self.client.post(f"/api/edit/douyin/{failed['id']}/retry")
+        self.assertEqual(retried.status_code, 200, retried.text)
+        body = retried.json()
+        self.assertNotEqual(body["id"], failed["id"])
+        self.assertEqual(body["input"]["video_id"], 3)
+        self.assertEqual(body["input"]["instruction"], "留开头")
+        self.assertEqual(body["input"]["layout"], "podcast")
+        self.assertEqual(body["input"]["retry_of"], failed["id"])
+        self.assertEqual(body["status"], "success")
+
+        from app.jobs import create
+        running = create("edit.douyin", "进行中", {"video_id": 3, "instruction": "", "max_clips": 0, "layout": "interview"})
+        update(running["id"], status="running")
+        again = self.client.post(f"/api/edit/douyin/{running['id']}/retry")
+        self.assertEqual(again.status_code, 409)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,3 +1,4 @@
+"""确认旧解说链路已经从主应用拆掉，健康检查仍然可用。"""
 import unittest
 from pathlib import Path
 
@@ -5,30 +6,32 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 
 
-class VendorBoundaryTests(unittest.TestCase):
-    def test_expected_service_sources_exist(self):
+class RemovedLegacyTests(unittest.TestCase):
+    def test_legacy_trees_are_gone(self):
         for relative in (
-            "engine/render.py",
-            "engine/signals.py",
-            "engine/scripting.py",
-            "engine/tts.py",
-            "engine/asr.py",
-            "backend/app/services/narrate_flow.py",
-            "backend/app/services/edit_flow.py",
-            "backend/app/services/narration.py",
+            "narratoai",
+            "edit-narrate",
+            "browser-use-demo",
+            "services/asr",
+            "services/subtitle-preview",
             "backend/app/routers/narrate.py",
-            "backend/app/routers/edit.py",
-            "backend/app/jobs.py",
+            "backend/app/services/narrate_flow.py",
+            "backend/app/services/narration.py",
+            "backend/app/services/douyin_fallback.py",
+            "engine/tts.py",
+            "engine/render.py",
+            "engine/server.py",
         ):
-            self.assertTrue((ROOT / relative).is_file(), relative)
-        router = (ROOT / "backend/app/routers/narrate.py").read_text()
-        self.assertNotIn("NARRATO_ENGINE_URL", router)
-        self.assertIn("engine.render", (ROOT / "backend/app/services/narrate_flow.py").read_text())
+            self.assertFalse((ROOT / relative).exists(), relative)
 
-    def test_runtime_configuration_is_ignored(self):
-        ignored = (ROOT / ".gitignore").read_text()
-        for pattern in ("narratoai/config.toml", "narratoai/storage/", "services/.venv/"):
-            self.assertIn(pattern, ignored)
+    def test_export_runs_in_process(self):
+        exporter = (ROOT / "backend/app/services/exporter.py").read_text()
+        self.assertIn("export_bundle", exporter)
+        self.assertNotIn("NARRATOAI_ROOT", exporter)
+        self.assertNotIn("engine.export_task", exporter)
+        self.assertTrue((ROOT / "backend/app/services/export_bundle.py").is_file())
+        self.assertTrue((ROOT / "backend/assets/fonts/DroidSansFallbackFull.ttf").is_file())
+
     def test_main_module_imports_and_health_is_callable(self):
         from app.main import health
 
@@ -36,9 +39,8 @@ class VendorBoundaryTests(unittest.TestCase):
         self.assertEqual(body["status"], "ok")
         self.assertIn("ffmpeg", body)
         self.assertIn("llm", body)
+        self.assertNotIn("tts", body)
 
-
-class FrontendIntegrationTests(unittest.TestCase):
     def test_narrate_surface_is_not_in_the_workbench(self):
         app = (ROOT / "frontend/src/App.tsx").read_text()
         nav = (ROOT / "frontend/src/nav.ts").read_text()
@@ -47,21 +49,9 @@ class FrontendIntegrationTests(unittest.TestCase):
         self.assertIn('Navigate to="/edit"', app)
         self.assertNotIn("NarratePage", app)
         self.assertNotIn("/narrate", nav)
-        self.assertNotIn("AI 解说", nav)
+        self.assertNotIn("fetchNarrateVoices", api)
+        self.assertIn("retryDouyinProduce", api)
         self.assertIn("智能剪辑", nav)
-        self.assertIn("历史解说", api)
-        self.assertIn("analyzeEdit", api)
-        self.assertFalse((ROOT / "frontend/src/pages/NarratePage.tsx").exists())
-        card = (ROOT / "frontend/src/components/VideoCard.tsx").read_text()
-        self.assertNotIn("onNarrate", card)
-        self.assertNotIn("AI 解说", card)
-
-    def test_backend_owns_narration_tasks(self):
-        schema = (ROOT / "backend/app/db.py").read_text()
-        service = (ROOT / "backend/app/services/narration.py").read_text()
-        self.assertIn("narration_tasks", schema)
-        self.assertIn("narrato_import.import_task", service)
-        self.assertIn("NARRATO_TASKS_DIR", service)
 
 
 if __name__ == "__main__":

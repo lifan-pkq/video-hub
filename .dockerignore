@@ -9,13 +9,7 @@ data
 **/*.key
 **/.DS_Store
 deploy
-narratoai/.venv
-narratoai/config.toml*
-narratoai/storage
-narratoai/.cache
-narratoai/resource/scripts
-narratoai/resource/videos
-services/.venv
+narratoai/
 /models
 *.md
 frontend

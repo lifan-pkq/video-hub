@@ -37,7 +37,8 @@ fi
 DLR_DIR="${VIDEO_HUB_DLR_DIR:-/opt/DouyinLiveRecorder}" bash "$REMOTE_DIR/deploy/install-dlr.sh"
 
 mkdir -p "$REMOTE_DIR"/{data,models}
-# 保留已有 Narrato 媒体和配置，不删除。不再为它建虚拟环境，也不再启动引擎。
+# 源码不再包含 narratoai/。这里只在服务器还没有旧目录时，从 /opt/NarratoAI 拷一份媒体，
+# 供 migrate_legacy.py 读取。不建虚拟环境，也不启动旧引擎。
 mkdir -p "$REMOTE_DIR/narratoai"
 if [ ! -f "$REMOTE_DIR/narratoai/config.toml" ] && [ -f /opt/NarratoAI/config.toml ]; then
   cp -a /opt/NarratoAI/config.toml "$REMOTE_DIR/narratoai/config.toml"

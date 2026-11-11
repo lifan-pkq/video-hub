@@ -59,20 +59,29 @@ class ExportServiceTests(unittest.TestCase):
         self.addCleanup(item.stop)
 
     def _fake_run(self, calls, *, returncode=0, stderr="", write_manifest=True, gate=None):
-        def fake(command, **kwargs):
-            calls.append(command)
+        def fake(source, work_dir, title, task_dir, subject_track, on_progress=None):
+            calls.append({
+                "source": source,
+                "work_dir": work_dir,
+                "title": title,
+                "task_dir": task_dir,
+                "subject_track": subject_track,
+            })
             if gate is not None:
                 gate.wait(10)
-            work_dir = Path(command[command.index("--work-dir") + 1])
+            if returncode:
+                raise RuntimeError(stderr or "导出失败")
+            if on_progress:
+                on_progress(40, "生成画幅")
             if write_manifest:
-                (work_dir / "manifest.json").write_text(json.dumps(_manifest()), encoding="utf-8")
-            return exporter.subprocess.CompletedProcess(command, returncode, "", stderr)
+                return _manifest()
+            return {}
         return fake
 
     def test_create_returns_running_before_slow_export_finishes(self):
         gate = threading.Event()
         calls = []
-        with patch.object(exporter.subprocess, "run", side_effect=self._fake_run(calls, gate=gate)):
+        with patch.object(exporter, "run_bundle", side_effect=self._fake_run(calls, gate=gate)):
             record = exporter.create_export(7)
             self.assertEqual(record["status"], "running")
             self.assertTrue(record["export_id"])
@@ -91,7 +100,7 @@ class ExportServiceTests(unittest.TestCase):
     def test_repeat_create_reuses_running_export_and_spawns_one_subprocess(self):
         gate = threading.Event()
         calls = []
-        with patch.object(exporter.subprocess, "run", side_effect=self._fake_run(calls, gate=gate)):
+        with patch.object(exporter, "run_bundle", side_effect=self._fake_run(calls, gate=gate)):
             first = exporter.create_export(7)
             second = exporter.create_export(7)
             self.assertEqual(first["export_id"], second["export_id"])
@@ -99,17 +108,15 @@ class ExportServiceTests(unittest.TestCase):
             self._wait(lambda: len(calls) >= 1)
             self.assertEqual(len(calls), 1)
             gate.set()
-            for _ in range(100):
-                if not exporter._running:
-                    break
-                threading.Event().wait(0.05)
+            self._wait(lambda: not exporter._running)
             third = exporter.create_export(7)
+            self._wait(lambda: not exporter._running)
         self.assertNotEqual(third["export_id"], first["export_id"])
         self.assertEqual(len(calls), 2)
 
     def test_failed_export_reports_reason(self):
         calls = []
-        with patch.object(exporter.subprocess, "run",
+        with patch.object(exporter, "run_bundle",
                           side_effect=self._fake_run(calls, returncode=1, stderr="ffmpeg 挂了", write_manifest=False)):
             record = exporter.create_export(7)
             for _ in range(100):
@@ -122,16 +129,16 @@ class ExportServiceTests(unittest.TestCase):
 
     def test_subject_track_passed_only_when_understanding_exists(self):
         calls = []
-        with patch.object(exporter.subprocess, "run", side_effect=self._fake_run(calls)):
+        with patch.object(exporter, "run_bundle", side_effect=self._fake_run(calls)):
             exporter.create_export(7)
             self._wait(lambda: not exporter._running)
-            self.assertNotIn("--subject-track", calls[0])
+            self.assertIsNone(calls[0]["subject_track"])
             track = exporter.UNDERSTANDING_DIR / "7.json"
             track.parent.mkdir(parents=True, exist_ok=True)
             track.write_text(json.dumps({"tracks": {"visual": [{"timestamp": 1, "subject_box": {}}]}}), encoding="utf-8")
             exporter.create_export(7)
             self._wait(lambda: len(calls) >= 2)
-        self.assertEqual(calls[1][calls[1].index("--subject-track") + 1], str(track))
+        self.assertEqual(calls[1]["subject_track"], track)
 
     def test_get_export_reconciles_stale_running_after_restart(self):
         export_id = uuid.uuid4().hex[:16]
@@ -170,9 +177,11 @@ class ExportRouterTests(unittest.TestCase):
         (self.root / "videos" / "clip.mp4").write_bytes(b"video")
         for name, value in (("EXPORTS_DIR", self.root / "exports"),
                             ("UNDERSTANDING_DIR", self.root / "understanding"),
-                            ("VIDEOS_DIR", self.root / "videos")):
-            patch.object(exporter, name, value, create=True).start()
-        patch.object(exporter, "_running", {}, create=True).start()
+                            ("VIDEOS_DIR", self.root / "videos"),
+                            ("_running", {})):
+            patcher = patch.object(exporter, name, value, create=True)
+            patcher.start()
+            self.addCleanup(patcher.stop)
         item = patch.object(exporter, "get_video", return_value={
             "id": 7, "filename": "clip.mp4", "title": "测试成片", "source_url": ""})
         item.start()
@@ -183,14 +192,12 @@ class ExportRouterTests(unittest.TestCase):
         gate = threading.Event()
         calls = []
 
-        def fake(command, **kwargs):
-            calls.append(command)
+        def fake(source, work_dir, title, task_dir, subject_track, on_progress=None):
+            calls.append(work_dir)
             gate.wait(10)
-            work_dir = Path(command[command.index("--work-dir") + 1])
-            (work_dir / "manifest.json").write_text(json.dumps(_manifest()), encoding="utf-8")
-            return exporter.subprocess.CompletedProcess(command, 0, "", "")
+            return _manifest()
 
-        with patch.object(exporter.subprocess, "run", side_effect=fake):
+        with patch.object(exporter, "run_bundle", side_effect=fake):
             response = self.client.post("/api/exports", json={"video_id": 7})
             self.assertEqual(response.status_code, 200)
             body = response.json()
@@ -217,10 +224,10 @@ class ExportRouterTests(unittest.TestCase):
         self.assertEqual(done["download_url"], f"/api/exports/{body['export_id']}/download")
 
     def test_get_reports_failure_with_reason(self):
-        def fake(command, **kwargs):
-            return exporter.subprocess.CompletedProcess(command, 2, "", "导出进程爆炸了")
+        def fake(source, work_dir, title, task_dir, subject_track, on_progress=None):
+            raise RuntimeError("导出进程爆炸了")
 
-        with patch.object(exporter.subprocess, "run", side_effect=fake):
+        with patch.object(exporter, "run_bundle", side_effect=fake):
             export_id = self.client.post("/api/exports", json={"video_id": 7}).json()["export_id"]
             for _ in range(100):
                 poll = self.client.get(f"/api/exports/{export_id}")

@@ -7,7 +7,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from engine.schemas import Suggestion
-from app.jobs import create, submit
+from app.jobs import create, get, submit
 from app.services.douyin_flow import download_name, pack_file, produce_douyin, send_to_library, short_file
 from app.services.edit_flow import analyze_videos, build_highlight, export_clips, plan_suggestions
 from app.services.videos import fetch
@@ -141,6 +141,52 @@ def douyin_pack(job_id: str):
 @router.post("/douyin/{job_id}/library")
 def douyin_library(job_id: str, body: DouyinLibraryBody):
     return send_to_library(job_id, body.indexes)
+
+
+@router.post("/douyin/{job_id}/retry")
+def douyin_retry(job_id: str):
+    """用失败或已取消任务里记下的原片和提示，再开一条成片任务。"""
+    from engine.errors import EngineError
+
+    previous = get(job_id)
+    if previous.get("kind") != "edit.douyin":
+        raise EngineError("这不是抖音成片任务", code="job", status=404)
+    if previous.get("status") in {"pending", "running"}:
+        raise EngineError(
+            "这条还在生成",
+            code="busy",
+            action="等它结束，或先取消，再重试。",
+            status=409,
+        )
+    payload = previous.get("input") if isinstance(previous.get("input"), dict) else {}
+    try:
+        video_id = int(payload.get("video_id") or 0)
+    except (TypeError, ValueError):
+        video_id = 0
+    if video_id <= 0:
+        raise EngineError("原任务没有原片编号，无法重试", code="input", action="回到智能剪辑重新选一条原片。", status=400)
+    fetch(video_id)
+    instruction = str(payload.get("instruction") or "").strip()[:400]
+    try:
+        max_clips = int(payload.get("max_clips") or 0)
+    except (TypeError, ValueError):
+        max_clips = 0
+    layout = payload.get("layout") if payload.get("layout") in {"interview", "podcast"} else "interview"
+    job = create(
+        "edit.douyin",
+        "抖音成片",
+        {
+            "video_id": video_id,
+            "instruction": instruction,
+            "max_clips": max_clips,
+            "layout": layout,
+            "retry_of": previous["id"],
+        },
+    )
+    return submit(
+        job,
+        lambda new_id: produce_douyin(new_id, video_id, instruction, max_clips, layout=layout),
+    )
 
 
 @router.post("/analyze")

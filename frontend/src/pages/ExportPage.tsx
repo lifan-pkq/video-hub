@@ -122,11 +122,14 @@ export default function ExportPage() {
       )}
       {running ? (
         <Panel className="mt-5">
-          <Alert type="info">导出任务已在服务端后台进行（ID {task?.export_id}），可以离开本页，回来时仍能查到结果。</Alert>
-          <div className="mt-4"><Progress percent={0.2} /></div>
+          <Alert type="info">导出已在后台进行{task?.label ? `：${task.label}` : ''}。可以离开本页，回来时仍能查到结果。</Alert>
+          <div className="mt-4"><Progress percent={Math.max(0.04, Math.min(0.98, (task?.progress || 8) / 100))} /></div>
         </Panel>
       ) : task?.status === 'failed' ? (
-        <Panel className="mt-5"><Alert type="error">导出失败：{task.error || '未知错误'}</Alert></Panel>
+        <Panel className="mt-5">
+          <Alert type="error">导出失败：{task.error || '未知错误'}</Alert>
+          <div className="mt-3"><Button size="sm" onClick={() => void create()}>再试一次</Button></div>
+        </Panel>
       ) : !manifest ? (
         videosReady && videos.length === 0 ? null : (
           <Panel className="mt-5"><EmptyState icon={<VideoCamera size={26} />} title="还没有导出套装" desc={videoId ? '点「生成整套成片」。完成后可以在这里选封面，并下载 ZIP。' : '先选择一条视频。生成完成后可以选封面并下载 ZIP。'} /></Panel>

@@ -42,6 +42,10 @@ class AIServiceError(RuntimeError):
     """AI 接口不可用或返回非成功状态。"""
 
 
+class TranscriptionCancelled(AIServiceError):
+    """用户在转写过程中取消了任务。"""
+
+
 class AIResponseError(RuntimeError):
     """AI 响应结构或 JSON 内容无法解析。"""
 
@@ -66,43 +70,64 @@ def _cache_path(video_path: Path) -> Path:
 _CHUNK_SECONDS = 300
 
 
-def _extract_audio(video_path: Path, audio_path: Path) -> None:
+def _stop_if_cancelled(should_cancel) -> None:
+    if callable(should_cancel) and should_cancel():
+        raise TranscriptionCancelled("任务已取消")
+
+
+def _ffmpeg_audio(args: list[str], *, timeout: int, job_id: str | None, should_cancel, fail: str) -> None:
+    """走 engine.media.ffmpeg，取消时能杀掉进程组，而不是干等 subprocess。"""
+    from engine.errors import EngineError
+    from engine.media import ffmpeg
+
+    try:
+        ffmpeg(args, timeout=timeout, job_id=job_id, should_cancel=should_cancel)
+    except EngineError as exc:
+        if exc.code == "cancelled":
+            raise TranscriptionCancelled("任务已取消") from exc
+        if exc.code == "timeout":
+            raise AIServiceError(f"{fail}超时（{timeout}s）") from exc
+        raise AIServiceError(f"{fail}：{exc.message}") from exc
+
+
+def _extract_audio(video_path: Path, audio_path: Path, *, job_id: str | None = None, should_cancel=None) -> None:
     """用 ffmpeg 把视频抽成 16k 单声道 64k mp3（不要 wav：98 分钟 wav 约 189MB）。"""
-    if not shutil.which("ffmpeg"):
-        raise AIServiceError("未找到 ffmpeg，无法抽取音频进行转写")
-    try:
-        result = subprocess.run(
-            ["ffmpeg", "-y", "-v", "error", "-i", str(video_path),
-             "-vn", "-ac", "1", "-ar", "16000", "-b:a", "64k", str(audio_path)],
-            capture_output=True, text=True, timeout=1800,
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise AIServiceError("抽取音频超时（1800s）") from exc
-    if result.returncode != 0 or not audio_path.exists() or audio_path.stat().st_size == 0:
-        raise AIServiceError(
-            "抽取音频失败："
-            + (result.stderr or "").strip()[-300:]
-        )
+    _stop_if_cancelled(should_cancel)
+    _ffmpeg_audio(
+        ["-i", str(video_path), "-vn", "-ac", "1", "-ar", "16000", "-b:a", "64k", str(audio_path)],
+        timeout=1800,
+        job_id=job_id,
+        should_cancel=should_cancel,
+        fail="抽取音频失败",
+    )
+    if not audio_path.exists() or audio_path.stat().st_size == 0:
+        raise AIServiceError("抽取音频失败：没有写出音频")
 
 
-def _cut_audio_segment(audio_path: Path, start: float, length: float, out_path: Path) -> None:
+def _cut_audio_segment(
+    audio_path: Path,
+    start: float,
+    length: float,
+    out_path: Path,
+    *,
+    job_id: str | None = None,
+    should_cancel=None,
+) -> None:
     """从已抽出的 mp3 里切出一段（重编码，保证切点可用）。"""
-    try:
-        result = subprocess.run(
-            ["ffmpeg", "-y", "-v", "error", "-ss", f"{start:.3f}", "-t", f"{length:.3f}",
-             "-i", str(audio_path), "-ac", "1", "-ar", "16000", "-b:a", "64k", str(out_path)],
-            capture_output=True, text=True, timeout=600,
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise AIServiceError(f"切分音频超时（{start:.0f}s 段）") from exc
-    if result.returncode != 0 or not out_path.exists() or out_path.stat().st_size == 0:
-        raise AIServiceError(
-            f"切分音频失败（{start:.0f}s 段）："
-            + (result.stderr or "").strip()[-300:]
-        )
+    _stop_if_cancelled(should_cancel)
+    _ffmpeg_audio(
+        ["-ss", f"{start:.3f}", "-t", f"{length:.3f}", "-i", str(audio_path),
+         "-ac", "1", "-ar", "16000", "-b:a", "64k", str(out_path)],
+        timeout=600,
+        job_id=job_id,
+        should_cancel=should_cancel,
+        fail=f"切分音频失败（{start:.0f}s 段）",
+    )
+    if not out_path.exists() or out_path.stat().st_size == 0:
+        raise AIServiceError(f"切分音频失败（{start:.0f}s 段）：没有写出音频")
 
 
-def _transcribe_shared(video_path: Path, log=print) -> list[dict]:
+def _transcribe_shared(video_path: Path, log=print, *, job_id: str | None = None, should_cancel=None) -> list[dict]:
     """共享 ASR 路径：抽音频 → 按 300s 分段 → 逐段转写 → 按段偏移拼接。
 
     临时文件全部放在 TMP_DIR 下的临时目录里，成功或失败都会由
@@ -116,7 +141,7 @@ def _transcribe_shared(video_path: Path, log=print) -> list[dict]:
     with tempfile.TemporaryDirectory(prefix=f"transcribe-{video_path.stem}-", dir=TMP_DIR) as tmp:
         tmpdir = Path(tmp)
         audio_path = tmpdir / "audio.mp3"
-        _extract_audio(video_path, audio_path)
+        _extract_audio(video_path, audio_path, job_id=job_id, should_cancel=should_cancel)
         duration = (
             probe_video(audio_path).get("duration")
             or probe_video(video_path).get("duration")
@@ -131,16 +156,20 @@ def _transcribe_shared(video_path: Path, log=print) -> list[dict]:
         log(f"音频已抽取（{duration:.0f}s），分 {total} 段转写，每段 {_CHUNK_SECONDS}s")
         out: list[dict] = []
         for index in range(total):
+            _stop_if_cancelled(should_cancel)
             start = index * _CHUNK_SECONDS
             length = min(_CHUNK_SECONDS, duration - start)
             seg_path = tmpdir / f"seg{index + 1}.mp3"
-            _cut_audio_segment(audio_path, start, length, seg_path)
+            _cut_audio_segment(audio_path, start, length, seg_path, job_id=job_id, should_cancel=should_cancel)
             segments = None
             last_exc = None
             for attempt in range(2):
+                _stop_if_cancelled(should_cancel)
                 try:
                     segments = transcribe_remote(seg_path, ASR_URL, log=log)
                     break
+                except TranscriptionCancelled:
+                    raise
                 except Exception as exc:  # noqa: BLE001 - 单段重试后统一包装上报
                     last_exc = exc
                     if attempt == 0:
@@ -148,7 +177,9 @@ def _transcribe_shared(video_path: Path, log=print) -> list[dict]:
                             f"第 {index + 1}/{total} 段转写失败，2 秒后重试："
                             f"{str(exc) or type(exc).__name__}"
                         )
-                        time.sleep(2)
+                        for _ in range(4):
+                            _stop_if_cancelled(should_cancel)
+                            time.sleep(0.5)
             if segments is None:
                 raise AIServiceError(
                     f"第 {index + 1}/{total} 段转写失败"
@@ -211,7 +242,9 @@ def _run_whisper(model, audio, offset: float):
         return _collect_whisper_segments(segments, offset), info
 
 
-def _transcribe_local_chunked(video_path: Path, model, duration: float, log) -> list[dict]:
+def _transcribe_local_chunked(
+    video_path: Path, model, duration: float, log, *, job_id: str | None = None, should_cancel=None,
+) -> list[dict]:
     """长音频按 300s 分段解码再转写，避免整段 float32 波形和模型同时占满内存。"""
     import tempfile
 
@@ -219,7 +252,7 @@ def _transcribe_local_chunked(video_path: Path, model, duration: float, log) -> 
     with tempfile.TemporaryDirectory(prefix=f"whisper-{video_path.stem}-", dir=TMP_DIR) as tmp:
         tmpdir = Path(tmp)
         audio_path = tmpdir / "audio.mp3"
-        _extract_audio(video_path, audio_path)
+        _extract_audio(video_path, audio_path, job_id=job_id, should_cancel=should_cancel)
         heard = float(probe_video(audio_path).get("duration") or duration or 0)
         if heard <= 0:
             heard = duration
@@ -228,10 +261,11 @@ def _transcribe_local_chunked(video_path: Path, model, duration: float, log) -> 
         out: list[dict] = []
         info = None
         for index in range(total):
+            _stop_if_cancelled(should_cancel)
             start = index * _CHUNK_SECONDS
             length = min(_CHUNK_SECONDS, max(0.1, heard - start))
             seg_path = tmpdir / f"seg{index + 1}.mp3"
-            _cut_audio_segment(audio_path, start, length, seg_path)
+            _cut_audio_segment(audio_path, start, length, seg_path, job_id=job_id, should_cancel=should_cancel)
             audio = _decode_audio_array(seg_path)
             try:
                 part, info = _run_whisper(model, audio, start)
@@ -249,7 +283,7 @@ def _transcribe_local_chunked(video_path: Path, model, duration: float, log) -> 
         return out
 
 
-def _transcribe_local(video_path: Path, log=print) -> list[dict]:
+def _transcribe_local(video_path: Path, log=print, *, job_id: str | None = None, should_cancel=None) -> list[dict]:
     """本地 whisper 路径：优先传解码后的 numpy 数组，避开 av bug。长文件走分段。"""
     model = _get_model()
     if not shutil.which("ffmpeg"):
@@ -265,7 +299,9 @@ def _transcribe_local(video_path: Path, log=print) -> list[dict]:
         return out
     duration = float(probe_video(video_path).get("duration") or 0)
     if duration > _CHUNK_SECONDS:
-        return _transcribe_local_chunked(video_path, model, duration, log)
+        return _transcribe_local_chunked(
+            video_path, model, duration, log, job_id=job_id, should_cancel=should_cancel,
+        )
     audio = _decode_audio_array(video_path)
     try:
         out, info = _run_whisper(model, audio, 0.0)
@@ -275,8 +311,9 @@ def _transcribe_local(video_path: Path, log=print) -> list[dict]:
     return out
 
 
-def transcribe(video_path: Path, log=print) -> list[dict]:
+def transcribe(video_path: Path, log=print, *, job_id: str | None = None, should_cancel=None) -> list[dict]:
     """语音转写，返回 [{start, end, text}]（秒）。结果按 文件名+大小 缓存。"""
+    _stop_if_cancelled(should_cancel)
     cache = _cache_path(video_path)
     if cache.exists():
         try:
@@ -287,9 +324,9 @@ def transcribe(video_path: Path, log=print) -> list[dict]:
         except Exception:
             pass
     if ASR_URL:
-        out = _transcribe_shared(video_path, log=log)
+        out = _transcribe_shared(video_path, log=log, job_id=job_id, should_cancel=should_cancel)
     else:
-        out = _transcribe_local(video_path, log=log)
+        out = _transcribe_local(video_path, log=log, job_id=job_id, should_cancel=should_cancel)
     try:
         cache.parent.mkdir(parents=True, exist_ok=True)
         cache.write_text(json.dumps({"size": video_path.stat().st_size, "segments": out}, ensure_ascii=False))

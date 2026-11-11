@@ -208,5 +208,13 @@ class LocalChunkedTranscriptionTests(unittest.TestCase):
         model.transcribe.assert_called_once()
 
 
+class TranscriptionCancelTests(unittest.TestCase):
+    def test_cancel_before_start_does_not_touch_the_file(self):
+        from app.services.ai_edit import TranscriptionCancelled, transcribe
+
+        with self.assertRaises(TranscriptionCancelled):
+            transcribe(Path("missing.mp4"), should_cancel=lambda: True)
+
+
 if __name__ == "__main__":
     unittest.main()

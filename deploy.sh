@@ -1,5 +1,6 @@
 #!/bin/bash
-# Video Hub + NarratoAI 统一部署；仅用 SSH 私钥（BatchMode，无密码交互）。
+# Video Hub 部署；仅用 SSH 私钥（BatchMode，无密码交互）。
+# rsync 排除整个 narratoai/，避免 --delete 清掉服务器上的旧成片目录。
 set -euo pipefail
 
 SERVER_USER="${SERVER_USER:-root}"
@@ -30,13 +31,8 @@ echo "=== [2/4] 同步代码（保留服务器运行数据） ==="
 rsync -az --delete -e "$RSYNC_SSH" \
   --exclude='.git' --exclude='node_modules' --exclude='data' \
   --exclude='.env' --exclude='.venv' --exclude='backend/.venv' \
-  --exclude='narratoai/.venv' --exclude='narratoai/.cache' \
-  --exclude='narratoai/config.toml*' --exclude='narratoai/storage' \
-  --exclude='narratoai/resource/videos' --exclude='narratoai/resource/scripts' \
-  --exclude='narratoai/resource/bgm' --exclude='narratoai/resource/songs' \
-  --exclude='narratoai/resource/srt' --exclude='narratoai/resource/fonts' \
-  --exclude='narratoai/resource/safe_areas' --exclude='narratoai/resource/tts_reference_audio' \
-  --exclude='services/.venv' --exclude='models' \
+  --exclude='narratoai/' \
+  --exclude='models' \
   --exclude='**/__pycache__' \
   "$PROJECT_DIR/" "$SERVER_USER@$SERVER_IP:$REMOTE_DIR/"
 

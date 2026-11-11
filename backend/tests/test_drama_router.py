@@ -21,6 +21,7 @@ class DramaRouterTests(unittest.TestCase):
             "aspect_ratio": "9:16",
             "style": "realistic",
             "burn_subtitles": False,
+            "storyboard_frames": 3,
         })
         body = DramaBody(
             novel="正文",
@@ -69,6 +70,7 @@ class DramaRouterTests(unittest.TestCase):
                 "aspect_ratio": "16:9",
                 "style": "anime",
                 "burn_subtitles": True,
+                "storyboard_frames": 3,
             })
             spawn.assert_called_once()
 

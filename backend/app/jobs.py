@@ -124,7 +124,7 @@ def _guard(job_id: str, fn) -> None:
             error={
                 "code": "internal",
                 "message": str(exc) or type(exc).__name__,
-                "action": "展开任务日志。若是依赖缺失，按 DEPLOY.md 安装 ffmpeg / ASR / TTS。",
+                "action": "展开任务日志。若是依赖缺失，确认这台机器已安装 ffmpeg，并配置文本模型或本机 faster-whisper。",
             },
             log=traceback.format_exc()[-1500:],
         )

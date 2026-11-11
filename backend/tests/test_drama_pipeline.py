@@ -667,7 +667,8 @@ class DramaPipelineTests(unittest.TestCase):
                     time.sleep(0.02)
             saved = drama_store.load_project(PROJECT_ID)
             shot = saved["episodes"][0]["shots"][0]
-            self.assertEqual(generated_count, 2)
+            # 首帧 + 分镜第 2、3 张 + 视频。第 1 张分镜直接复用首帧，不再单独生成。
+            self.assertEqual(generated_count, 4)
             self.assertEqual(shot["revision"], 3)
             self.assertEqual(shot["image"]["revision"], 3)
             self.assertEqual(shot["video"]["revision"], 3)
@@ -757,9 +758,16 @@ class DramaPipelineTests(unittest.TestCase):
             compose_errors = []
 
             def ffmpeg(command, **_kwargs):
-                ffmpeg_started.set()
-                self.assertTrue(release_ffmpeg.wait(2))
-                Path(command[-1]).write_bytes(b"pre-retry composition")
+                # 只卡住成片拼接。重试过程里的封面转码不应堵在同一把锁上。
+                if "-f" in command and "concat" in command:
+                    ffmpeg_started.set()
+                    self.assertTrue(release_ffmpeg.wait(2))
+                    Path(command[-1]).write_bytes(b"pre-retry composition")
+                    return SimpleNamespace(returncode=0, stderr=b"")
+                target = Path(command[-1]) if command else None
+                if target is not None:
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_bytes(b"side ffmpeg")
                 return SimpleNamespace(returncode=0, stderr=b"")
 
             def compose():

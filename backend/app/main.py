@@ -1,4 +1,4 @@
-"""Video Hub：素材、理解、剪辑、解说、AI 创作与成品导出。"""
+"""Video Hub：素材、剪辑、AI 创作与成品导出。"""
 import asyncio
 import sys
 from pathlib import Path
@@ -17,7 +17,7 @@ from app.config import CORS_ORIGINS, ensure_dirs
 from app.db import fail_interrupted_recordings
 from app.services.understanding import fail_interrupted_analyses
 from app.routers import (
-    ai, download, drama, edit, events, exports, inspirations, jobs, maintenance, narrate, profiles,
+    ai, download, drama, edit, events, exports, inspirations, jobs, maintenance, profiles,
     recordings, stats, system, understanding, videos,
 )
 from app.services import drama_store, maintenance as maintenance_service, narrato_import
@@ -74,7 +74,6 @@ app.include_router(download.router)
 app.include_router(recordings.router)
 app.include_router(stats.router)
 app.include_router(events.router)
-app.include_router(narrate.router)
 app.include_router(system.router)
 app.include_router(maintenance.router)
 app.include_router(ai.router)
@@ -102,7 +101,6 @@ def health():
 
     from engine.llm import configured
     from engine.settings import asr_url, vision_configured
-    from engine.tts import engine_status
 
     asr = "remote" if asr_url() else "unconfigured"
     try:
@@ -118,5 +116,4 @@ def health():
         "llm": configured(),
         "vision": vision_configured(),
         "asr": asr,
-        "tts": engine_status(),
     }

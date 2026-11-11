@@ -12,7 +12,6 @@ import yt_dlp
 from app.config import COVERS_DIR, DOWNLOAD_TIMEOUT, TMP_DIR, VIDEOS_DIR, ensure_dirs
 from app.db import add_video, update_video
 from app.services.cookies import make_ytdlp_cookiefile
-from app.services.douyin_fallback import download_douyin, is_douyin_url, parse_douyin
 from app.services.media import ensure_h264, make_cover, probe_video
 from app.services.quality import assess_source
 from app.services.understanding import start_analysis
@@ -178,25 +177,8 @@ def _ytdlp_download(task, url: str, use_cookie: bool = True) -> tuple[Path, dict
     return downloaded, info
 
 
-def _douyin_fallback_download(task, url: str) -> tuple[Path, dict]:
-    task.log("使用 iesdouyin 分享页备用下载…")
-    out = _task_tmp_dir(task) / "douyin_fallback.mp4"
-    info = download_douyin(url, out)
-    if getattr(task, "cancelled", False):
-        raise DownloadCancelled("下载已取消")
-    # 用 aweme id 作为文件名，与 yt-dlp 下游命名习惯一致
-    vid = re.sub(r"[^A-Za-z0-9_-]", "_", str(info.get("id") or "douyin"))[:64]
-    named = out.with_name(f"{vid}.mp4")
-    if named != out:
-        if named.exists():
-            named.unlink()
-        out.replace(named)
-        out = named
-    task.progress = max(float(getattr(task, "progress", 0) or 0), 90.0)
-    return out, info
-
-
 def _download_with_fallback(task, url: str) -> tuple[Path, dict]:
+    """只走 yt-dlp：先匿名，有本地 Cookie 再重试一次。不再抓分享页 HTML。"""
     last_exc: Exception | None = None
     try:
         task.log("使用 yt-dlp 获取最高质量无水印可用源…")
@@ -214,19 +196,8 @@ def _download_with_fallback(task, url: str) -> tuple[Path, dict]:
                 raise
             except Exception as cookie_exc:
                 last_exc = cookie_exc
-
-    if is_douyin_url(url):
-        try:
-            return _douyin_fallback_download(task, url)
-        except DownloadCancelled:
-            raise
-        except Exception as fallback_exc:
-            raise RuntimeError(
-                f"yt-dlp 与 iesdouyin 备用下载均失败：{fallback_exc}（此前：{last_exc}）"
-            ) from fallback_exc
-
     raise RuntimeError(
-        f"无法通过 yt-dlp 获取视频，建议下载原片后上传：{last_exc}"
+        f"无法通过 yt-dlp 获取视频。可换一条链接，或下载原片后在素材库上传：{last_exc}"
     ) from last_exc
 
 

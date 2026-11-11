@@ -1,8 +1,14 @@
-"""信号优先剪辑与四步解说：没有模型时必须大声失败，不能交回空成功。"""
+"""手动时间线：没有模型时必须大声失败，不能交回空成功。
+
+这个文件按 pytest 收集。unittest discover 只导入它，不跑这些函数。
+"""
 
 from shutil import copyfile
 
-import pytest
+try:
+    import pytest
+except ImportError:  # unittest 收集时不能因为没装 pytest 而中断
+    pytest = None
 from fastapi.testclient import TestClient
 
 import app.db as db
@@ -12,7 +18,11 @@ from engine.demo_media import write_demo_set
 from engine.media import probe
 
 
-@pytest.fixture()
+def _fixture(fn):
+    return pytest.fixture()(fn) if pytest is not None else fn
+
+
+@_fixture
 def client(tmp_path, monkeypatch):
     data = tmp_path / "data"
     library = data / "videos"
@@ -127,70 +137,6 @@ def test_analyze_plan_export(client):
     assert "edit.export" in kinds_in_center
 
 
-def test_narrate_steps_fail_loud_without_model(client):
-    video = _demo_video()
-    created = client.post("/api/narrate/tasks", json={"video_id": video["id"], "max_frames": 4})
-    assert created.status_code == 200, created.text
-    payload = created.json()
-    assert payload["job"]["status"] == "success", payload["job"]
-    task = payload["task"]
-    assert task["transcript"]["segments"]
-    assert task["frames"]
-    assert task["frames"][0]["caption_error"]
-    frame = client.get(f"/api/narrate/tasks/{task['id']}/frames/{task['frames'][0]['image']}")
-    assert frame.status_code == 200
-
-    segments = task["transcript"]["segments"]
-    segments[0]["text"] = "改过的第一句，仍然对齐时间。"
-    saved = client.put(f"/api/narrate/tasks/{task['id']}/transcript", json={"segments": segments})
-    assert saved.status_code == 200
-    assert saved.json()["transcript"]["segments"][0]["text"].startswith("改过的第一句")
-
-    denied = client.post(f"/api/narrate/tasks/{task['id']}/script", json={"mode": "llm", "target_duration": 12})
-    assert denied.status_code == 409
-    assert denied.json()["detail"]["message"]
-    assert denied.json()["detail"]["action"]
-
-    drafted = client.post(f"/api/narrate/tasks/{task['id']}/script", json={"mode": "skeleton", "target_duration": 12})
-    assert drafted.status_code == 200, drafted.text
-    assert drafted.json()["job"]["status"] == "success"
-    task = drafted.json()["task"]
-    beats = []
-    for beat in task["script"]["beats"]:
-        beats.append({**beat, "narration": "画面里就这些"})
-    voice = {
-        "engine": "tone",
-        "voice": "tone",
-        "rate": 1,
-        "original_volume": 0.12,
-        "subtitles": True,
-        "font_size": 36,
-        "margin_v": 40,
-    }
-    reviewed = client.put(f"/api/narrate/tasks/{task['id']}/script", json={"beats": beats, "voice": voice})
-    assert reviewed.status_code == 200, reviewed.text
-
-    rendered = client.post(f"/api/narrate/tasks/{task['id']}/render")
-    assert rendered.status_code == 200, rendered.text
-    done = rendered.json()
-    assert done["job"]["status"] == "success", done["job"]
-    assert done["task"]["output"]["tts_engine"] == "tone"
-    assert done["task"]["output"]["warnings"]
-    media = client.get(f"/api/narrate/tasks/{task['id']}/output")
-    assert media.status_code == 200
-    assert len(media.content) > 1000
-    imported = client.post(f"/api/narrate/tasks/{task['id']}/import")
-    assert imported.status_code == 200, imported.text
-    assert imported.json()["video"]["source_platform"] == "narration"
-
-    center = client.get("/api/tasks")
-    assert any(item.get("kind") == "narrate.render" for item in center.json())
-    detail = client.get(f"/api/tasks/{done['job']['id']}")
-    assert detail.status_code == 200
-    assert detail.json()["type"] == "narrate"
-    assert detail.json()["error"] is None or detail.json()["status"] == "success"
-
-
 def test_highlight_speed_freeze_and_missing_still(client):
     video = _demo_video()
     planned = client.post("/api/edit/highlight", json={
@@ -239,28 +185,6 @@ def test_highlight_speed_freeze_and_missing_still(client):
     duration = float(done["result"]["duration"])
     # 2.8s / 2 + 0.6s freeze + 1.2s still ≈ 3.2s
     assert 2.4 < duration < 4.2, duration
-
-
-def test_narrate_pause_and_speed(client):
-    video = _demo_video()
-    created = client.post("/api/narrate/tasks", json={"video_id": video["id"], "max_frames": 2})
-    assert created.status_code == 200, created.text
-    task = created.json()["task"]
-    beats = [
-        {"id": "b1", "start": 0.3, "end": 3.2, "narration": "画面里就这些", "purpose": "hook", "pause": False, "speed": 1, "freeze": 0, "insert_kind": "none"},
-        {"id": "b2", "start": 9.4, "end": 12.6, "narration": "", "purpose": "explain", "pause": True, "speed": 1.5, "freeze": 0.4, "insert_kind": "none"},
-    ]
-    voice = {"engine": "tone", "voice": "tone", "rate": 1, "original_volume": 0.1, "subtitles": False, "font_size": 36, "margin_v": 40}
-    saved = client.put(f"/api/narrate/tasks/{task['id']}/script", json={"beats": beats, "voice": voice})
-    assert saved.status_code == 200, saved.text
-    stored = saved.json()["script"]["beats"]
-    assert stored[1]["pause"] is True
-    assert stored[1]["speed"] == 1.5
-    rendered = client.post(f"/api/narrate/tasks/{task['id']}/render")
-    assert rendered.status_code == 200, rendered.text
-    done = rendered.json()
-    assert done["job"]["status"] == "success", done["job"]
-    assert done["task"]["output"]["duration"] > 1
 
 
 def test_real_video_without_asr_is_partial(client):

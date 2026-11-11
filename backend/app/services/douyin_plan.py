@@ -629,8 +629,13 @@ def plan_douyin_shorts(
         try:
             items = ask(prompt, log)
         except AIServiceError as exc:
-            service_errors.append(exc)
-            log(f"模型调用失败：{exc}")
+            # 没配 Key 时用口播密度继续出片。401 / 超时仍算失败，避免把坏密钥藏起来。
+            if "没有配置" in str(exc):
+                response_errors.append(exc)
+                log(f"未配置文本模型，改用口播密度：{exc}")
+            else:
+                service_errors.append(exc)
+                log(f"模型调用失败：{exc}")
             continue
         except AIResponseError as exc:
             response_errors.append(exc)

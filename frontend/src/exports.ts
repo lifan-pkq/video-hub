@@ -1,6 +1,6 @@
 import http from './api'
 
-export type ExportStatus = 'running' | 'success' | 'failed'
+export type ExportStatus = 'running' | 'success' | 'failed' | 'cancelled'
 
 export interface ExportManifest {
   export_id: string
@@ -37,6 +37,11 @@ export async function createExport(videoId: number): Promise<ExportManifest> {
 }
 
 /** 轮询导出状态：running → success（带完整清单）/ failed（带 error）。 */
+export async function cancelExport(exportId: string): Promise<ExportManifest> {
+  const { data } = await http.post<ExportManifest>(`/exports/${exportId}/cancel`, {}, { timeout: 30000 })
+  return data
+}
+
 export async function getExport(exportId: string): Promise<ExportManifest> {
   const { data } = await http.get<ExportManifest>(`/exports/${exportId}`, { timeout: 30000 })
   return data

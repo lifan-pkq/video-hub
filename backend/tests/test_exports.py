@@ -140,6 +140,21 @@ class ExportServiceTests(unittest.TestCase):
             self._wait(lambda: len(calls) >= 2)
         self.assertEqual(calls[1]["subject_track"], track)
 
+    def test_cancel_stops_a_running_export(self):
+        gate = threading.Event()
+        calls = []
+        with patch.object(exporter, "run_bundle", side_effect=self._fake_run(calls, gate=gate)), \
+                patch.object(exporter, "_cancel", set(), create=True):
+            record = exporter.create_export(7)
+            self._wait(lambda: len(calls) >= 1)
+            pending = exporter.cancel_export(record["export_id"])
+            self.assertIn(pending["status"], {"running", "cancelled"})
+            gate.set()
+            self._wait(lambda: exporter.get_export(record["export_id"])["status"] != "running")
+        done = exporter.get_export(record["export_id"])
+        self.assertEqual(done["status"], "cancelled")
+        self.assertIn("取消", done["error"])
+
     def test_get_export_reconciles_stale_running_after_restart(self):
         export_id = uuid.uuid4().hex[:16]
         (exporter.EXPORTS_DIR / export_id).mkdir(parents=True, exist_ok=True)

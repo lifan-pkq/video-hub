@@ -25,6 +25,8 @@ interface Props {
   onToggle: (task: TaskSummary) => void
   onOpen: (task: TaskSummary) => void
   onCancel: (task: TaskSummary) => void
+  onRetry?: (task: TaskSummary) => void
+  retrying?: boolean
 }
 
 /** 任务耗时：终态用 finished_at，否则用当前时间 */
@@ -53,7 +55,7 @@ export function TaskRowSkeleton() {
 }
 
 /** 任务卡片：类型 Tag + 标题 + 实时进度条 + 状态徽标 + 耗时 + 展开日志 + 取消 */
-export default function TasksCard({ task, now, expanded, detail, cancelling, onToggle, onOpen, onCancel }: Props) {
+export default function TasksCard({ task, now, expanded, detail, cancelling, onToggle, onOpen, onCancel, onRetry, retrying }: Props) {
   const meta = TYPE_META[task.type] ?? TYPE_META.download
   const running = task.status === 'pending' || task.status === 'running'
 
@@ -93,6 +95,19 @@ export default function TasksCard({ task, now, expanded, detail, cancelling, onT
         </div>
         <div className="flex shrink-0 flex-col items-end gap-2 sm:flex-row sm:items-center">
           <StatusBadge status={task.status} />
+          {!running && onRetry && (task.status === 'failed' || task.status === 'cancelled') && (task.type === 'download' || task.kind === 'edit.douyin') && (
+            <Button
+              size="sm"
+              variant="ghost"
+              loading={retrying}
+              onClick={(e) => {
+                e.stopPropagation()
+                onRetry(task)
+              }}
+            >
+              重试
+            </Button>
+          )}
           {running && (
             <Button
               size="sm"

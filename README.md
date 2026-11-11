@@ -49,7 +49,15 @@ npm run dev
 
 打开 http://127.0.0.1:5173/ 。前端把 `/api` 代理到 8000。
 
-抖音一键出片在「智能剪辑」页：选原片，可选写一句想留的内容，点「生成抖音短视频」。进度按转写、选段、渲染、成片显示。完成后点开 9:16 卡片，在手机画幅里预览，下载视频、封面和文案。不会自动发布。
+抖音一键出片在「智能剪辑」页：选原片，可选写一句想留的内容，点「生成抖音短视频」。进度按转写、选段、渲染、成片显示。没配文本模型时，选段改用口播密度，不会因为缺少 Key 整单失败；Key 无效或接口报错仍会失败，并在页面上写出原因。失败或取消后可以按同一条原片再试一次，任务中心里的下载和抖音成片也能重试。完成后点开 9:16 卡片，在手机画幅里预览，下载视频、封面和文案。不会自动发布。
+
+要用一条带人声的短片把转写、选段、渲染和封面打包走通：
+
+```bash
+sudo apt-get install -y espeak-ng ffmpeg
+cd backend
+VIDEO_HUB_AUTH_MODE=off VIDEO_HUB_RUN_E2E=1 VIDEO_HUB_WHISPER_MODEL=tiny PYTHONPATH=.. .venv/bin/python -m unittest tests.test_douyin_speech_e2e -v
+```
 
 转写不另起服务。`VIDEO_HUB_ASR_URL` 留空时，后端在这次任务里加载 faster-whisper，超过 300 秒会先抽音频再分段，避免整段波形进内存。取消成片任务时，抽音频的 ffmpeg 会一起停掉。失败或取消后，成片页可以按同一条原片再试一次。
 
@@ -71,6 +79,7 @@ npm run dev
 | `VIDEO_HUB_DOUYIN_MAX_SECONDS` | `60` | 单条最长秒数 |
 | `VIDEO_HUB_DOUYIN_WIDTH` / `VIDEO_HUB_DOUYIN_HEIGHT` | `1080` / `1920` | 竖屏输出。内存紧时可改成 `720` / `1280` |
 | `VIDEO_HUB_DOUYIN_FFMPEG_THREADS` | `1` | 单条编码线程，最大 2 |
+| `VIDEO_HUB_RENDER_SLOTS` | `1` | 同时进行的重编码/转写路数，最大 2。内存宽裕再改成 2 |
 | `AGNES_MEDIA_BASE_URL` | `https://api.agnes-ai.cn/v1` | AI 图片/视频 |
 | `AGNES_IMAGE_MODEL` | `agnes-image-2.5-flash` | 图片模型 |
 | `AGNES_VIDEO_MODEL` | `agnes-video-2.5-flash` | 视频模型 |

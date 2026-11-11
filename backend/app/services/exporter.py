@@ -20,6 +20,7 @@ MANIFEST_FILE = "manifest.json"
 
 # 同一视频只允许一份进行中的导出：video_id -> export_id（进程重启后由磁盘 status.json 收口）
 _running: dict[int, str] = {}
+_cancel: set[str] = set()
 _lock = threading.Lock()
 
 
@@ -61,6 +62,22 @@ def create_export(video_id: int) -> dict[str, Any]:
         name=f"export-{export_id}",
     ).start()
     return _status_record(export_id)
+
+
+def cancel_export(export_id: str) -> dict[str, Any]:
+    """请求取消进行中的导出。已经成功或失败的记录保持原样。"""
+    if not export_id.isalnum() or len(export_id) > 32:
+        raise ExportError("导出 ID 不合法")
+    status = _read_status(export_id)
+    if not status and not (EXPORTS_DIR / export_id).is_dir():
+        raise ExportError("导出不存在")
+    if status.get("status") in {"success", "failed", "cancelled"}:
+        return _record(status, export_id)
+    with _lock:
+        _cancel.add(export_id)
+    if not _is_live(export_id):
+        return _write_status(export_id, "cancelled", error="导出已取消")
+    return _record({**status, "status": "running", "label": "正在取消"}, export_id)
 
 
 def get_export(export_id: str) -> dict[str, Any]:
@@ -155,12 +172,18 @@ def _run_export(video_id: int, export_id: str, source: Path, task_dir: Path | No
     track = _subject_track(video_id)
 
     def on_progress(value: float, label: str) -> None:
+        if _cancelled(export_id):
+            raise ExportBundleError("导出已取消")
         _write_status(export_id, "running", video_id=video_id, progress=round(value, 1), label=label)
 
     try:
         try:
             manifest = run_bundle(source, work_dir, title, task_dir, track, on_progress=on_progress)
-        except (ExportBundleError, OSError, ValueError) as exc:
+        except ExportBundleError as exc:
+            state = "cancelled" if "取消" in str(exc) else "failed"
+            _write_status(export_id, state, video_id=video_id, error=str(exc)[-1000:] or "导出失败")
+            return
+        except (OSError, ValueError) as exc:
             _write_status(export_id, "failed", video_id=video_id, error=str(exc)[-1000:] or "导出失败")
             return
         except Exception as exc:  # noqa: BLE001 - 导出线程必须把原因写进状态
@@ -175,8 +198,14 @@ def _run_export(video_id: int, export_id: str, source: Path, task_dir: Path | No
         _forget(video_id, export_id)
 
 
+def _cancelled(export_id: str) -> bool:
+    with _lock:
+        return export_id in _cancel
+
+
 def _forget(video_id: int, export_id: str) -> None:
     with _lock:
+        _cancel.discard(export_id)
         if _running.get(video_id) == export_id:
             _running.pop(video_id, None)
 

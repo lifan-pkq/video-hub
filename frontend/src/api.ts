@@ -753,6 +753,15 @@ export async function cancelTask(taskId: string): Promise<{ ok: boolean }> {
   }
 }
 
+export async function retryTask(taskId: string): Promise<Task> {
+  try {
+    const { data } = await http.post<{ ok: boolean; task: Task }>(`/tasks/${encodeURIComponent(taskId)}/retry`)
+    return data.task
+  } catch (error) {
+    raiseApi(error)
+  }
+}
+
 /** 任务列表（不含日志，按创建时间倒序） */
 export type TaskSummary = Omit<Task, 'logs'>
 

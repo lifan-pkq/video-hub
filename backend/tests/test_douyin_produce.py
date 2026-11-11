@@ -149,6 +149,13 @@ class DouyinPlanTests(unittest.TestCase):
         with self.assertRaises(AIServiceError):
             plan_douyin_shorts(speech(40), 40, request_ai=explode)
 
+        def missing_key(prompt, log):
+            raise AIServiceError("没有配置 AI API Key")
+
+        heuristic = plan_douyin_shorts(speech(40), 40, request_ai=missing_key)
+        self.assertEqual(heuristic["source"], "heuristic")
+        self.assertGreaterEqual(len(heuristic["clips"]), 1)
+
     def test_model_plan_is_used_and_empty_answer_falls_back(self):
         segments = speech(40)
         seen = {}
@@ -540,6 +547,24 @@ class DouyinRouteTests(unittest.TestCase):
         update(running["id"], status="running")
         again = self.client.post(f"/api/edit/douyin/{running['id']}/retry")
         self.assertEqual(again.status_code, 409)
+
+    def test_task_center_retry_opens_another_douyin_job(self):
+        from app.jobs import update
+
+        def run(job_id, video_id, instruction, max_clips, layout="interview"):
+            update(job_id, status="failed", stage="failed", label="失败", error={"code": "asr", "message": "转写失败", "action": "检查音轨"})
+
+        with patch("app.routers.edit.fetch", return_value={"id": 5, "title": "原片"}), \
+                patch("app.routers.edit.produce_douyin", side_effect=run):
+            created = self.client.post("/api/edit/douyin", json={"video_id": 5, "instruction": "留结论"})
+            self.assertEqual(created.status_code, 200, created.text)
+            failed_id = created.json()["id"]
+            retried = self.client.post(f"/api/tasks/{failed_id}/retry")
+        self.assertEqual(retried.status_code, 200, retried.text)
+        body = retried.json()["task"]
+        self.assertNotEqual(body["id"], failed_id)
+        self.assertEqual(body["input"]["instruction"], "留结论")
+        self.assertEqual(body["input"]["retry_of"], failed_id)
 
 
 if __name__ == "__main__":

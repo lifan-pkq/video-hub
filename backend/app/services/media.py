@@ -13,8 +13,17 @@ from pathlib import Path
 from fastapi import Response
 from fastapi.responses import FileResponse, StreamingResponse
 
-# 渲染/AI 分析并发上限（2 核服务器，防多请求同时跑 ffmpeg/whisper 打爆内存）
-render_semaphore = threading.Semaphore(2)
+def _render_slots() -> int:
+    """小机器默认只允许一路重编码，避免 whisper 和多条 ffmpeg 同时把内存打满。"""
+    try:
+        value = int(os.environ.get("VIDEO_HUB_RENDER_SLOTS", "1"))
+    except (TypeError, ValueError):
+        value = 1
+    return max(1, min(2, value))
+
+
+# 渲染/转写并发上限。默认 1；内存宽裕时可设 VIDEO_HUB_RENDER_SLOTS=2。
+render_semaphore = threading.Semaphore(_render_slots())
 
 
 def probe_video(path: Path) -> dict:

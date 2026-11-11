@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { ClockCounterClockwise, DownloadSimple } from '@phosphor-icons/react'
 import {
   cancelTask,
+  retryTask,
   errorMessage,
   fetchTask,
   fetchTasks,
@@ -41,6 +42,7 @@ export default function TasksPage() {
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [detail, setDetail] = useState<Task | null>(null)
   const [cancellingId, setCancellingId] = useState<string | null>(null)
+  const [retryingId, setRetryingId] = useState<string | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [hasData, setHasData] = useState(false)
 
@@ -160,6 +162,21 @@ export default function TasksPage() {
 
   // ================= 取消任务 =================
 
+  const handleRetry = async (t: TaskSummary) => {
+    setRetryingId(t.id)
+    try {
+      const next = await retryTask(t.id)
+      toast.success('已重新开始')
+      if (next?.id && next.id !== t.id) openTask(next)
+      const list = await fetchTasks()
+      setTasks(list)
+    } catch (e) {
+      toast.error(`重试失败：${errorMessage(e)}`)
+    } finally {
+      setRetryingId(null)
+    }
+  }
+
   const handleCancel = async (t: TaskSummary) => {
     const ok = await confirmDialog({
       title: '取消任务',
@@ -256,6 +273,8 @@ export default function TasksPage() {
                 onToggle={toggle}
                 onOpen={openTask}
                 onCancel={handleCancel}
+                onRetry={handleRetry}
+                retrying={retryingId === t.id}
               />
             </div>
           ))}

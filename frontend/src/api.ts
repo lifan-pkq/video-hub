@@ -215,6 +215,7 @@ export interface HealthReport {
   llm: boolean
   vision: boolean
   asr: string
+  disk_free_mb?: number
 }
 
 export async function fetchHealth(): Promise<HealthReport> {

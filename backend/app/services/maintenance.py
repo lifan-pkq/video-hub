@@ -217,6 +217,14 @@ def _clean_task_logs(cutoff: float, result: dict[str, int]) -> None:
                 pass
 
 
+def sweep_temp(max_age_hours: int = TEMP_RETENTION_HOURS) -> dict[str, int]:
+    """删掉超过 max_age_hours 的临时文件。启动时调用一次，避免重启后堆着半成品。"""
+    result = {"files": 0, "bytes": 0}
+    cutoff = time.time() - max(1, max_age_hours) * 3600
+    _remove_old_entries(TMP_DIR, cutoff, result)
+    return result
+
+
 def clean_logs(retention_days: int = LOG_RETENTION_DEFAULT) -> dict[str, Any]:
     days = max(1, min(int(retention_days or LOG_RETENTION_DEFAULT), 365))
     cutoff = time.time() - days * 86400

@@ -97,7 +97,7 @@ class WorkflowTests(unittest.TestCase):
                     patch("app.routers.videos.add_video", side_effect=lambda **fields: {"id": 7, "cover": "c.jpg", **fields}) as added, \
                     patch("app.services.quality.update_quality", return_value={"score": 70}), \
                     patch("app.services.understanding.start_analysis"), \
-                    patch("app.routers.videos.list_videos", return_value=[{"id": 7, "title": "上传的短片", "filename": "a.mp4", "cover": "c.jpg", "size": 10, "duration": 1.5, "width": 320, "height": 180, "source_platform": "local", "source_url": None, "created_at": ""}]):
+                    patch("app.routers.videos.list_videos_for_library", return_value=[{"id": 7, "title": "上传的短片", "filename": "a.mp4", "cover": "c.jpg", "size": 10, "duration": 1.5, "width": 320, "height": 180, "source_platform": "local", "source_url": None, "created_at": ""}]):
                 client = TestClient(app)
                 with sample.open("rb") as handle:
                     response = client.post("/api/videos/upload", params={"title": "上传的短片"}, files={"file": ("upload.mp4", handle, "video/mp4")})

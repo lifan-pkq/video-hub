@@ -112,6 +112,15 @@ def produce_douyin(
     clips = plan["clips"]
     root = data_dir() / "douyin" / job_id
     root.mkdir(parents=True, exist_ok=True)
+    from app.services.media import free_mb
+
+    if free_mb(root) < 512:
+        raise EngineError(
+            "磁盘剩余不足 512MB，停止渲染。",
+            code="disk",
+            action="到系统页清理临时文件，或把 VIDEO_HUB_DOUYIN_WIDTH 改成 720。",
+            status=507,
+        )
     boxes = [] if layout == "podcast" else load_subject_boxes(video_id)
     shorts = []
     failures: list[str] = []

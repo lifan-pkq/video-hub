@@ -676,20 +676,23 @@ def _run(project_id: str) -> None:
         _compose(project)
         _finish_project(project_id)
     except drama_pipeline.WaitingReview as exc:
+        waiting_error = str(exc)[:400]
+
         def mark_waiting(current: dict[str, Any]) -> None:
             current["status"] = "waiting_review"
-            current["error"] = str(exc)[:400]
+            current["error"] = waiting_error
             _log(current, "有镜头等待修改或重试，其他镜头产物已保留")
 
         drama_store.update_project(project_id, mark_waiting)
     except Exception as exc:  # noqa: BLE001
-        cancelled = "已取消" in str(exc) or drama_store.project_cancelled(project_id)
+        error_text = str(exc)
+        cancelled = "已取消" in error_text or drama_store.project_cancelled(project_id)
 
         def mark_interrupted(current: dict[str, Any]) -> None:
             current["status"] = "cancelled" if cancelled else "failed"
-            current["error"] = "" if cancelled else str(exc)[:400]
+            current["error"] = "" if cancelled else error_text[:400]
             current["recoverable"] = not cancelled
-            _log(current, ("项目已取消" if cancelled else f"项目中断：{str(exc)[:200]}") + "，可点「继续」断点续跑")
+            _log(current, ("项目已取消" if cancelled else f"项目中断：{error_text[:200]}") + "，可点「继续」断点续跑")
 
         drama_store.update_project(project_id, mark_interrupted)
     finally:
@@ -739,13 +742,14 @@ def _plan(project_id: str) -> None:
 
         drama_store.update_project(project_id, mark_planned)
     except Exception as exc:  # noqa: BLE001
-        cancelled = "已取消" in str(exc) or drama_store.project_cancelled(project_id)
+        error_text = str(exc)
+        cancelled = "已取消" in error_text or drama_store.project_cancelled(project_id)
 
         def mark_failed(current: dict[str, Any]) -> None:
             current["status"] = "cancelled" if cancelled else "failed"
-            current["error"] = "" if cancelled else str(exc)[:400]
+            current["error"] = "" if cancelled else error_text[:400]
             current["recoverable"] = not cancelled
-            _log(current, ("项目已取消" if cancelled else f"规划中断：{str(exc)[:200]}") + "，可删除后重新创建")
+            _log(current, ("项目已取消" if cancelled else f"规划中断：{error_text[:200]}") + "，可删除后重新创建")
 
         drama_store.update_project(project_id, mark_failed)
     finally:

@@ -36,6 +36,10 @@ def create_export(video_id: int) -> dict[str, Any]:
     source = VIDEOS_DIR / video["filename"]
     if not source.is_file():
         raise ExportError("视频文件已丢失")
+    from app.services.media import free_mb
+
+    if free_mb(EXPORTS_DIR if EXPORTS_DIR.exists() else DATA_DIR) < 512:
+        raise ExportError("磁盘剩余不足 512MB，无法导出。请先清理临时文件或素材。")
     with _lock:
         running_id = _running.get(video_id)
         if running_id and (EXPORTS_DIR / running_id / STATUS_FILE).is_file():

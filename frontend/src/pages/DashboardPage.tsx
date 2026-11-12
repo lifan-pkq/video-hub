@@ -23,6 +23,15 @@ function healthRows(health: HealthReport): Array<{ label: string; ok: boolean; d
     { label: '文本模型', ok: !!health.llm, detail: health.llm ? '抖音选段和标题可用' : '未配置 VIDEO_HUB_AI_*，选段会用本地规则' },
     { label: '画面模型', ok: !!health.vision, detail: health.vision ? '抽帧说明可用' : '未配置视觉模型，抽帧仍会保留' },
     { label: '语音识别', ok: health.asr === 'remote' || health.asr === 'whisper', detail: asrLabel },
+    {
+      label: '磁盘剩余',
+      ok: (health.disk_free_mb ?? 1024) >= 512,
+      detail: health.disk_free_mb == null
+        ? '还没读到剩余空间'
+        : health.disk_free_mb < 512
+          ? `只剩 ${health.disk_free_mb} MB，渲染和导出会停下来`
+          : `约 ${health.disk_free_mb} MB`,
+    },
   ]
 }
 

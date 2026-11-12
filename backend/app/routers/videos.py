@@ -12,7 +12,7 @@ from fastapi.routing import APIRoute
 from pydantic import BaseModel
 
 from app.config import COVERS_DIR, MAX_UPLOAD_MB, TMP_DIR, VIDEOS_DIR, ensure_dirs
-from app.db import add_video, delete_video, get_video, list_videos, update_video
+from app.db import add_video, delete_video, get_video, list_videos_for_library, update_video
 from app.services.media import ensure_h264, make_cover, probe_video, range_stream
 
 
@@ -56,7 +56,7 @@ def _serialize(v: dict) -> dict:
 
 @router.get("")
 def get_videos():
-    return [_serialize(v) for v in list_videos()]
+    return [_serialize(v) for v in list_videos_for_library()]
 
 
 @router.get("/{video_id}")

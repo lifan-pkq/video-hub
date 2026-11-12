@@ -109,40 +109,18 @@ def _best_format(info: dict) -> dict:
 
 def parse_video(text: str) -> dict:
     url = extract_url(text)
-    try:
-        with yt_dlp.YoutubeDL({**_base_opts(url), "skip_download": True}) as ydl:
-            info = ydl.extract_info(url, download=False)
-        return {
-            "url": url,
-            "title": info.get("title") or "未命名视频",
-            "author": info.get("uploader") or info.get("channel"),
-            "cover_url": info.get("thumbnail"),
-            "duration": info.get("duration"),
-            "platform": (info.get("extractor_key") or "unknown").lower(),
-            "video_id": info.get("id"),
-            "available_best": _best_format(info),
-        }
-    except Exception as ytdlp_exc:
-        if not is_douyin_url(url):
-            raise
-        try:
-            info = parse_douyin(url)
-        except Exception as fallback_exc:
-            raise RuntimeError(
-                f"yt-dlp 解析失败且 iesdouyin 备用解析也失败：{fallback_exc}"
-            ) from fallback_exc
-        return {
-            "url": url,
-            "title": info.get("title") or "未命名视频",
-            "author": info.get("uploader"),
-            "cover_url": info.get("thumbnail"),
-            "duration": info.get("duration"),
-            "platform": "douyin",
-            "video_id": info.get("id"),
-            "available_best": _best_format(info),
-            "fallback": "iesdouyin",
-            "ytdlp_error": str(ytdlp_exc)[:200],
-        }
+    with yt_dlp.YoutubeDL({**_base_opts(url), "skip_download": True}) as ydl:
+        info = ydl.extract_info(url, download=False)
+    return {
+        "url": url,
+        "title": info.get("title") or "未命名视频",
+        "author": info.get("uploader") or info.get("channel"),
+        "cover_url": info.get("thumbnail"),
+        "duration": info.get("duration"),
+        "platform": (info.get("extractor_key") or "unknown").lower(),
+        "video_id": info.get("id"),
+        "available_best": _best_format(info),
+    }
 
 
 def _task_tmp_dir(task) -> Path:

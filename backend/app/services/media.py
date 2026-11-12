@@ -26,6 +26,21 @@ def _render_slots() -> int:
 render_semaphore = threading.Semaphore(_render_slots())
 
 
+def free_mb(path: Path) -> int:
+    """path 所在磁盘的剩余空间，单位 MB。目录不存在时看它的父目录。"""
+    target = path if path.exists() else path.parent
+    try:
+        return int(shutil.disk_usage(target).free // (1024 * 1024))
+    except OSError:
+        return 0
+
+
+def ensure_free_mb(path: Path, minimum: int = 512) -> None:
+    free = free_mb(path)
+    if free < minimum:
+        raise OSError(f"磁盘剩余 {free}MB，低于 {minimum}MB")
+
+
 def probe_video(path: Path) -> dict:
     """返回 {duration, width, height, has_audio}，失败返回空 dict。"""
     if not shutil.which("ffprobe"):

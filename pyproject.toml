@@ -1,0 +1,9 @@
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+src = ["backend", "engine"]
+extend-exclude = ["backend/tests/fixtures"]
+
+[tool.ruff.lint]
+# 先卡住会在运行时爆炸的问题。风格类规则留到以后，避免一次改几千行。
+select = ["E9", "F821", "F822", "F823"]

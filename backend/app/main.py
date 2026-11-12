@@ -15,6 +15,7 @@ from pydantic import BaseModel
 from app import auth
 from app.config import CORS_ORIGINS, ensure_dirs
 from app.db import fail_interrupted_recordings
+from app.jobs import fail_interrupted_jobs
 from app.services.understanding import fail_interrupted_analyses
 from app.routers import (
     ai, download, drama, edit, events, exports, inspirations, jobs, maintenance, profiles,
@@ -90,7 +91,9 @@ async def _startup():
     event_hub.bind_loop()
     fail_interrupted_recordings()
     fail_interrupted_analyses()
+    fail_interrupted_jobs()
     drama_store.interrupt_active_projects()
+    maintenance_service.sweep_temp()
     asyncio.create_task(narrato_import.importer_loop())
     asyncio.create_task(maintenance_service.maintenance_loop())
 
@@ -110,10 +113,14 @@ def health():
             asr = "whisper"
     except Exception:
         pass
+    from app.config import DATA_DIR
+    from app.services.media import free_mb
+
     return {
         "status": "ok",
         "ffmpeg": bool(shutil.which("ffmpeg")),
         "llm": configured(),
         "vision": vision_configured(),
         "asr": asr,
+        "disk_free_mb": free_mb(DATA_DIR),
     }

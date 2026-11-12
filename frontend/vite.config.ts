@@ -9,7 +9,6 @@ export default defineConfig({
       output: {
         manualChunks: {
           react: ['react', 'react-dom', 'react-router-dom'],
-          icons: ['@phosphor-icons/react'],
         },
       },
     },

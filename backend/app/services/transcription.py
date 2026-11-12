@@ -21,9 +21,20 @@ def _get_model():
     global _model
     with _model_lock:
         if _model is None:
-            from faster_whisper import WhisperModel
-
-            _model = WhisperModel(WHISPER_MODEL, device="cpu", compute_type="int8")
+            try:
+                from faster_whisper import WhisperModel
+            except ImportError as exc:
+                raise AIServiceError(
+                    "本机没有 faster-whisper，无法转写。"
+                    "安装 faster-whisper，或设置 VIDEO_HUB_ASR_URL 改走远端转写。"
+                ) from exc
+            try:
+                _model = WhisperModel(WHISPER_MODEL, device="cpu", compute_type="int8")
+            except Exception as exc:
+                raise AIServiceError(
+                    f"加载转写模型「{WHISPER_MODEL}」失败：{exc}。"
+                    "确认模型名是 tiny、base 或 small，磁盘还有空间，并且首次下载能访问模型仓库。"
+                ) from exc
         return _model
 
 

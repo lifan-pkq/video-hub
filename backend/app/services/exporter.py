@@ -109,6 +109,8 @@ def get_export(export_id: str) -> dict[str, Any]:
 
 
 def select_export(export_id: str, cover: str = "", title: str = "") -> dict[str, Any]:
+    if not export_id.isalnum() or len(export_id) > 32:
+        raise ExportError("导出不存在")
     manifest_path = EXPORTS_DIR / export_id / MANIFEST_FILE
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -127,11 +129,11 @@ def select_export(export_id: str, cover: str = "", title: str = "") -> dict[str,
 
 
 def export_file(export_id: str, name: str) -> Path:
+    safe = Path(name).name
+    if not export_id.isalnum() or len(export_id) > 32 or safe != name or not safe:
+        raise ExportError("文件不存在")
     if get_export(export_id).get("status") != "success":
         raise ExportError("导出尚未完成")
-    safe = Path(name).name
-    if safe != name:
-        raise ExportError("文件不存在")
     path = EXPORTS_DIR / export_id / safe
     if not path.is_file():
         raise ExportError("文件不存在")

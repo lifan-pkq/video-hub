@@ -27,6 +27,6 @@ jobs:
           VIDEO_HUB_AUTH_MODE: "off"
           PYTHONPATH: ".."
         run: python -m unittest discover -s tests -q
-      - name: 前端构建
+      - name: 前端类型检查、lint 与构建
         working-directory: frontend
-        run: npm ci && npm run build
+        run: npm ci && npm run typecheck && npm run lint && npm run build

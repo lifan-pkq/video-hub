@@ -144,6 +144,5 @@ export function useEvents(handler: (msg: EventMsg) => void): void {
         ws = null
       }
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 }

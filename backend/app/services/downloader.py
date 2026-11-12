@@ -39,6 +39,12 @@ def explain_download_error(message: str) -> dict:
             "message": (text[:400] or "下载失败"),
             "action": "确认链接仍可在抖音 App / 浏览器打开；图文作品请改用本地上传。",
         }
+    if any(marker in lower for marker in ("timed out", "timeout", "timeouterror", "read timed out")):
+        return {
+            "code": "download_timeout",
+            "message": "解析或下载超时，平台没有在时限内返回视频。",
+            "action": "检查网络和代理后重试；仍失败就把原片上传到素材库。",
+        }
     if any(marker in lower for marker in ("fresh cookies", "cookies are needed", "sign in to confirm", "login required", "cookie")):
         return {
             "code": "cookies_stale",

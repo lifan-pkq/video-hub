@@ -105,10 +105,12 @@ cd backend
 VIDEO_HUB_AUTH_MODE=off PYTHONPATH=.. .venv/bin/python -m unittest discover -s tests -v
 
 cd ../frontend
+npm run typecheck
+npm run lint
 npm run build
 ```
 
-外部模型在单元测试中使用本地假服务。真实生成质量仍需观看/试听确认，不能把自动分数当作审美证明。
+GitHub Actions 跑 `ruff check`、上面的单元测试，以及前端 `tsc --noEmit`、eslint 和构建。外部模型在单元测试中使用本地假服务。真实生成质量仍需观看/试听确认，不能把自动分数当作审美证明。
 
 ## 数据与迁移
 

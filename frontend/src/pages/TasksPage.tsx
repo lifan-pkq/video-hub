@@ -127,7 +127,6 @@ export default function TasksPage() {
     return () => {
       dead = true
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [expandedId, expandedTask?.status, expandedTask?.progress])
 
   const toggle = (t: TaskSummary) => {

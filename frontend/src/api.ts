@@ -1,4 +1,7 @@
-import axios from 'axios'
+import http, { raiseApi } from './apiClient'
+
+export { ApiError, errorDetail, errorMessage } from './apiClient'
+export type { Problem } from './apiClient'
 
 // ================= 类型定义（与后端契约一致） =================
 
@@ -148,11 +151,6 @@ export function fpsLabel(fps: number): string {
 
 // ================= axios 实例 =================
 
-const http = axios.create({
-  baseURL: '/api',
-  timeout: 120000,
-})
-
 export default http
 
 // ================= WebSocket =================
@@ -217,7 +215,7 @@ export interface HealthReport {
   llm: boolean
   vision: boolean
   asr: string
-  tts: Array<{ id: string; available: boolean; detail: string }>
+  disk_free_mb?: number
 }
 
 export async function fetchHealth(): Promise<HealthReport> {
@@ -415,22 +413,6 @@ export async function fetchVideos(): Promise<Video[]> {
   return data
 }
 
-export interface VideoUnderstanding {
-  video_id: number
-  duration: number
-  tracks: {
-    speech: Array<{ start: number; end: number; text: string; speaker?: string }>
-    visual: Array<{ start: number; end: number; text: string; subject_box?: { x: number; y: number; width: number; height: number } }>
-    audio: Array<{ start: number; end: number; kind: 'silence' | 'beat' }>
-  }
-  emotion_curve?: Array<{ timestamp: number; score: number; label?: string }>
-}
-
-export async function fetchUnderstanding(videoId: number): Promise<VideoUnderstanding> {
-  const { data } = await http.get<VideoUnderstanding>(`/understanding/${videoId}`, { timeout: 30000 })
-  return data
-}
-
 export async function uploadVideo(
   file: File,
   title: string | undefined,
@@ -479,32 +461,6 @@ export interface EditClip {
   video_name?: string
   overlay?: boolean
   title?: string
-}
-
-export class ApiError extends Error {
-  code: string
-  action: string
-  status: number
-
-  constructor(message: string, code = 'http', action = '', status = 0) {
-    super(message)
-    this.name = 'ApiError'
-    this.code = code
-    this.action = action
-    this.status = status
-  }
-}
-
-function raiseApi(error: unknown): never {
-  if (axios.isAxiosError(error)) {
-    const detail = (error.response?.data as { detail?: unknown } | undefined)?.detail
-    if (detail && typeof detail === 'object') {
-      const record = detail as { message?: string; code?: string; action?: string }
-      throw new ApiError(record.message || '请求失败', record.code || 'http', record.action || '', error.response?.status || 0)
-    }
-    if (typeof detail === 'string' && detail) throw new ApiError(detail, 'http', '', error.response?.status || 0)
-  }
-  throw error instanceof Error ? error : new ApiError('请求失败')
 }
 
 export type SuggestionKind = 'silence' | 'black' | 'pause' | 'filler' | 'scene'
@@ -569,64 +525,6 @@ export interface TranscriptSegment {
   text: string
 }
 
-export interface NarrateFrame {
-  time: number
-  image: string
-  caption: string
-  caption_error: string
-  brightness: number | null
-}
-
-export interface NarrateBeat {
-  id: string
-  start: number
-  end: number
-  narration: string
-  purpose: 'hook' | 'explain' | 'evidence' | 'turn' | 'close'
-  pause?: boolean
-  speed?: number
-  freeze?: number
-  insert_kind?: 'none' | 'image' | 'video'
-  insert_mode?: 'overlay' | 'fullscreen'
-  image_id?: number
-  image_name?: string
-  video_id?: number
-  video_name?: string
-}
-
-export interface NarrateVoice {
-  engine: 'auto' | 'edge' | 'openai' | 'espeak' | 'tone'
-  voice: string
-  rate: number
-  original_volume: number
-  subtitles: boolean
-  font_size: number
-  margin_v: number
-}
-
-export interface SignalNarrateTask {
-  id: string
-  video_id: number
-  title: string
-  duration: number
-  width: number
-  height: number
-  transcript: { source: string; warning: string; segments: TranscriptSegment[]; error?: TaskError }
-  frames: NarrateFrame[]
-  script: { beats: NarrateBeat[]; warnings: string[]; mode?: string; instruction?: string; tone?: string; target_duration?: number } | null
-  voice: NarrateVoice
-  output: { file: string; duration: number; tts_engine: string; warnings: string[]; video_id?: number } | null
-  warnings?: string[]
-  step: string
-  instruction?: string
-  tone?: string
-}
-
-export interface NarrateEngines {
-  engines: { id: string; available: boolean; detail: string }[]
-  voices: { engine: string; id: string; label: string }[]
-}
-
 export async function fetchJob(id: string): Promise<EditJob> {
   try {
     const { data } = await http.get<EditJob>(`/jobs/${id}`)
@@ -660,6 +558,15 @@ export async function startDouyinProduce(
       max_clips: maxClips,
       layout,
     }, { timeout: 0 })
+    return data
+  } catch (error) {
+    raiseApi(error)
+  }
+}
+
+export async function retryDouyinProduce(jobId: string): Promise<EditJob> {
+  try {
+    const { data } = await http.post<EditJob>(`/edit/douyin/${encodeURIComponent(jobId)}/retry`, {}, { timeout: 0 })
     return data
   } catch (error) {
     raiseApi(error)
@@ -751,115 +658,6 @@ export async function exportEdit(title: string, clips: EditClip[]): Promise<Edit
   }
 }
 
-export async function fetchNarrateVoices(): Promise<NarrateEngines> {
-  try {
-    const { data } = await http.get<NarrateEngines>('/narrate/voices')
-    return data
-  } catch (error) {
-    raiseApi(error)
-  }
-}
-
-export async function fetchSignalNarrateTasks(limit = 20): Promise<SignalNarrateTask[]> {
-  try {
-    const { data } = await http.get<SignalNarrateTask[]>('/narrate/tasks', { params: { limit } })
-    return data
-  } catch (error) {
-    raiseApi(error)
-  }
-}
-
-export async function fetchSignalNarrateTask(taskId: string): Promise<SignalNarrateTask> {
-  try {
-    const { data } = await http.get<SignalNarrateTask>(`/narrate/tasks/${taskId}`)
-    return data
-  } catch (error) {
-    raiseApi(error)
-  }
-}
-
-export async function startNarrateUnderstand(
-  videoId: number,
-  opts?: { instruction?: string; tone?: string; framesPerSecond?: number },
-): Promise<{ job: EditJob; task: SignalNarrateTask | null }> {
-  try {
-    const { data } = await http.post(
-      '/narrate/tasks',
-      {
-        video_id: videoId,
-        frames_per_second: opts?.framesPerSecond ?? 2,
-        instruction: opts?.instruction || '',
-        tone: opts?.tone || '',
-      },
-      { timeout: 0 },
-    )
-    return data
-  } catch (error) {
-    raiseApi(error)
-  }
-}
-
-export async function saveNarrateTranscript(taskId: string, segments: TranscriptSegment[]): Promise<SignalNarrateTask> {
-  try {
-    const { data } = await http.put<SignalNarrateTask>(`/narrate/tasks/${taskId}/transcript`, { segments })
-    return data
-  } catch (error) {
-    raiseApi(error)
-  }
-}
-
-export async function draftNarrateScript(
-  taskId: string,
-  body: { mode: 'llm' | 'skeleton' | 'manual'; instruction: string; tone: string; target_duration: number },
-): Promise<{ job: EditJob; task: SignalNarrateTask | null }> {
-  try {
-    const { data } = await http.post(`/narrate/tasks/${taskId}/script`, body, { timeout: 0 })
-    return data
-  } catch (error) {
-    raiseApi(error)
-  }
-}
-
-export async function saveNarrateScript(taskId: string, beats: NarrateBeat[], voice: NarrateVoice): Promise<SignalNarrateTask> {
-  try {
-    const { data } = await http.put<SignalNarrateTask>(`/narrate/tasks/${taskId}/script`, { beats, voice })
-    return data
-  } catch (error) {
-    raiseApi(error)
-  }
-}
-
-export async function renderNarrate(taskId: string): Promise<{ job: EditJob; task: SignalNarrateTask | null }> {
-  try {
-    const { data } = await http.post(`/narrate/tasks/${taskId}/render`, {}, { timeout: 0 })
-    return data
-  } catch (error) {
-    raiseApi(error)
-  }
-}
-
-export async function importNarrateOutput(taskId: string): Promise<{ video: Video; task: SignalNarrateTask }> {
-  try {
-    const { data } = await http.post(`/narrate/tasks/${taskId}/import`)
-    return data
-  } catch (error) {
-    raiseApi(error)
-  }
-}
-
-export async function previewNarrateVoice(text: string, voice: NarrateVoice): Promise<Blob> {
-  try {
-    const { data } = await http.post<Blob>(
-      '/narrate/tts-preview',
-      { text, engine: voice.engine, voice: voice.voice, rate: voice.rate },
-      { responseType: 'blob', timeout: 60000 },
-    )
-    return data
-  } catch (error) {
-    raiseApi(error)
-  }
-}
-
 // ================= 仪表盘统计 =================
 
 export interface Stats {
@@ -928,6 +726,15 @@ export async function cancelTask(taskId: string): Promise<{ ok: boolean }> {
   }
 }
 
+export async function retryTask(taskId: string): Promise<Task> {
+  try {
+    const { data } = await http.post<{ ok: boolean; task: Task }>(`/tasks/${encodeURIComponent(taskId)}/retry`)
+    return data.task
+  } catch (error) {
+    raiseApi(error)
+  }
+}
+
 /** 任务列表（不含日志，按创建时间倒序） */
 export type TaskSummary = Omit<Task, 'logs'>
 
@@ -983,32 +790,6 @@ export function recordingPreviewUrl(id: number): string {
 }
 
 // ================= 工具函数 =================
-
-export interface Problem {
-  code: string
-  message: string
-  action: string
-}
-
-export function errorDetail(e: unknown): Problem {
-  if (e instanceof ApiError) return { code: e.code || 'http', message: e.message, action: e.action || '' }
-  if (axios.isAxiosError(e)) {
-    const detail = (e.response?.data as { detail?: unknown } | undefined)?.detail
-    if (typeof detail === 'string' && detail) return { code: 'http', message: detail, action: '' }
-    if (detail && typeof detail === 'object') {
-      const record = detail as { code?: string; message?: string; action?: string }
-      return { code: record.code || 'http', message: record.message || '请求失败', action: record.action || '' }
-    }
-    return { code: 'http', message: e.message || '请求失败', action: '' }
-  }
-  if (e instanceof Error) return { code: 'error', message: e.message, action: '' }
-  return { code: 'error', message: '请求失败', action: '' }
-}
-
-export function errorMessage(e: unknown): string {
-  const problem = errorDetail(e)
-  return problem.action ? `${problem.message} ${problem.action}` : problem.message
-}
 
 /** 秒 → mm:ss */
 export function formatDuration(seconds: number | null | undefined): string {

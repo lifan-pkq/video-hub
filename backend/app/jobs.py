@@ -124,7 +124,7 @@ def _guard(job_id: str, fn) -> None:
             error={
                 "code": "internal",
                 "message": str(exc) or type(exc).__name__,
-                "action": "展开任务日志。若是依赖缺失，按 DEPLOY.md 安装 ffmpeg / ASR / TTS。",
+                "action": "展开任务日志。若是依赖缺失，确认这台机器已安装 ffmpeg，并配置文本模型或本机 faster-whisper。",
             },
             log=traceback.format_exc()[-1500:],
         )
@@ -138,6 +138,28 @@ def submit(job: dict, fn) -> dict:
     return get(job["id"])
 
 
+def fail_interrupted_jobs() -> int:
+    """进程重启后，磁盘上仍标着进行中的任务已经没有线程在跑。"""
+    count = 0
+    for job in list_jobs(500):
+        if job.get("status") not in {"pending", "running"}:
+            continue
+        update(
+            job["id"],
+            status="failed",
+            stage="failed",
+            label="已中断",
+            error={
+                "code": "interrupted",
+                "message": "服务重启，任务中断。",
+                "action": "在任务中心重试下载或抖音成片，或回到对应页面重新发起。",
+            },
+            log="服务重启，任务中断",
+        )
+        count += 1
+    return count
+
+
 def list_jobs(limit: int = 50) -> list[dict]:
     rows = []
     for path in _dir().glob("*.json"):
@@ -146,7 +168,7 @@ def list_jobs(limit: int = 50) -> list[dict]:
         except (OSError, json.JSONDecodeError):
             continue
     rows.sort(key=lambda item: item.get("updated_at") or item.get("created_at") or "", reverse=True)
-    return rows[: max(1, min(limit, 200))]
+    return rows[: max(1, min(limit, 500))]
 
 
 def _publish(job: dict) -> None:

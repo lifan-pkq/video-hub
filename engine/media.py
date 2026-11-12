@@ -72,8 +72,11 @@ def run_cmd(
 
     def _read() -> None:
         assert proc.stderr is not None
-        data = proc.stderr.read()
-        chunks.append(data.decode("utf-8", errors="replace"))
+        try:
+            data = proc.stderr.read()
+            chunks.append(data.decode("utf-8", errors="replace"))
+        finally:
+            proc.stderr.close()
 
     reader = threading.Thread(target=_read, daemon=True)
     reader.start()

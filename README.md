@@ -49,9 +49,18 @@ npm run dev
 
 打开 http://127.0.0.1:5173/ 。前端把 `/api` 代理到 8000。
 
-抖音一键出片在「智能剪辑」页：选原片，可选写一句想留的内容，点「生成抖音短视频」。进度按转写、选段、渲染、成片显示。完成后点开 9:16 卡片，在手机画幅里预览，下载视频、封面和文案。不会自动发布。
+抖音一键出片在「智能剪辑」页：选原片，可选写一句想留的内容，点「生成抖音短视频」。进度按转写、选段、渲染、成片显示。没配文本模型时，选段改用口播密度，不会因为缺少 Key 整单失败；Key 无效或接口报错仍会失败，并在页面上写出原因。失败或取消后可以按同一条原片再试一次，任务中心里的下载和抖音成片也能重试。完成后点开 9:16 卡片，在手机画幅里预览，下载视频、封面和文案。不会自动发布。
 
-转写不另起服务。`VIDEO_HUB_ASR_URL` 留空时，后端在这次任务里加载 faster-whisper，超过 300 秒会先抽音频再分段，避免整段波形进内存。旧的共享 ASR（8600）、解说引擎（8601）、字幕预览（8502）和 `edit-narrate` 旁路都不再启动。
+中文口播走查在 `backend/tests/fixtures/zh_talk.mp3`（edge-tts 晓晓合成的四句中文，已放进仓库）。espeak-ng 的中文声线 Whisper 听不懂，所以不用它。日常测试不跑这条，需要时：
+
+```bash
+cd backend
+VIDEO_HUB_AUTH_MODE=off VIDEO_HUB_RUN_E2E=1 VIDEO_HUB_WHISPER_MODEL=tiny PYTHONPATH=.. .venv/bin/python -m unittest tests.test_douyin_speech_e2e -v
+```
+
+它会核对转写里有「今天 / 结论 / 原因 / 最后」，字幕稿含「结论」，并导出横屏、竖屏、方形和带汉字的封面。`tests.test_main_workflows` 在普通测试里跑：yt-dlp 下载本机短片、本地上传、漫剧规划后取消、ffmpeg 分段录制。
+
+转写不另起服务。`VIDEO_HUB_ASR_URL` 留空时，后端在这次任务里加载 faster-whisper，超过 300 秒会先抽音频再分段，避免整段波形进内存。取消成片任务时，抽音频的 ffmpeg 会一起停掉。失败或取消后，成片页可以按同一条原片再试一次。
 
 ## 主要配置
 
@@ -71,12 +80,23 @@ npm run dev
 | `VIDEO_HUB_DOUYIN_MAX_SECONDS` | `60` | 单条最长秒数 |
 | `VIDEO_HUB_DOUYIN_WIDTH` / `VIDEO_HUB_DOUYIN_HEIGHT` | `1080` / `1920` | 竖屏输出。内存紧时可改成 `720` / `1280` |
 | `VIDEO_HUB_DOUYIN_FFMPEG_THREADS` | `1` | 单条编码线程，最大 2 |
+| `VIDEO_HUB_RENDER_SLOTS` | `1` | 同时进行的重编码/转写路数，最大 2。内存宽裕再改成 2 |
 | `AGNES_MEDIA_BASE_URL` | `https://api.agnes-ai.cn/v1` | AI 图片/视频 |
 | `AGNES_IMAGE_MODEL` | `agnes-image-2.5-flash` | 图片模型 |
 | `AGNES_VIDEO_MODEL` | `agnes-video-2.5-flash` | 视频模型 |
 | `VIDEO_HUB_PUBLIC_BASE_URL` | `http://127.0.0.1:8000` | 外部模型可访问的参考图地址 |
 
 AI 分析会把字幕、提示词和抽帧发送给配置的模型服务。不要把密钥写进源码；使用 `.env` 或页面 AI 模型设置。
+
+## 性能（本机实测）
+
+| 项目 | 优化前 | 优化后 |
+|---|---|---|
+| 后端 import | 第一次冷启动 2.22 秒，峰值约 59MB | 依赖已缓存后重复 import 0.33 秒。启动时收口中断的录制、理解和磁盘任务，并清掉超过 24 小时的临时文件 |
+| 列出 400 条素材 | 平均 12.9 毫秒，SQL 读出整份理解 JSON | 平均 17 毫秒，400 条响应约 140KB，只有摘要，不含抽帧轨迹。来源、创建时间、录制状态加了索引 |
+| 任务列表 | 平均 1.7 毫秒 | 平均 1.7 毫秒。重启后仍标着进行中的磁盘任务会改成失败 |
+| 中文口播成片 | 6.5 秒，峰值约 66MB（whisper tiny，模型已在缓存） | 同样的路径。磁盘剩余不足 512MB 时渲染和导出会直接拒绝 |
+| 前端首屏 JS | react 161KB + 图标包 121KB + 入口 85KB，合计约 367KB | react 161KB + 入口 152KB，合计约 313KB。图标按页面拆开，不再先下一整包 |
 
 ## 测试
 
@@ -85,10 +105,12 @@ cd backend
 VIDEO_HUB_AUTH_MODE=off PYTHONPATH=.. .venv/bin/python -m unittest discover -s tests -v
 
 cd ../frontend
+npm run typecheck
+npm run lint
 npm run build
 ```
 
-外部模型在单元测试中使用本地假服务。真实生成质量仍需观看/试听确认，不能把自动分数当作审美证明。
+GitHub Actions 跑 `ruff check`、上面的单元测试，以及前端 `tsc --noEmit`、eslint 和构建。外部模型在单元测试中使用本地假服务。真实生成质量仍需观看/试听确认，不能把自动分数当作审美证明。
 
 ## 数据与迁移
 
@@ -109,18 +131,22 @@ cd backend
 
 默认部署到 `root@39.105.112.189:/opt/video-hub`，可用 `SERVER_USER`、`SERVER_IP` 覆盖。脚本运行测试和前端构建，再同步代码、安装依赖、执行迁移、只启动 `video-hub-backend`，并停用 `narrato-engine`、`narrato-preview`、`narrato-asr`、`video-hub-edit-narrate`。Nginx 只反代 `/api/`。
 
-同步排除 `.env`、数据库、媒体和模型。配置备份在 `/opt/video-hub-backups/<时间戳>`。这些目录里的旧媒体不会删除。
+同步排除 `.env`、数据库、媒体、模型和整个 `narratoai/` 目录，避免 `--delete` 清掉服务器上还留着的旧成片。配置备份在 `/opt/video-hub-backups/<时间戳>`。这些目录里的旧媒体不会删除。迁移脚本仍读取 `narratoai/storage/tasks`（或 `VIDEO_HUB_NARRATO_TASKS_DIR`）。
 
-Docker Compose 只有 `backend` 和 `web`。生产机用的是 systemd，不是 Compose。
+Docker Compose 只有 `backend` 和 `web`。镜像里带上 `engine/` 和后端。生产机用的是 systemd，不是 Compose。封面与导出在后端进程内完成，不再调用独立的 Narrato 解释器。
 
 若 `/opt/video-hub/.env` 里还有 `VIDEO_HUB_ASR_URL=http://127.0.0.1:8600/...`，部署脚本会删掉这一行，否则后端还会去连已经停掉的 ASR。指向其他主机的 `VIDEO_HUB_ASR_URL` 会保留。内存紧时可以在 `.env` 加 `VIDEO_HUB_DOUYIN_WIDTH=720` 和 `VIDEO_HUB_DOUYIN_HEIGHT=1280`，不必改仓库默认值。
 
 ## 已移除的旧链路
 
-- 常驻解说引擎（8601）、共享 ASR（8600）、字幕预览（8502），以及 `edit-narrate` 旁路（8765）。转写改到后端进程内按需执行。
-- 工作台里的「AI 解说」入口。旧地址 `/narrate` 会回到智能剪辑。
+仓库里不再包含这些目录和入口。服务器上已有的 `narratoai/storage` 仍由部署脚本原样保留，只给迁移脚本读，不会再启动。
+
+- `narratoai/` 源码、`edit-narrate/` 旁路、`browser-use-demo/`、`services/asr`、`services/subtitle-preview`。
+- 常驻解说引擎（8601）、共享 ASR（8600）、字幕预览（8502）。转写改到后端进程内按需执行。`/api/narrate` 不再提供。
+- 工作台里的「AI 解说」入口。旧地址 `/narrate` 和 `/narrato` 会回到智能剪辑。
 - 旧 Streamlit 与 `legacy-tasks` 页面/API。
 - 浏览器自动发布、扫码登录、短信验证码和平台账号页；发布替换为“封面与导出”。
 - 主播监控自动开录；保留手动录制。
 - 作者主页抓取；替换为只存链接和笔记的灵感库。
 - 抖音/快手手写 HTML 下载器；下载只保留 yt-dlp 与本地上传。
+- 解说用人声（edge-tts）。当前成片直接用原片口播，不再合成旁白。

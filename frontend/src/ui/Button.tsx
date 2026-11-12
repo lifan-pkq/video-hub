@@ -36,6 +36,7 @@ const Button = forwardRef<HTMLButtonElement, Props>(function Button(
       ref={ref}
       type={type}
       disabled={disabled || loading}
+      aria-busy={loading || undefined}
       className={`inline-flex select-none items-center justify-center font-medium transition-all duration-150 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60 ${VARIANT[variant]} ${SIZE[size]} ${full ? 'w-full' : ''} ${className}`}
       {...rest}
     >

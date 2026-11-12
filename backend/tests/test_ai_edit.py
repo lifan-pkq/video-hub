@@ -164,7 +164,7 @@ class TranscriptAnalysisTests(unittest.TestCase):
 
 class LocalChunkedTranscriptionTests(unittest.TestCase):
     def test_long_audio_is_transcribed_in_chunks(self):
-        from app.services.ai_edit import _transcribe_local
+        from app.services.transcription import _transcribe_local
 
         class Info:
             language = "zh"
@@ -172,12 +172,12 @@ class LocalChunkedTranscriptionTests(unittest.TestCase):
 
         model = Mock()
         model.transcribe.return_value = ([], Info())
-        with patch("app.services.ai_edit._get_model", return_value=model), \
-                patch("app.services.ai_edit.shutil.which", return_value="/usr/bin/ffmpeg"), \
-                patch("app.services.ai_edit.probe_video", return_value={"duration": 650}), \
-                patch("app.services.ai_edit._extract_audio") as extract, \
-                patch("app.services.ai_edit._cut_audio_segment") as cut, \
-                patch("app.services.ai_edit._decode_audio_array", return_value=object()) as decode:
+        with patch("app.services.transcription._get_model", return_value=model), \
+                patch("app.services.transcription.shutil.which", return_value="/usr/bin/ffmpeg"), \
+                patch("app.services.transcription.probe_video", return_value={"duration": 650}), \
+                patch("app.services.transcription._extract_audio") as extract, \
+                patch("app.services.transcription._cut_audio_segment") as cut, \
+                patch("app.services.transcription._decode_audio_array", return_value=object()) as decode:
             result = _transcribe_local(Path("long.mp4"), log=lambda _: None)
 
         self.assertEqual(result, [])
@@ -187,7 +187,7 @@ class LocalChunkedTranscriptionTests(unittest.TestCase):
         self.assertEqual(model.transcribe.call_count, 3)
 
     def test_short_audio_stays_one_pass(self):
-        from app.services.ai_edit import _transcribe_local
+        from app.services.transcription import _transcribe_local
 
         class Info:
             language = "zh"
@@ -195,17 +195,25 @@ class LocalChunkedTranscriptionTests(unittest.TestCase):
 
         model = Mock()
         model.transcribe.return_value = ([], Info())
-        with patch("app.services.ai_edit._get_model", return_value=model), \
-                patch("app.services.ai_edit.shutil.which", return_value="/usr/bin/ffmpeg"), \
-                patch("app.services.ai_edit.probe_video", return_value={"duration": 8}), \
-                patch("app.services.ai_edit._extract_audio") as extract, \
-                patch("app.services.ai_edit._cut_audio_segment") as cut, \
-                patch("app.services.ai_edit._decode_audio_array", return_value=object()):
+        with patch("app.services.transcription._get_model", return_value=model), \
+                patch("app.services.transcription.shutil.which", return_value="/usr/bin/ffmpeg"), \
+                patch("app.services.transcription.probe_video", return_value={"duration": 8}), \
+                patch("app.services.transcription._extract_audio") as extract, \
+                patch("app.services.transcription._cut_audio_segment") as cut, \
+                patch("app.services.transcription._decode_audio_array", return_value=object()):
             _transcribe_local(Path("short.mp4"), log=lambda _: None)
 
         extract.assert_not_called()
         cut.assert_not_called()
         model.transcribe.assert_called_once()
+
+
+class TranscriptionCancelTests(unittest.TestCase):
+    def test_cancel_before_start_does_not_touch_the_file(self):
+        from app.services.ai_edit import TranscriptionCancelled, transcribe
+
+        with self.assertRaises(TranscriptionCancelled):
+            transcribe(Path("missing.mp4"), should_cancel=lambda: True)
 
 
 if __name__ == "__main__":

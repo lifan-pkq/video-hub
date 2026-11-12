@@ -3,16 +3,15 @@
 from __future__ import annotations
 
 import json
-import os
-import subprocess
 import threading
 import time
 import uuid
 from pathlib import Path
 from typing import Any
 
-from app.config import DATA_DIR, NARRATOAI_PYTHON, NARRATOAI_ROOT, NARRATO_TASKS_DIR, VIDEOS_DIR
+from app.config import DATA_DIR, NARRATO_TASKS_DIR, VIDEOS_DIR
 from app.db import get_video
+from app.services.export_bundle import ExportBundleError, export_bundle
 
 EXPORTS_DIR = DATA_DIR / "exports"
 UNDERSTANDING_DIR = DATA_DIR / "understanding"
@@ -21,6 +20,7 @@ MANIFEST_FILE = "manifest.json"
 
 # 同一视频只允许一份进行中的导出：video_id -> export_id（进程重启后由磁盘 status.json 收口）
 _running: dict[int, str] = {}
+_cancel: set[str] = set()
 _lock = threading.Lock()
 
 
@@ -36,6 +36,10 @@ def create_export(video_id: int) -> dict[str, Any]:
     source = VIDEOS_DIR / video["filename"]
     if not source.is_file():
         raise ExportError("视频文件已丢失")
+    from app.services.media import free_mb
+
+    if free_mb(EXPORTS_DIR if EXPORTS_DIR.exists() else DATA_DIR) < 512:
+        raise ExportError("磁盘剩余不足 512MB，无法导出。请先清理临时文件或素材。")
     with _lock:
         running_id = _running.get(video_id)
         if running_id and (EXPORTS_DIR / running_id / STATUS_FILE).is_file():
@@ -64,6 +68,22 @@ def create_export(video_id: int) -> dict[str, Any]:
     return _status_record(export_id)
 
 
+def cancel_export(export_id: str) -> dict[str, Any]:
+    """请求取消进行中的导出。已经成功或失败的记录保持原样。"""
+    if not export_id.isalnum() or len(export_id) > 32:
+        raise ExportError("导出 ID 不合法")
+    status = _read_status(export_id)
+    if not status and not (EXPORTS_DIR / export_id).is_dir():
+        raise ExportError("导出不存在")
+    if status.get("status") in {"success", "failed", "cancelled"}:
+        return _record(status, export_id)
+    with _lock:
+        _cancel.add(export_id)
+    if not _is_live(export_id):
+        return _write_status(export_id, "cancelled", error="导出已取消")
+    return _record({**status, "status": "running", "label": "正在取消"}, export_id)
+
+
 def get_export(export_id: str) -> dict[str, Any]:
     """读取导出记录：running/failed 读 status.json，success 读并回写富化后的 manifest。"""
     if not export_id.isalnum() or len(export_id) > 32:
@@ -89,6 +109,8 @@ def get_export(export_id: str) -> dict[str, Any]:
 
 
 def select_export(export_id: str, cover: str = "", title: str = "") -> dict[str, Any]:
+    if not export_id.isalnum() or len(export_id) > 32:
+        raise ExportError("导出不存在")
     manifest_path = EXPORTS_DIR / export_id / MANIFEST_FILE
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -107,11 +129,11 @@ def select_export(export_id: str, cover: str = "", title: str = "") -> dict[str,
 
 
 def export_file(export_id: str, name: str) -> Path:
+    safe = Path(name).name
+    if not export_id.isalnum() or len(export_id) > 32 or safe != name or not safe:
+        raise ExportError("文件不存在")
     if get_export(export_id).get("status") != "success":
         raise ExportError("导出尚未完成")
-    safe = Path(name).name
-    if safe != name:
-        raise ExportError("文件不存在")
     path = EXPORTS_DIR / export_id / safe
     if not path.is_file():
         raise ExportError("文件不存在")
@@ -137,47 +159,59 @@ def _subject_track(video_id: int) -> Path | None:
     return path if path.is_file() else None
 
 
+def run_bundle(
+    source: Path,
+    work_dir: Path,
+    title: str,
+    task_dir: Path | None,
+    subject_track: Path | None,
+    on_progress=None,
+) -> dict[str, Any]:
+    """导出套装。测试会替换这个函数，避免真的跑 ffmpeg。"""
+    return export_bundle(
+        source, work_dir, title, task_dir, subject_track, on_progress=on_progress,
+    )
+
+
 def _run_export(video_id: int, export_id: str, source: Path, task_dir: Path | None, title: str) -> None:
     work_dir = EXPORTS_DIR / export_id
-    command = [
-        str(NARRATOAI_PYTHON), "-m", "engine.export_task",
-        "--source", str(source), "--work-dir", str(work_dir), "--title", title,
-    ]
-    if task_dir:
-        command.extend(["--task-dir", str(task_dir)])
     track = _subject_track(video_id)
-    if track:
-        command.extend(["--subject-track", str(track)])
-    env = os.environ.copy()
-    env["PYTHONPATH"] = str(NARRATOAI_ROOT) + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+
+    def on_progress(value: float, label: str) -> None:
+        if _cancelled(export_id):
+            raise ExportBundleError("导出已取消")
+        _write_status(export_id, "running", video_id=video_id, progress=round(value, 1), label=label)
+
     try:
         try:
-            result = subprocess.run(
-                command, cwd=NARRATOAI_ROOT, env=env, capture_output=True,
-                text=True, timeout=7200, check=False,
-            )
-        except (OSError, subprocess.SubprocessError) as exc:
-            _write_status(export_id, "failed", error=f"导出进程失败：{exc}")
+            manifest = run_bundle(source, work_dir, title, task_dir, track, on_progress=on_progress)
+        except ExportBundleError as exc:
+            state = "cancelled" if "取消" in str(exc) else "failed"
+            _write_status(export_id, state, video_id=video_id, error=str(exc)[-1000:] or "导出失败")
             return
-        if result.returncode != 0:
-            _write_status(export_id, "failed", error=(result.stderr or result.stdout or "导出失败")[-1000:])
+        except (OSError, ValueError) as exc:
+            _write_status(export_id, "failed", video_id=video_id, error=str(exc)[-1000:] or "导出失败")
             return
-        try:
-            manifest = json.loads((work_dir / MANIFEST_FILE).read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            _write_status(export_id, "failed", error="导出进程未产出清单")
+        except Exception as exc:  # noqa: BLE001 - 导出线程必须把原因写进状态
+            _write_status(export_id, "failed", video_id=video_id, error=str(exc)[-1000:] or "导出失败")
             return
         if not isinstance(manifest, dict) or not manifest.get("archive"):
-            _write_status(export_id, "failed", error="导出进程未完成打包")
+            _write_status(export_id, "failed", video_id=video_id, error="导出未完成打包")
             return
         _enrich(export_id, manifest, work_dir / MANIFEST_FILE)
-        _write_status(export_id, "success")
+        _write_status(export_id, "success", video_id=video_id, progress=100, label="导出完成")
     finally:
         _forget(video_id, export_id)
 
 
+def _cancelled(export_id: str) -> bool:
+    with _lock:
+        return export_id in _cancel
+
+
 def _forget(video_id: int, export_id: str) -> None:
     with _lock:
+        _cancel.discard(export_id)
         if _running.get(video_id) == export_id:
             _running.pop(video_id, None)
 
@@ -194,12 +228,23 @@ def _enrich(export_id: str, manifest: dict[str, Any], path: Path) -> dict[str, A
     return record
 
 
+def _atomic_text(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    temporary.write_text(text, encoding="utf-8")
+    temporary.replace(path)
+
+
 def _write_manifest(path: Path, record: dict[str, Any]) -> None:
     payload = {k: v for k, v in record.items() if k not in ("status", "download_url", "error")}
     try:
-        if json.loads(path.read_text(encoding="utf-8")) == payload:
-            return
-        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        current = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        current = None
+    if current == payload:
+        return
+    try:
+        _atomic_text(path, json.dumps(payload, ensure_ascii=False, indent=2))
     except OSError:
         pass
 
@@ -219,9 +264,9 @@ def _status_record(export_id: str) -> dict[str, Any]:
 def _write_status(export_id: str, status: str, **fields: Any) -> dict[str, Any]:
     payload = {"status": status, "updated_at": time.strftime("%Y-%m-%d %H:%M:%S"), **fields}
     try:
-        (EXPORTS_DIR / export_id).mkdir(parents=True, exist_ok=True)
-        (EXPORTS_DIR / export_id / STATUS_FILE).write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+        _atomic_text(
+            EXPORTS_DIR / export_id / STATUS_FILE,
+            json.dumps(payload, ensure_ascii=False, indent=2),
         )
     except OSError:
         pass

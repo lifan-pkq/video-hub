@@ -12,7 +12,6 @@ import yt_dlp
 from app.config import COVERS_DIR, DOWNLOAD_TIMEOUT, TMP_DIR, VIDEOS_DIR, ensure_dirs
 from app.db import add_video, update_video
 from app.services.cookies import make_ytdlp_cookiefile
-from app.services.douyin_fallback import download_douyin, is_douyin_url, parse_douyin
 from app.services.media import ensure_h264, make_cover, probe_video
 from app.services.quality import assess_source
 from app.services.understanding import start_analysis
@@ -39,6 +38,12 @@ def explain_download_error(message: str) -> dict:
             "code": "download_failed",
             "message": (text[:400] or "下载失败"),
             "action": "确认链接仍可在抖音 App / 浏览器打开；图文作品请改用本地上传。",
+        }
+    if any(marker in lower for marker in ("timed out", "timeout", "timeouterror", "read timed out")):
+        return {
+            "code": "download_timeout",
+            "message": "解析或下载超时，平台没有在时限内返回视频。",
+            "action": "检查网络和代理后重试；仍失败就把原片上传到素材库。",
         }
     if any(marker in lower for marker in ("fresh cookies", "cookies are needed", "sign in to confirm", "login required", "cookie")):
         return {
@@ -110,40 +115,18 @@ def _best_format(info: dict) -> dict:
 
 def parse_video(text: str) -> dict:
     url = extract_url(text)
-    try:
-        with yt_dlp.YoutubeDL({**_base_opts(url), "skip_download": True}) as ydl:
-            info = ydl.extract_info(url, download=False)
-        return {
-            "url": url,
-            "title": info.get("title") or "未命名视频",
-            "author": info.get("uploader") or info.get("channel"),
-            "cover_url": info.get("thumbnail"),
-            "duration": info.get("duration"),
-            "platform": (info.get("extractor_key") or "unknown").lower(),
-            "video_id": info.get("id"),
-            "available_best": _best_format(info),
-        }
-    except Exception as ytdlp_exc:
-        if not is_douyin_url(url):
-            raise
-        try:
-            info = parse_douyin(url)
-        except Exception as fallback_exc:
-            raise RuntimeError(
-                f"yt-dlp 解析失败且 iesdouyin 备用解析也失败：{fallback_exc}"
-            ) from fallback_exc
-        return {
-            "url": url,
-            "title": info.get("title") or "未命名视频",
-            "author": info.get("uploader"),
-            "cover_url": info.get("thumbnail"),
-            "duration": info.get("duration"),
-            "platform": "douyin",
-            "video_id": info.get("id"),
-            "available_best": _best_format(info),
-            "fallback": "iesdouyin",
-            "ytdlp_error": str(ytdlp_exc)[:200],
-        }
+    with yt_dlp.YoutubeDL({**_base_opts(url), "skip_download": True}) as ydl:
+        info = ydl.extract_info(url, download=False)
+    return {
+        "url": url,
+        "title": info.get("title") or "未命名视频",
+        "author": info.get("uploader") or info.get("channel"),
+        "cover_url": info.get("thumbnail"),
+        "duration": info.get("duration"),
+        "platform": (info.get("extractor_key") or "unknown").lower(),
+        "video_id": info.get("id"),
+        "available_best": _best_format(info),
+    }
 
 
 def _task_tmp_dir(task) -> Path:
@@ -178,25 +161,8 @@ def _ytdlp_download(task, url: str, use_cookie: bool = True) -> tuple[Path, dict
     return downloaded, info
 
 
-def _douyin_fallback_download(task, url: str) -> tuple[Path, dict]:
-    task.log("使用 iesdouyin 分享页备用下载…")
-    out = _task_tmp_dir(task) / "douyin_fallback.mp4"
-    info = download_douyin(url, out)
-    if getattr(task, "cancelled", False):
-        raise DownloadCancelled("下载已取消")
-    # 用 aweme id 作为文件名，与 yt-dlp 下游命名习惯一致
-    vid = re.sub(r"[^A-Za-z0-9_-]", "_", str(info.get("id") or "douyin"))[:64]
-    named = out.with_name(f"{vid}.mp4")
-    if named != out:
-        if named.exists():
-            named.unlink()
-        out.replace(named)
-        out = named
-    task.progress = max(float(getattr(task, "progress", 0) or 0), 90.0)
-    return out, info
-
-
 def _download_with_fallback(task, url: str) -> tuple[Path, dict]:
+    """只走 yt-dlp：先匿名，有本地 Cookie 再重试一次。不再抓分享页 HTML。"""
     last_exc: Exception | None = None
     try:
         task.log("使用 yt-dlp 获取最高质量无水印可用源…")
@@ -214,19 +180,8 @@ def _download_with_fallback(task, url: str) -> tuple[Path, dict]:
                 raise
             except Exception as cookie_exc:
                 last_exc = cookie_exc
-
-    if is_douyin_url(url):
-        try:
-            return _douyin_fallback_download(task, url)
-        except DownloadCancelled:
-            raise
-        except Exception as fallback_exc:
-            raise RuntimeError(
-                f"yt-dlp 与 iesdouyin 备用下载均失败：{fallback_exc}（此前：{last_exc}）"
-            ) from fallback_exc
-
     raise RuntimeError(
-        f"无法通过 yt-dlp 获取视频，建议下载原片后上传：{last_exc}"
+        f"无法通过 yt-dlp 获取视频。可换一条链接，或下载原片后在素材库上传：{last_exc}"
     ) from last_exc
 
 

@@ -17,14 +17,21 @@ import RequestState from '../ui/RequestState'
 import StatusBadge from '../components/StatusBadge'
 
 function healthRows(health: HealthReport): Array<{ label: string; ok: boolean; detail: string }> {
-  const tts = (health.tts || []).filter((item) => item.id !== 'tone' && item.available)
   const asrLabel = health.asr === 'remote' ? '使用外部转写接口' : health.asr === 'whisper' ? '本机按需转写，长音频分段' : '未安装 faster-whisper，智能剪辑无法转写'
   return [
     { label: 'ffmpeg', ok: !!health.ffmpeg, detail: health.ffmpeg ? '剪辑和导出可用' : '未安装，剪辑与导出无法出片' },
-    { label: '文本模型', ok: !!health.llm, detail: health.llm ? '抖音选段可用' : '未配置 VIDEO_HUB_AI_*，只能用本地信号' },
+    { label: '文本模型', ok: !!health.llm, detail: health.llm ? '抖音选段和标题可用' : '未配置 VIDEO_HUB_AI_*，选段会用本地规则' },
     { label: '画面模型', ok: !!health.vision, detail: health.vision ? '抽帧说明可用' : '未配置视觉模型，抽帧仍会保留' },
     { label: '语音识别', ok: health.asr === 'remote' || health.asr === 'whisper', detail: asrLabel },
-    { label: '语音合成', ok: tts.length > 0, detail: tts.length ? tts.map((item) => item.id).join('、') + ' 可用' : '未安装 edge-tts，也没有 TTS 接口' },
+    {
+      label: '磁盘剩余',
+      ok: (health.disk_free_mb ?? 1024) >= 512,
+      detail: health.disk_free_mb == null
+        ? '还没读到剩余空间'
+        : health.disk_free_mb < 512
+          ? `只剩 ${health.disk_free_mb} MB，渲染和导出会停下来`
+          : `约 ${health.disk_free_mb} MB`,
+    },
   ]
 }
 

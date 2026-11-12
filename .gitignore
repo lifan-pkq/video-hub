@@ -17,13 +17,8 @@ publisher/logs/
 publisher/media/
 publisher/db/
 
-# NarratoAI 与共享服务运行数据
-narratoai/config.toml*
-narratoai/storage/
-narratoai/.cache/
-narratoai/resource/scripts/
-narratoai/resource/videos/
-services/.venv/
+# 服务器上可能还留着旧 Narrato 媒体，不要把它们提交回来
+narratoai/
 /models/
 
 # 系统

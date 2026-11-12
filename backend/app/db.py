@@ -141,6 +141,10 @@ def _init_schema(conn: sqlite3.Connection):
             note TEXT DEFAULT '',
             created_at TEXT NOT NULL
         );
+        CREATE INDEX IF NOT EXISTS idx_videos_source ON videos(source_platform, source_url);
+        CREATE INDEX IF NOT EXISTS idx_videos_created ON videos(created_at);
+        CREATE INDEX IF NOT EXISTS idx_recordings_status ON recordings(status);
+        CREATE INDEX IF NOT EXISTS idx_inspirations_created ON inspirations(id);
         """
     )
     # 老库兼容：只增列，不删除历史数据。
@@ -426,6 +430,44 @@ def list_videos() -> list[dict]:
     with _lock:
         rows = _get_conn().execute("SELECT * FROM videos ORDER BY id DESC").fetchall()
         return [_video_row(row) for row in rows]
+
+
+def _json_list(raw) -> list:
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw) if isinstance(raw, str) else raw
+    except (TypeError, ValueError):
+        return []
+    return parsed if isinstance(parsed, list) else []
+
+
+def list_videos_for_library() -> list[dict]:
+    """素材库列表不读整份 analysis_json（里面有抽帧和轨迹），只取出卡片要用的摘要。"""
+    with _lock:
+        rows = _get_conn().execute(
+            """
+            SELECT id, title, filename, size, duration, width, height, cover,
+                   source_platform, source_url, quality_score, analysis_status,
+                   analysis_error, created_at,
+                   json_extract(analysis_json, '$.summary') AS summary,
+                   json_extract(analysis_json, '$.people') AS people,
+                   json_extract(analysis_json, '$.scenes') AS scenes,
+                   json_extract(analysis_json, '$.emotion_tags') AS emotion_tags
+            FROM videos ORDER BY id DESC
+            """
+        ).fetchall()
+    items = []
+    for row in rows:
+        item = dict(row)
+        summary = item.pop("summary", None)
+        people = _json_list(item.pop("people", None))
+        scenes = _json_list(item.pop("scenes", None))
+        tags = _json_list(item.pop("emotion_tags", None))
+        item["analysis"] = {"summary": summary, "people": people, "scenes": scenes, "emotion_tags": tags} if summary or people or scenes or tags else None
+        item["quality"] = None
+        items.append(item)
+    return items
 
 
 def update_video(video_id: int, **fields):

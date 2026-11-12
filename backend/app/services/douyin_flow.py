@@ -9,7 +9,7 @@ from pathlib import Path
 from engine.errors import EngineError
 from app.config import douyin_settings
 from app.jobs import cancelled, report, update
-from app.services.ai_edit import AIResponseError, AIServiceError, transcribe
+from app.services.ai_edit import AIResponseError, AIServiceError, TranscriptionCancelled, transcribe
 from app.services.douyin_plan import (
     boxes_from_understanding,
     build_subject_track,
@@ -74,12 +74,14 @@ def produce_douyin(
     layout = "podcast" if layout == "podcast" else "interview"
     report(job_id, 4, "asr", f"转写「{title}」")
     try:
-        segments = transcribe(source, log=_log(job_id))
+        segments = transcribe(source, log=_log(job_id), job_id=job_id, should_cancel=_check(job_id))
+    except TranscriptionCancelled as exc:
+        raise EngineError("任务已取消", code="cancelled", status=409) from exc
     except (AIServiceError, AIResponseError) as exc:
         raise EngineError(
             str(exc),
             code="asr",
-            action="确认共享 ASR 或本机 ffmpeg / whisper 可用。长视频会自动分段转写。",
+            action="确认本机 ffmpeg 和 faster-whisper 可用。长视频会先抽音频再按 300 秒分段，避免整段进内存。",
             status=502,
         ) from exc
     if not segments:
@@ -110,6 +112,15 @@ def produce_douyin(
     clips = plan["clips"]
     root = data_dir() / "douyin" / job_id
     root.mkdir(parents=True, exist_ok=True)
+    from app.services.media import free_mb
+
+    if free_mb(root) < 512:
+        raise EngineError(
+            "磁盘剩余不足 512MB，停止渲染。",
+            code="disk",
+            action="到系统页清理临时文件，或把 VIDEO_HUB_DOUYIN_WIDTH 改成 720。",
+            status=507,
+        )
     boxes = [] if layout == "podcast" else load_subject_boxes(video_id)
     shorts = []
     failures: list[str] = []

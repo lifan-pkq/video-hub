@@ -95,6 +95,7 @@ export default function EditResultPage() {
   const [pickerTab, setPickerTab] = useState<'image' | 'video'>('image')
   const videoRef = useRef<HTMLVideoElement>(null)
   const playing = useRef(false)
+  const togglePlayRef = useRef<() => void>(() => {})
   const trimBase = useRef<EditDoc | null>(null)
   const restored = useRef(false)
   const docRef = useRef(doc)
@@ -197,7 +198,7 @@ export default function EditResultPage() {
         if (loaded.error?.message) setBanner({ message: loaded.error.message, action: loaded.error.action })
       })
       .catch((error: unknown) => setBanner({ message: errorMessage(error), action: '回到素材库重新发起分析。' }))
-  }, [params, location.state, planSource, reset, taskId, videos])
+  }, [navigate, params, location.state, planSource, reset, taskId, videos])
 
   useEffect(() => {
     if (!restored.current || taskId) return
@@ -214,7 +215,7 @@ export default function EditResultPage() {
         else undo()
       } else if (event.code === 'Space') {
         event.preventDefault()
-        togglePlay()
+        togglePlayRef.current()
       } else if ((event.key === 'Delete' || event.key === 'Backspace') && selectedClipId) {
         event.preventDefault()
         commit({ ...docRef.current, clips: removeClip(docRef.current.clips, selectedClipId) })
@@ -423,6 +424,7 @@ export default function EditResultPage() {
     playing.current = true
     void node.play()
   }
+  togglePlayRef.current = togglePlay
 
   function onTimeUpdate() {
     const node = videoRef.current

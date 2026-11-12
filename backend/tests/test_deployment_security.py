@@ -12,7 +12,7 @@ class DeploymentSecurityTests(unittest.TestCase):
             for line in (ROOT / ".dockerignore").read_text().splitlines()
             if line.strip() and not line.startswith("#")
         }
-        self.assertTrue({"data", ".env", "**/.env", "narratoai/config.toml*", "narratoai/storage"}.issubset(lines))
+        self.assertTrue({"data", ".env", "**/.env", "narratoai/"}.issubset(lines))
 
     def test_deploy_script_avoids_destructive_and_insecure_operations(self):
         script = (ROOT / "deploy.sh").read_text()
@@ -26,7 +26,7 @@ class DeploymentSecurityTests(unittest.TestCase):
 
     def test_deploy_script_preserves_runtime_state_and_retries_health(self):
         script = (ROOT / "deploy.sh").read_text()
-        for excluded in ("data", ".env", "narratoai/storage", "narratoai/config.toml*"):
+        for excluded in ("data", ".env", "narratoai/"):
             self.assertIn(f"--exclude='{excluded}'", script)
         self.assertIn("curl -sf http://localhost/api/health", script)
         self.assertNotIn("127.0.0.1:8601", script)
@@ -89,8 +89,10 @@ class HostDeploymentTests(unittest.TestCase):
     def test_all_writable_narrato_resources_survive_code_sync(self):
         script = (ROOT / "deploy.sh").read_text()
         installer = (ROOT / "deploy/remote-install.sh").read_text()
+        self.assertIn("--exclude='narratoai/'", script)
+        self.assertIn("cp -a /opt/NarratoAI/storage", installer)
+        self.assertNotIn("narratoai/.venv", installer)
         for directory in ("videos", "scripts", "bgm", "songs", "srt", "fonts", "safe_areas", "tts_reference_audio"):
-            self.assertIn(f"--exclude='narratoai/resource/{directory}'", script)
             self.assertIn(directory, installer)
 
     def test_existing_unified_stack_is_included_in_backups(self):

@@ -197,7 +197,7 @@ export default function EditPage() {
               </button>
             ))}
           </div>
-          <button className="studio-cta" type="submit" disabled={starting || !selectedVideoId}>
+          <button className="studio-cta" type="submit" disabled={starting || !selectedVideoId} aria-busy={starting}>
             {starting ? '正在提交…' : '生成抖音短视频'}
           </button>
           <p className="studio-fine">

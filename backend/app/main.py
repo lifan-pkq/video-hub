@@ -1,4 +1,4 @@
-"""Video Hub：素材、理解、剪辑、解说、AI 创作与成品导出。"""
+"""Video Hub：素材、剪辑、AI 创作与成品导出。"""
 import asyncio
 import sys
 from pathlib import Path
@@ -15,9 +15,10 @@ from pydantic import BaseModel
 from app import auth
 from app.config import CORS_ORIGINS, ensure_dirs
 from app.db import fail_interrupted_recordings
+from app.jobs import fail_interrupted_jobs
 from app.services.understanding import fail_interrupted_analyses
 from app.routers import (
-    ai, download, drama, edit, events, exports, inspirations, jobs, maintenance, narrate, profiles,
+    ai, download, drama, edit, events, exports, inspirations, jobs, maintenance, profiles,
     recordings, stats, system, understanding, videos,
 )
 from app.services import drama_store, maintenance as maintenance_service, narrato_import
@@ -74,7 +75,6 @@ app.include_router(download.router)
 app.include_router(recordings.router)
 app.include_router(stats.router)
 app.include_router(events.router)
-app.include_router(narrate.router)
 app.include_router(system.router)
 app.include_router(maintenance.router)
 app.include_router(ai.router)
@@ -91,7 +91,9 @@ async def _startup():
     event_hub.bind_loop()
     fail_interrupted_recordings()
     fail_interrupted_analyses()
+    fail_interrupted_jobs()
     drama_store.interrupt_active_projects()
+    maintenance_service.sweep_temp()
     asyncio.create_task(narrato_import.importer_loop())
     asyncio.create_task(maintenance_service.maintenance_loop())
 
@@ -102,7 +104,6 @@ def health():
 
     from engine.llm import configured
     from engine.settings import asr_url, vision_configured
-    from engine.tts import engine_status
 
     asr = "remote" if asr_url() else "unconfigured"
     try:
@@ -112,11 +113,14 @@ def health():
             asr = "whisper"
     except Exception:
         pass
+    from app.config import DATA_DIR
+    from app.services.media import free_mb
+
     return {
         "status": "ok",
         "ffmpeg": bool(shutil.which("ffmpeg")),
         "llm": configured(),
         "vision": vision_configured(),
         "asr": asr,
-        "tts": engine_status(),
+        "disk_free_mb": free_mb(DATA_DIR),
     }

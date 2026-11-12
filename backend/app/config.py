@@ -1,6 +1,5 @@
 """全局配置：所有路径都可通过环境变量覆盖，方便本地与 Docker 部署。"""
 import os
-import sys
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent  # backend/
@@ -44,23 +43,10 @@ VISION_MODEL = os.environ.get("VIDEO_HUB_VISION_MODEL", "")
 # VIDEO_HUB_ASR_URL 仅作可选的远端覆盖；留空就走本机分段转写。
 WHISPER_MODEL = os.environ.get("VIDEO_HUB_WHISPER_MODEL", "small")
 ASR_URL = os.environ.get("VIDEO_HUB_ASR_URL", "").strip()
+# 旧 Narrato 成片目录。源码已不在仓库里；服务器上若还留着 storage/tasks，迁移脚本仍会读它。
 NARRATO_TASKS_DIR = Path(os.environ.get(
     "VIDEO_HUB_NARRATO_TASKS_DIR", BASE_DIR.parent / "narratoai" / "storage" / "tasks"
 )).resolve()
-
-# 成品套装导出仍调用仓库里的 narratoai/engine/export_task.py，用当前解释器按需跑，
-# 不再安装或启动独立的解说引擎虚拟环境。
-NARRATOAI_ROOT = Path(os.environ.get("VIDEO_HUB_NARRATOAI_ROOT", BASE_DIR.parent / "narratoai")).resolve()
-NARRATOAI_PYTHON = Path(os.environ.get("VIDEO_HUB_NARRATOAI_PYTHON", sys.executable)).absolute()
-NARRATO_ENGINE_URL = os.environ.get("VIDEO_HUB_NARRATO_ENGINE_URL", "http://127.0.0.1:8601").rstrip("/")
-NARRATO_ENGINE_TOKEN = (
-    os.environ.get("VIDEO_HUB_NARRATO_ENGINE_TOKEN", "").strip()
-    or os.environ.get("NARRATO_ENGINE_TOKEN", "").strip()
-)
-try:
-    NARRATO_ENGINE_TIMEOUT = max(2.0, float(os.environ.get("VIDEO_HUB_NARRATO_ENGINE_TIMEOUT", "8")))
-except ValueError:
-    NARRATO_ENGINE_TIMEOUT = 8.0
 
 # Agnes 图像/视频模型（OpenAI 兼容媒体接口）
 AGNES_MEDIA_BASE_URL = os.environ.get("AGNES_MEDIA_BASE_URL", "https://api.agnes-ai.cn/v1").rstrip("/")

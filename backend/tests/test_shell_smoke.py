@@ -18,9 +18,9 @@ class ShellSmokeTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         body = response.json()
         self.assertEqual(body.get("status"), "ok")
-        for key in ("ffmpeg", "llm", "vision", "asr", "tts"):
+        for key in ("ffmpeg", "llm", "vision", "asr"):
             self.assertIn(key, body)
-        self.assertIsInstance(body["tts"], list)
+        self.assertNotIn("tts", body)
 
     def test_parse_rejects_blank_link(self):
         response = self.client.post("/api/download/parse", json={"text": "   "})

@@ -91,22 +91,6 @@ def asr_sidecar_enabled() -> bool:
     return _env("VIDEO_HUB_ASR_SIDECAR", "0") in {"1", "true", "yes"}
 
 
-def tts_base_url() -> str:
-    return (_env("VIDEO_HUB_TTS_BASE_URL") or ai_base_url()).rstrip("/")
-
-
-def tts_api_key() -> str:
-    return _env("VIDEO_HUB_TTS_API_KEY") or ai_api_key()
-
-
-def tts_model() -> str:
-    return _env("VIDEO_HUB_TTS_MODEL", "tts-1")
-
-
-def tts_voice() -> str:
-    return _env("VIDEO_HUB_TTS_VOICE", "alloy")
-
-
 def jobs_inline() -> bool:
     return _env("VIDEO_HUB_JOBS_INLINE", "0") in {"1", "true", "yes"}
 

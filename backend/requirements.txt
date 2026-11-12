@@ -8,5 +8,3 @@ requests>=2.32.0
 pillow>=10.4.0
 # TestClient / 路由层测试（部署脚本会在安装依赖后跑 unittest）
 httpx==0.28.1
-# 解说默认人声。未安装时引擎会改用兼容接口或 espeak，并在界面标明；不要把 tone 当生产默认。
-edge-tts>=6.1.0

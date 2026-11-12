@@ -81,14 +81,14 @@ def _transcribe_remote(audio: Path, url: str, timeout: float = 900) -> dict:
             )
     except httpx.HTTPError as exc:
         raise EngineError(
-            f"共享 ASR 无响应：{exc}",
+            f"远端转写无响应：{exc}",
             code="asr_http",
-            action=f"检查 VIDEO_HUB_ASR_URL={url} 是否就是转写接口，服务是否在 8600。",
+            action=f"检查 VIDEO_HUB_ASR_URL={url} 是否就是转写接口，以及那台服务是否在线。留空则改用本机 faster-whisper。",
             status=502,
         ) from exc
     if response.status_code >= 400:
         raise EngineError(
-            f"共享 ASR 返回 HTTP {response.status_code}：{response.text[:240]}",
+            f"远端转写返回 HTTP {response.status_code}：{response.text[:240]}",
             code="asr_http",
             action="确认接口接受 multipart 字段 file，并返回 segments 或 text。",
             status=502,
@@ -97,13 +97,13 @@ def _transcribe_remote(audio: Path, url: str, timeout: float = 900) -> dict:
         data = response.json()
     except json.JSONDecodeError as exc:
         raise EngineError(
-            "共享 ASR 返回的不是 JSON",
+            "远端转写返回的不是 JSON",
             code="asr_parse",
             action="接口需要返回 {\"segments\":[{\"start\",\"end\",\"text\"}]} 或 {\"text\"}。",
             status=502,
         ) from exc
     if not isinstance(data, dict):
-        raise EngineError("共享 ASR 的 JSON 不是对象", code="asr_parse", status=502)
+        raise EngineError("远端转写的 JSON 不是对象", code="asr_parse", status=502)
     return data
 
 
@@ -177,7 +177,7 @@ def transcribe(path: Path, *, source_platform: str = "", job_id: str | None = No
                 # 软失败：留下空转写，让解说页手动粘贴后继续，不整单失败
                 return {
                     "source": "asr",
-                    "warning": "共享 ASR 返回空文本。确认音轨里有人声，或在下方手动粘贴 / 填写转写。",
+                    "warning": "远端转写返回空文本。确认音轨里有人声，或在下方手动粘贴转写。",
                     "segments": [],
                 }
             return {"source": "asr", "warning": warning, "segments": merged}

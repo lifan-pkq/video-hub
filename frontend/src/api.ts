@@ -122,7 +122,15 @@ export interface Recording {
   elapsed?: number
   /** 仍在解析/握手/等待首帧，计时尚未开始 */
   starting?: boolean
-  segments?: Array<{ index: number; video_id: number; duration: number; size: number; quality_score: number; summary_status: string }>
+  /** 新录制只描述拼接来源；历史数据里每一段仍可能带自己的 video_id */
+  segments?: Array<{
+    index: number
+    video_id?: number
+    duration?: number | null
+    size?: number
+    quality_score?: number
+    summary_status?: string
+  }>
 }
 
 /** 画质档位 */

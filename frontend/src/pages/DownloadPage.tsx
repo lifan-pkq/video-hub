@@ -115,7 +115,7 @@ export default function DownloadPage() {
     <section>
       <PageHeader
         title="视频下载"
-        desc="只通过 yt-dlp 下载。Cookie 失效或画质拿不到时，会直接告诉你下一步。"
+        desc="粘贴链接即可下载，抖音无需 Cookie。失败会说明原因和下一步。"
         extra={<Link to="/tasks"><Button variant="ghost">任务中心</Button></Link>}
       />
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1.2fr)_minmax(300px,0.8fr)]">
@@ -138,7 +138,7 @@ export default function DownloadPage() {
           </Panel>
           <Panel title="这次提交的下载" extra={<Link to="/tasks" className="text-xs text-accent">全部任务 →</Link>}>
             {tasks.length === 0 ? (
-              <EmptyState title="还没有下载任务" desc="提交后可以离开页面。失败会带上原因，例如 Cookie 需要更新。" />
+              <EmptyState title="还没有下载任务" desc="提交后可以离开页面。失败会带上原因和处理建议。" />
             ) : (
               <div className="space-y-3">
                 {tasks.map((task) => (

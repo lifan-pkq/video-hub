@@ -29,7 +29,7 @@ export const NAV_ITEMS: NavItem[] = [
   { to: '/workbench', label: '创作工作台', shortLabel: '工作台', icon: SquaresFour, keywords: 'workbench 最近素材 剪辑 导出 下载', group: '概览' },
   { to: '/videos', label: '视频素材库', shortLabel: '素材', icon: VideoCamera, keywords: 'videos library 视频 海报墙 素材卡', group: '素材' },
   { to: '/images', label: '图片素材库', shortLabel: '图片', icon: ImageSquare, keywords: 'images library 图片 素材 参考图', group: '素材' },
-  { to: '/download', label: '视频下载与灵感', shortLabel: '下载', icon: DownloadSimple, keywords: 'download 下载 yt-dlp 灵感 链接 笔记', group: '获取' },
+  { to: '/download', label: '视频下载与灵感', shortLabel: '下载', icon: DownloadSimple, keywords: 'download 下载 抖音 灵感 链接 笔记', group: '获取' },
   { to: '/record', label: '直播录制', shortLabel: '录制', icon: Broadcast, keywords: 'record live 录制 直播 分段', group: '获取' },
   { to: '/edit', label: '智能剪辑', shortLabel: '剪辑', icon: FilmSlate, keywords: 'edit editor 智能剪辑 一键出片 抖音 竖屏 字幕 封面', group: '制作' },
   { to: '/ai-media', label: 'AI 素材', shortLabel: 'AI 素材', icon: Sparkle, keywords: 'ai image video 图片 视频 生成 人物档案 key', group: '制作' },

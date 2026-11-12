@@ -93,7 +93,7 @@ export default function ImportWizardPage() {
           <button type="button" className="vh-card p-5 text-left hover:border-accent" onClick={() => choose('link')}>
             <DownloadSimple size={22} className="text-accent" />
             <strong className="mt-3 block text-[15px] text-ink-1">从链接导入</strong>
-            <p className="mt-1 text-[12px] leading-5 text-ink-3">每行一条链接，走 yt-dlp 下载。Cookie 失效时会告诉你怎么处理。</p>
+            <p className="mt-1 text-[12px] leading-5 text-ink-3">每行一条链接即可下载，抖音无需 Cookie。失败时会告诉你怎么处理。</p>
           </button>
         </div>
       )}

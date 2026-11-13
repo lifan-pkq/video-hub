@@ -148,6 +148,10 @@ export default function TasksPage() {
       navigate(`/download?task=${encodeURIComponent(t.id)}`)
       return
     }
+    if (t.type === 'motion' || kind === 'motion') {
+      navigate(`/motion?task=${encodeURIComponent(t.id)}`)
+      return
+    }
     if (t.type === 'ai' || kind.startsWith('ai')) {
       navigate(`/ai-media?task=${encodeURIComponent(t.id)}`)
       return

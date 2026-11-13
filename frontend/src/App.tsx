@@ -20,6 +20,7 @@ const DouyinProducePage = lazy(() => import('./pages/DouyinProducePage'))
 const DownloadPage = lazy(() => import('./pages/DownloadPage'))
 const RecordPage = lazy(() => import('./pages/RecordPage'))
 const ExportPage = lazy(() => import('./pages/ExportPage'))
+const MotionPage = lazy(() => import('./pages/MotionPage'))
 const TasksPage = lazy(() => import('./pages/TasksPage'))
 const MaintenancePage = lazy(() => import('./pages/MaintenancePage'))
 const AIMediaPage = lazy(() => import('./pages/AIMediaPage'))
@@ -129,6 +130,7 @@ function AppContent() {
                 <Route path="/download" element={<DownloadPage />} />
                 <Route path="/record" element={<RecordPage />} />
                 <Route path="/export" element={<ExportPage />} />
+                <Route path="/motion" element={<MotionPage />} />
                 <Route path="/publish" element={<Navigate to="/export" replace />} />
                 <Route path="/tasks" element={<TasksPage />} />
                 <Route path="/settings/system" element={<MaintenancePage />} />

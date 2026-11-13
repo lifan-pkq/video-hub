@@ -1,5 +1,5 @@
 import type { KeyboardEvent, ReactNode } from 'react'
-import { Broadcast, CaretDown, DownloadSimple, MagicWand, Scissors, Sparkle } from '@phosphor-icons/react'
+import { Broadcast, CaretDown, DownloadSimple, Gif, MagicWand, Scissors, Sparkle } from '@phosphor-icons/react'
 import { formatElapsed, formatRelative, type Task, type TaskSummary } from '../api'
 import { Button, Progress, Tag } from '../ui'
 import type { TagColor } from '../ui/Tag'
@@ -12,6 +12,7 @@ export const TYPE_META: Record<TaskSummary['type'], { label: string; color: TagC
   narrate: { label: '历史解说', color: 'accent', icon: (s) => <MagicWand size={s} /> },
   ai: { label: 'AI 生成', color: 'blue', icon: (s) => <Sparkle size={s} /> },
   record: { label: '直播录制', color: 'orange', icon: (s) => <Broadcast size={s} /> },
+  motion: { label: '视频转动图', color: 'accent', icon: (s) => <Gif size={s} /> },
 }
 
 interface Props {
@@ -95,7 +96,7 @@ export default function TasksCard({ task, now, expanded, detail, cancelling, onT
         </div>
         <div className="flex shrink-0 flex-col items-end gap-2 sm:flex-row sm:items-center">
           <StatusBadge status={task.status} />
-          {!running && onRetry && (task.status === 'failed' || task.status === 'cancelled') && (task.type === 'download' || task.kind === 'edit.douyin') && (
+          {!running && onRetry && (task.status === 'failed' || task.status === 'cancelled') && (task.type === 'download' || task.kind === 'edit.douyin' || task.kind === 'motion') && (
             <Button
               size="sm"
               variant="ghost"

@@ -63,7 +63,7 @@ export interface TaskError {
 
 export interface Task {
   id: string
-  type: 'download' | 'edit' | 'ai' | 'narrate' | 'record'
+  type: 'download' | 'edit' | 'ai' | 'narrate' | 'record' | 'motion'
   kind?: string
   title: string
   status: TaskStatus
@@ -77,6 +77,12 @@ export interface Task {
     instruction?: string
     max_clips?: number
     layout?: string
+    format?: string
+    fps?: number
+    width?: number
+    start?: number
+    duration?: number | null
+    title?: string
   }
   result: {
     video?: Video
@@ -93,6 +99,17 @@ export interface Task {
     video_id?: number
     layout?: string
     shorts?: DouyinShort[]
+    filename?: string
+    format?: string
+    size?: number
+    start?: number
+    duration?: number
+    width?: number
+    fps?: number
+    content_type?: string
+    preview_url?: string
+    image?: AIImageAsset
+    ingest_error?: TaskError
   } | null
   error?: TaskError | null
   created_at: string

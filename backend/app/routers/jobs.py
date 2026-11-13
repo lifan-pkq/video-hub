@@ -42,4 +42,14 @@ def job_file(job_id: str):
     path = _inside(Path(str(raw)))
     if not path.is_file():
         raise EngineError("导出文件已不在磁盘上", code="missing_file", status=404)
-    return FileResponse(path, media_type="video/mp4", filename=path.name)
+    result = job.get("result") if isinstance(job.get("result"), dict) else {}
+    media_type = str((result or {}).get("content_type") or "")
+    if media_type not in {"image/gif", "image/webp", "image/jpeg", "image/png", "video/mp4"}:
+        media_type = {
+            ".gif": "image/gif",
+            ".webp": "image/webp",
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".png": "image/png",
+        }.get(path.suffix.lower(), "video/mp4")
+    return FileResponse(path, media_type=media_type, filename=path.name)

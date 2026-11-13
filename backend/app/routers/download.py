@@ -122,6 +122,14 @@ def retry_task(task_id: str):
         from app.routers.edit import douyin_retry
 
         return {"ok": True, "task": douyin_retry(task_id)}
+    if kind == "motion":
+        from app.services.motion import retry as retry_motion
+
+        try:
+            task = retry_motion(task_id)
+        except EngineError as exc:
+            raise problem(exc.status, exc.code or "retry", exc.message, exc.action) from exc
+        return {"ok": True, "task": task}
     if view.get("type") == "download":
         text = str((view.get("input") or {}).get("text") or "").strip()
         if not text:

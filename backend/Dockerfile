@@ -6,6 +6,7 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple \
     VIDEO_HUB_DATA_DIR=/app/data
 
+# Debian/Ubuntu 的 ffmpeg 已带 libwebp。缺少 libwebp_anim 时，动态 WebP 会返回明确错误并提示改用 GIF。
 RUN sed -i 's|deb.debian.org|mirrors.cloud.tencent.com|g' /etc/apt/sources.list.d/debian.sources \
     && apt-get update \
     && apt-get install -y --no-install-recommends ffmpeg curl \

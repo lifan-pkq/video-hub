@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type KeyboardEvent } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
-import { Checks, DownloadSimple, FilmSlate, MagnifyingGlass, Plus, Scissors, VideoCamera } from '@phosphor-icons/react'
+import { Checks, DownloadSimple, FilmSlate, Gif, MagnifyingGlass, Plus, Scissors, VideoCamera } from '@phosphor-icons/react'
 import {
   deleteVideo,
   errorMessage,
@@ -449,6 +449,7 @@ export default function VideosPage() {
                 onPlay={setPlaying}
                 onPublish={(video) => navigate('/export', { state: { videoId: video.id } })}
                 onTrim={openTrim}
+                onMotion={(video) => navigate(`/motion?video=${video.id}`)}
                 onAiEdit={handleAiEdit}
                 onRename={openRename}
                 onDownload={handleDownload}
@@ -476,7 +477,17 @@ export default function VideosPage() {
               className="w-full rounded bg-black"
               style={{ maxHeight: '70vh' }}
             />
-            <div className="mt-3 flex justify-end">
+            <div className="mt-3 flex justify-end gap-2">
+              <Button
+                icon={<Gif size={15} />}
+                onClick={() => {
+                  const v = playing
+                  setPlaying(null)
+                  if (v) navigate(`/motion?video=${v.id}`)
+                }}
+              >
+                转成动图
+              </Button>
               <Button
                 icon={<Scissors size={15} />}
                 onClick={() => {

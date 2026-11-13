@@ -18,7 +18,7 @@ from app.db import fail_interrupted_recordings
 from app.jobs import fail_interrupted_jobs
 from app.services.understanding import fail_interrupted_analyses
 from app.routers import (
-    ai, download, drama, edit, events, exports, inspirations, jobs, maintenance, profiles,
+    ai, download, drama, edit, events, exports, inspirations, jobs, maintenance, motion, profiles,
     recordings, stats, system, understanding, videos,
 )
 from app.services import drama_store, maintenance as maintenance_service, narrato_import
@@ -82,6 +82,7 @@ app.include_router(drama.router)
 app.include_router(understanding.router)
 app.include_router(profiles.router)
 app.include_router(exports.router)
+app.include_router(motion.router)
 app.include_router(inspirations.router)
 
 

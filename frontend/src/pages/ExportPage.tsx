@@ -3,12 +3,13 @@ import { Link, useLocation, useSearchParams } from 'react-router-dom'
 import { DownloadSimple, Package, VideoCamera } from '@phosphor-icons/react'
 import { errorMessage, fetchVideos, formatSize, type Video } from '../api'
 import { cancelExport, createExport, exportFileUrl, getExport, selectExport, type ExportManifest } from '../exports'
-import { Alert, Button, EmptyState, Input, PageHeader, Panel, Progress, Select, toast } from '../ui'
+import { MotionStudio } from './MotionPage'
+import { Alert, Button, EmptyState, Input, PageHeader, Panel, Progress, Segment, Select, toast } from '../ui'
 
 const EXPORT_POLL_INTERVAL = 3000
 
 export default function ExportPage() {
-  const [searchParams] = useSearchParams()
+  const [searchParams, setSearchParams] = useSearchParams()
   const location = useLocation()
   const [videos, setVideos] = useState<Video[]>([])
   const [videosReady, setVideosReady] = useState(false)
@@ -98,9 +99,30 @@ export default function ExportPage() {
     titles: '标题与简介 JSON',
   }).filter(([key]) => Boolean(manifest.files[key as keyof ExportManifest['files']])) : []
 
+  const tab = searchParams.get('tab') === 'motion' ? 'motion' : 'pack'
+  const setTab = (value: string) => {
+    const next = new URLSearchParams(searchParams)
+    if (value === 'motion') next.set('tab', 'motion')
+    else next.delete('tab')
+    setSearchParams(next)
+  }
+
   return (
     <section>
-      <PageHeader title="封面与导出" desc="选定一条已入库视频，生成横屏、竖屏、方形、字幕和封面，再下载整套 ZIP。" />
+      <PageHeader
+        title={tab === 'motion' ? '视频转动图' : '封面与导出'}
+        desc={tab === 'motion'
+          ? '截一段最多 30 秒的视频，导出 GIF 或动态 WebP。进度可以在任务中心查看。'
+          : '选定一条已入库视频，生成横屏、竖屏、方形、字幕和封面，再下载整套 ZIP。'}
+      />
+      <div className="mb-4 max-w-md">
+        <Segment
+          value={tab}
+          onChange={setTab}
+          options={[{ value: 'pack', label: '封面套装' }, { value: 'motion', label: '转动图' }]}
+        />
+      </div>
+      {tab === 'motion' ? <MotionStudio embedded /> : <>
       {videosReady && videos.length === 0 ? (
         <Panel>
           <EmptyState
@@ -180,6 +202,7 @@ export default function ExportPage() {
           </Panel>
         </div>
       )}
+      </>}
     </section>
   )
 }

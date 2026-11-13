@@ -17,7 +17,6 @@ class RemovedLegacyTests(unittest.TestCase):
             "backend/app/routers/narrate.py",
             "backend/app/services/narrate_flow.py",
             "backend/app/services/narration.py",
-            "backend/app/services/douyin_fallback.py",
             "engine/tts.py",
             "engine/render.py",
             "engine/server.py",

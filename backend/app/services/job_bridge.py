@@ -11,7 +11,9 @@ from app.services.tasks import task_manager
 
 def job_as_task(job: dict, *, with_logs: bool = False) -> dict:
     kind = str(job.get("kind") or "")
-    if kind.startswith("narrate"):
+    if kind == "motion":
+        type_ = "motion"
+    elif kind.startswith("narrate"):
         type_ = "narrate"
     else:
         type_ = "edit"

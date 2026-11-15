@@ -25,6 +25,31 @@ class RecorderSafetyTests(unittest.TestCase):
         self.assertEqual(update.call_args.kwargs["status"], "failed")
         self.assertIn("remux failed", update.call_args.kwargs["error"])
 
+    def test_stop_keeps_concat_failure_recorded_by_finish(self):
+        proc = Mock()
+        proc.poll.return_value = 0
+        rec = {"id": 4, "status": "recording", "filename": "live_%03d.mp4"}
+        updates = []
+
+        def finish(_rec_id, _rec):
+            updates.append({"status": "failed", "error": "录制收尾失败: 分段合并失败"})
+            raise RuntimeError("分段合并失败")
+
+        with patch("app.services.recorder.get_recording", return_value=rec), \
+                patch("app.services.recorder._file_size", return_value=50), \
+                patch("app.services.recorder._finish_success", side_effect=finish), \
+                patch("app.services.recorder.update_recording",
+                      side_effect=lambda *args, **kwargs: updates.append(kwargs)):
+            recorder._procs[4] = proc
+            try:
+                self.assertTrue(recorder.stop_recording(4))
+            finally:
+                recorder._procs.pop(4, None)
+
+        self.assertEqual(updates[0]["status"], "stopped")
+        self.assertEqual(updates[1]["status"], "failed")
+        self.assertEqual([item.get("status") for item in updates], ["stopped", "failed"])
+
     def test_start_generates_unique_filename_for_same_title_and_timestamp(self):
         with tempfile.TemporaryDirectory() as root:
             recordings_dir = Path(root) / "recordings"

@@ -24,17 +24,25 @@ import { Button, EmptyState, Input, Modal, PageHeader, Panel, ProblemAlert, Sele
 import RequestState from '../ui/RequestState'
 import StatusBadge from '../components/StatusBadge'
 
+function legacySegments(record: Recording): boolean {
+  return (record.segments ?? []).some((segment) => segment.video_id != null)
+}
+
 function ingestText(record: Recording): string {
   if (record.status === 'recording') {
-    return record.starting ? '正在连接直播流，连上后开始计时，停止后自动分段入库' : '录制中，停止后每段都会入库并生成素材卡'
+    return record.starting
+      ? '正在连接直播流，连上后开始计时，停止后合并成一条入库'
+      : '录制中，每 10 分钟落盘一段；停止后合并成一条入库并生成素材卡'
   }
-  if (record.segments?.length) {
-    const pending = record.segments.filter((item) => item.summary_status === 'running').length
-    return pending ? `已入库 ${record.segments.length} 段，${pending} 段素材卡还在生成` : `已入库 ${record.segments.length} 段`
+  const segments = record.segments ?? []
+  if (legacySegments(record)) {
+    const pending = segments.filter((item) => item.summary_status === 'running').length
+    return pending ? `已入库 ${segments.length} 段，${pending} 段素材卡还在生成` : `已入库 ${segments.length} 段`
   }
+  if (segments.length > 1 && record.video_id) return `已由 ${segments.length} 段合并为一条入库`
   if (record.video_id) return '已入库到视频素材库'
   if (record.status === 'failed') return '没有入库'
-  if (record.status === 'stopped' || record.status === 'completed') return '已停止，还没有可入库的分段'
+  if (record.status === 'stopped' || record.status === 'completed') return '已停止，还没有入库'
   return ''
 }
 
@@ -93,7 +101,7 @@ export default function RecordPage() {
       setRecords((current) => [record, ...current.filter((item) => item.id !== record.id)])
       setUrl('')
       setHasData(true)
-      toast.success('已开始录制。停止后会自动分段入库')
+      toast.success('已开始录制。停止后会合并成一条入库')
     } catch (error) {
       setProblem(errorDetail(error))
     } finally {
@@ -102,7 +110,7 @@ export default function RecordPage() {
   }
 
   const stop = async (record: Recording) => {
-    if (!await confirmDialog({ title: '停止录制', content: '停止后每个已写出的分段都会入库，并开始生成质量分和素材卡。', okText: '停止并入库' })) return
+    if (!await confirmDialog({ title: '停止录制', content: '停止后会把已写出的分段合并成一条视频入库，并生成质量分和素材卡。', okText: '停止并入库' })) return
     try {
       await stopRecording(record.id)
       toast.success('已停止，正在入库')
@@ -113,7 +121,7 @@ export default function RecordPage() {
   }
 
   const remove = async (record: Recording) => {
-    if (!await confirmDialog({ title: '删除录制记录', content: '只删除这条记录，不删除已经入库的视频分段。', danger: true, okText: '删除记录' })) return
+    if (!await confirmDialog({ title: '删除录制记录', content: '只删除这条记录，不删除已经入库的视频。', danger: true, okText: '删除记录' })) return
     try {
       await deleteRecording(record.id, false)
       await load()
@@ -124,7 +132,7 @@ export default function RecordPage() {
 
   return (
     <section>
-      <PageHeader title="直播录制" desc="手动开始、手动停止。每 10 分钟一段，停止后自动入库并生成素材卡。" />
+      <PageHeader title="直播录制" desc="手动开始、手动停止。录制中每 10 分钟落盘一段，停止或直播结束后合并成一条入库并生成素材卡。" />
       <Panel>
         <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_220px_140px_140px_auto]">
           <Input value={url} onChange={setUrl} placeholder="直播间 / m3u8 / flv 链接" />
@@ -160,9 +168,9 @@ export default function RecordPage() {
                   {record.video_id ? <Link to={`/videos?q=${encodeURIComponent(record.title)}`} className="text-[12px] text-accent">打开素材</Link> : null}
                   <Button size="sm" variant="text" icon={<Trash size={13} />} onClick={() => void remove(record)}>删除记录</Button>
                 </div>
-                {!!record.segments?.length && (
+                {legacySegments(record) && (
                   <div className="mt-3 flex flex-wrap gap-2 border-t border-line-soft pt-3">
-                    {record.segments.map((segment) => (
+                    {record.segments?.map((segment) => segment.video_id != null && (
                       <a key={segment.video_id} href={`/api/videos/${segment.video_id}/file`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 rounded-lg bg-surface px-2.5 py-1.5 text-[11px] text-accent">
                         <Play size={11} />第 {segment.index} 段 · {formatDuration(segment.duration)} · 质量 {Math.round(segment.quality_score || 0)}
                         {segment.summary_status === 'running' ? ' · 素材卡生成中' : ''}

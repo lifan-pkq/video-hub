@@ -12,7 +12,7 @@ import {
   type TaskSummary,
   type Video,
 } from '../api'
-import { clock, historyLabel, taskSourceTitle } from '../features/edit/studio'
+import { clock, composeDurationInstruction, historyLabel, taskSourceTitle } from '../features/edit/studio'
 import { toast } from '../ui'
 
 const LAYOUTS: Array<{ id: DouyinLayout; title: string; detail: string }> = [
@@ -29,6 +29,7 @@ export default function EditPage() {
   const [selectedVideoId, setSelectedVideoId] = useState(0)
   const [query, setQuery] = useState('')
   const [instruction, setInstruction] = useState('')
+  const [maxSeconds, setMaxSeconds] = useState('')
   const [layout, setLayout] = useState<DouyinLayout>('interview')
   const [starting, setStarting] = useState(false)
 
@@ -67,9 +68,16 @@ export default function EditPage() {
       if (!selectedVideoId) toast.error('先选一条素材库里的原片')
       return
     }
+    let prompt = instruction.trim()
+    try {
+      prompt = composeDurationInstruction(instruction, maxSeconds)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '最长时长无效')
+      return
+    }
     setStarting(true)
     try {
-      const job = await startDouyinProduce(selectedVideoId, instruction.trim(), 0, layout)
+      const job = await startDouyinProduce(selectedVideoId, prompt, 0, layout)
       toast.success('已开始生成抖音短视频')
       navigate(editTaskPath(job))
     } catch (error) {
@@ -179,9 +187,20 @@ export default function EditPage() {
             value={instruction}
             maxLength={400}
             onChange={(event) => setInstruction(event.target.value)}
-            placeholder="想留什么，可选。例如只要观点冲突和金句"
+            placeholder="想留什么，可选。例如只生成1条，时长不超过15秒"
             aria-label="想留什么样的片段"
           />
+          <label className="studio-limit">
+            <span>单条最长秒数</span>
+            <input
+              value={maxSeconds}
+              inputMode="numeric"
+              maxLength={2}
+              onChange={(event) => setMaxSeconds(event.target.value.replace(/[^\d]/g, '').slice(0, 2))}
+              placeholder="60"
+              aria-label="单条最长秒数"
+            />
+          </label>
           <div className="studio-layouts" role="radiogroup" aria-label="竖屏版式">
             {LAYOUTS.map((item) => (
               <button
@@ -201,7 +220,7 @@ export default function EditPage() {
             {starting ? '正在提交…' : '生成抖音短视频'}
           </button>
           <p className="studio-fine">
-            最多大约 10 条，先出更值得发的。转写在本机按需进行。不会登录抖音，也不会自动发布。
+            留空则沿用系统上限。填了秒数，或写了「不超过 N 秒」，做不到这个时长就整单失败，不会把整段原片当成成功。最多大约 10 条。不会登录抖音，也不会自动发布。
           </p>
         </form>
       </section>

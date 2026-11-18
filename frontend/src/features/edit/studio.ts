@@ -27,6 +27,22 @@ export function studioStepFill(index: number, current: number, progress: number,
   return Math.max(10, Math.min(100, ((progress - start) / span) * 100))
 }
 
+export function composeDurationInstruction(instruction: string, maxSecondsRaw: string): string {
+  const raw = maxSecondsRaw.trim()
+  const text = instruction.trim()
+  if (!raw) return text
+  if (!/^\d+$/.test(raw)) {
+    throw new Error('最长时长请填 5 到 90 的整数秒')
+  }
+  const value = Number(raw)
+  if (value < 5 || value > 90) {
+    throw new Error('最长时长请填 5 到 90 的整数秒')
+  }
+  const phrase = `时长不超过${value}秒`
+  if (text.includes(phrase)) return text
+  return text ? `${text}；${phrase}` : phrase
+}
+
 export function clock(seconds?: number | null): string {
   const safe = Number.isFinite(Number(seconds)) ? Math.max(0, Number(seconds)) : 0
   const minutes = Math.floor(safe / 60)

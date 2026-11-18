@@ -9,7 +9,9 @@ yt-dlp 主站路径需要新鲜 Cookie 时走这条链路。
 from __future__ import annotations
 
 import json
+import math
 import re
+import shutil
 import time
 from pathlib import Path
 from typing import Any
@@ -25,6 +27,8 @@ MOBILE_UA = (
 REFERER = "https://www.douyin.com/"
 TIMEOUT = 45
 MIN_MP4_BYTES = 100_000
+_READ_TIMEOUT = 15
+_MIN_FREE_BYTES = 512 * 1024 * 1024
 SHARE_PATHS = (
     "/share/video/{id}",
     "/share/note/{id}",
@@ -32,6 +36,28 @@ SHARE_PATHS = (
     "/share/note/{id}/",
 )
 MAX_SHARE_ATTEMPTS = 4
+
+
+class FallbackCancelled(RuntimeError):
+    """备用下载在写出文件期间被取消。调用方把它转成下载取消，不要当成平台失败。"""
+
+
+def douyin_duration_seconds(value: object) -> float | None:
+    """抖音 aweme 的 video.duration 是毫秒。
+
+    短于 10 秒时数值不超过 10000。只在大于 10000 时除以 1000，
+    会把 8 秒（8000）记成 8000 秒。大于等于 1000 的值按毫秒换算；
+    小于 1000 的值视为已经是秒，兼容个别已换算字段。
+    """
+    try:
+        raw = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(raw) or raw <= 0:
+        return None
+    if raw >= 1000:
+        raw /= 1000.0
+    return raw
 
 
 def is_douyin_url(url: str) -> bool:
@@ -190,14 +216,7 @@ def _info_from_item(item: dict, aweme_id: str, webpage_url: str) -> dict:
     author = item.get("author") or {}
     width = play_addr.get("width") or video.get("width")
     height = play_addr.get("height") or video.get("height")
-    duration_ms = video.get("duration") or item.get("duration") or 0
-    try:
-        duration_ms = int(duration_ms)
-    except (TypeError, ValueError):
-        duration_ms = 0
-    duration = duration_ms / 1000.0 if duration_ms > 10000 else float(duration_ms or 0) or None
-    if duration == 0:
-        duration = None
+    duration = douyin_duration_seconds(video.get("duration") or item.get("duration") or 0)
     title = (item.get("desc") or "").strip() or f"抖音视频_{aweme_id}"
     return {
         "id": str(item.get("aweme_id") or aweme_id),
@@ -310,25 +329,73 @@ def parse_douyin(url: str) -> dict:
     return info
 
 
-def download_douyin(url: str, out_path: Path) -> dict:
-    """解析并下载无水印 mp4 到 out_path，返回 yt-dlp 风格 info dict。"""
+def download_douyin(
+    url: str,
+    out_path: Path,
+    *,
+    should_cancel=None,
+    max_bytes: int | None = None,
+    deadline_s: float | None = None,
+) -> dict:
+    """解析并下载无水印 mp4 到 out_path，返回 yt-dlp 风格 info dict。
+
+    每个数据块之间检查取消和总时限。requests 的单个 timeout 只约束一次读，
+    挡不住一直有数据但永远下不完的连接，也不能在取消后立刻停掉。
+    """
+    if max_bytes is None or deadline_s is None:
+        from app.config import DOWNLOAD_TIMEOUT, MAX_UPLOAD_MB
+
+        if max_bytes is None:
+            max_bytes = MAX_UPLOAD_MB * 1024 * 1024
+        if deadline_s is None:
+            deadline_s = float(DOWNLOAD_TIMEOUT)
+    if should_cancel and should_cancel():
+        raise FallbackCancelled("下载已取消")
     info = parse_douyin(url)
     play_url = info.get("_play_url")
     if not play_url:
         raise RuntimeError("未能解析抖音无水印播放地址")
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    free = shutil.disk_usage(out_path.parent).free
+    if free < _MIN_FREE_BYTES:
+        raise RuntimeError(f"磁盘剩余 {free // (1024 * 1024)}MB，低于 512MB，已停止备用下载")
     sess = _session()
-    with sess.get(play_url, timeout=240, stream=True, allow_redirects=True,
-                  headers={"Referer": REFERER, "User-Agent": MOBILE_UA}) as resp:
-        resp.raise_for_status()
-        with open(out_path, "wb") as handle:
-            for chunk in resp.iter_content(chunk_size=256 * 1024):
-                if chunk:
+    deadline = time.monotonic() + float(deadline_s)
+    try:
+        with sess.get(
+            play_url,
+            timeout=(10, _READ_TIMEOUT),
+            stream=True,
+            allow_redirects=True,
+            headers={"Referer": REFERER, "User-Agent": MOBILE_UA},
+        ) as resp:
+            resp.raise_for_status()
+            declared = resp.headers.get("Content-Length")
+            if declared and declared.isdigit() and int(declared) > max_bytes:
+                raise RuntimeError(
+                    f"抖音备用下载超过大小上限（{max_bytes // (1024 * 1024)}MB）"
+                )
+            written = 0
+            with open(out_path, "wb") as handle:
+                for chunk in resp.iter_content(chunk_size=256 * 1024):
+                    if should_cancel and should_cancel():
+                        raise FallbackCancelled("下载已取消")
+                    if time.monotonic() > deadline:
+                        raise TimeoutError(f"timeout: 抖音备用下载超过 {int(deadline_s)} 秒仍未完成")
+                    if not chunk:
+                        continue
+                    written += len(chunk)
+                    if written > max_bytes:
+                        raise RuntimeError(
+                            f"抖音备用下载超过大小上限（{max_bytes // (1024 * 1024)}MB）"
+                        )
                     handle.write(chunk)
-    size = out_path.stat().st_size
-    if size < MIN_MP4_BYTES:
+        size = out_path.stat().st_size if out_path.exists() else 0
+        if size < MIN_MP4_BYTES:
+            raise RuntimeError(f"抖音备用下载文件过小（{size} bytes），可能被风控拦截")
+    except Exception:
         out_path.unlink(missing_ok=True)
-        raise RuntimeError(f"抖音备用下载文件过小（{size} bytes），可能被风控拦截")
+        raise
     public = {k: v for k, v in info.items() if not k.startswith("_")}
     return public

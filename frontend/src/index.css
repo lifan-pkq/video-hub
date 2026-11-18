@@ -1376,6 +1376,39 @@
   }
   .studio-prompt:focus { border-bottom-color: var(--accent); }
   .studio-prompt::placeholder { color: var(--ink-4); }
+  .studio-limit {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    color: var(--ink-3);
+    font-size: 13px;
+  }
+  .studio-limit input {
+    width: 72px;
+    height: 36px;
+    border: 0;
+    border-bottom: 1px solid var(--border);
+    border-radius: 0;
+    background: transparent;
+    color: var(--ink-1);
+    font: inherit;
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+    outline: none;
+  }
+  .studio-limit input:focus { border-bottom-color: var(--accent); }
+  .studio-limit select {
+    max-width: 240px;
+    height: 36px;
+    border: 0;
+    border-bottom: 1px solid var(--border);
+    border-radius: 0;
+    background: transparent;
+    color: var(--ink-1);
+    font: inherit;
+    outline: none;
+  }
   .studio-layouts { display: flex; gap: 22px; }
   .studio-layout {
     padding: 0;

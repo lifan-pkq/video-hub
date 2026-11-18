@@ -46,15 +46,23 @@ class RemovedLegacyTests(unittest.TestCase):
         self.assertIn("llm", body)
         self.assertNotIn("tts", body)
 
-    def test_narrate_surface_is_not_in_the_workbench(self):
+    def test_narrate_route_is_original_speech_not_the_removed_tts_stack(self):
         app = (ROOT / "frontend/src/App.tsx").read_text()
         nav = (ROOT / "frontend/src/nav.ts").read_text()
         api = (ROOT / "frontend/src/api.ts").read_text()
-        self.assertIn('path="/narrate"', app)
-        self.assertIn('Navigate to="/edit"', app)
-        self.assertNotIn("NarratePage", app)
-        self.assertNotIn("/narrate", nav)
+        page = (ROOT / "frontend/src/pages/NarratePage.tsx").read_text()
+        self.assertIn('path="/narrate" element={<NarratePage />}', app)
+        self.assertIn('path="/narrato" element={<Navigate to="/narrate" replace />}', app)
+        self.assertIn("to: '/narrate'", nav)
+        self.assertIn("口播解说", nav)
+        self.assertIn("解说", nav)
+        self.assertIn("生成口播短片", page)
+        self.assertIn("不再合成新的旁白", page)
+        self.assertIn("composeDurationInstruction", page)
         self.assertNotIn("fetchNarrateVoices", api)
+        self.assertNotIn("fetchNarrateVoices", page)
+        self.assertFalse((ROOT / "backend/app/routers/narrate.py").exists())
+        self.assertFalse((ROOT / "engine/tts.py").exists())
         self.assertIn("retryDouyinProduce", api)
         self.assertIn("智能剪辑", nav)
 

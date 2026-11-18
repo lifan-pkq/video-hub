@@ -77,6 +77,8 @@ export interface Task {
     instruction?: string
     max_clips?: number
     layout?: string
+    chenze_style?: boolean
+    chenze?: ChenzeOptions
     format?: string
     fps?: number
     width?: number
@@ -98,6 +100,7 @@ export interface Task {
     budget?: number
     video_id?: number
     layout?: string
+    chenze?: ChenzeAutomation
     shorts?: DouyinShort[]
     filename?: string
     format?: string
@@ -515,6 +518,53 @@ export interface DouyinShort {
   cover_url?: string
   kit_url?: string
   video_id?: number | null
+  review_status?: string
+  publication_approved?: boolean
+  fit_label?: string | null
+}
+
+export interface ChenzeOptions {
+  display_name?: string
+  douyin_id?: string
+  homepage_url?: string
+  column?: '' | '综艺' | '评审' | '游戏' | '通用保真'
+  max_seconds?: number
+  low_res?: boolean
+}
+
+export interface ChenzeReviewCandidate {
+  status: string
+  start: number
+  end: number
+  text?: string
+  reason?: string
+  column?: string
+  fit_label?: string | null
+  duration_seconds?: string
+  limit_seconds?: string
+  preview?: boolean
+  publication_approved?: boolean
+  automatic_trim?: boolean
+  rights_notes?: string[]
+}
+
+export interface ChenzeAutomation {
+  requested?: boolean
+  applied?: boolean
+  automation?: string | null
+  pack_id?: string
+  pack_version?: string
+  column?: string
+  column_source?: string
+  limit_seconds?: string
+  identity?: { is_self?: boolean; reason?: string; display_name?: string; douyin_id?: string }
+  applied_rule_ids?: string[]
+  skipped_disabled_rule_ids?: string[]
+  blocked_cross_column_rule_ids?: string[]
+  review_candidates?: ChenzeReviewCandidate[]
+  publication_approved?: boolean
+  validated_person_style?: boolean
+  authorization_cleared?: boolean
 }
 
 export function editTaskPath(task: { id: string; kind?: string }): string {
@@ -567,6 +617,8 @@ export async function startDouyinProduce(
   instruction = '',
   maxClips = 0,
   layout: DouyinLayout = 'interview',
+  chenzeStyle = false,
+  chenze?: ChenzeOptions,
 ): Promise<EditJob> {
   try {
     const { data } = await http.post<EditJob>('/edit/douyin', {
@@ -574,6 +626,8 @@ export async function startDouyinProduce(
       instruction,
       max_clips: maxClips,
       layout,
+      chenze_style: chenzeStyle,
+      ...(chenzeStyle && chenze ? { chenze } : {}),
     }, { timeout: 0 })
     return data
   } catch (error) {

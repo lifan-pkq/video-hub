@@ -8,16 +8,25 @@ import {
   fetchVideos,
   formatRelative,
   startDouyinProduce,
+  type ChenzeOptions,
   type DouyinLayout,
   type TaskSummary,
   type Video,
 } from '../api'
 import { clock, historyLabel, taskSourceTitle } from '../features/edit/studio'
-import { toast } from '../ui'
+import { Switch, toast } from '../ui'
 
 const LAYOUTS: Array<{ id: DouyinLayout; title: string; detail: string }> = [
   { id: 'interview', title: '访谈式', detail: '跟着说话人裁成 9:16' },
   { id: 'podcast', title: '满屏播客式', detail: '完整画面，背景铺满' },
+]
+
+const CHENZE_COLUMNS: Array<{ id: '' | '综艺' | '评审' | '游戏' | '通用保真'; title: string }> = [
+  { id: '', title: '自动识别栏目' },
+  { id: '综艺', title: '综艺' },
+  { id: '评审', title: '评审' },
+  { id: '游戏', title: '游戏' },
+  { id: '通用保真', title: '通用保真' },
 ]
 
 export default function EditPage() {
@@ -30,6 +39,12 @@ export default function EditPage() {
   const [query, setQuery] = useState('')
   const [instruction, setInstruction] = useState('')
   const [layout, setLayout] = useState<DouyinLayout>('interview')
+  const [chenzeStyle, setChenzeStyle] = useState(false)
+  const [chenzeName, setChenzeName] = useState('')
+  const [chenzeId, setChenzeId] = useState('')
+  const [chenzeHome, setChenzeHome] = useState('')
+  const [chenzeColumn, setChenzeColumn] = useState<'' | '综艺' | '评审' | '游戏' | '通用保真'>('')
+  const [chenzeLimit, setChenzeLimit] = useState('')
   const [starting, setStarting] = useState(false)
 
   const load = useCallback(async () => {
@@ -69,7 +84,17 @@ export default function EditPage() {
     }
     setStarting(true)
     try {
-      const job = await startDouyinProduce(selectedVideoId, instruction.trim(), 0, layout)
+      const limit = Number(chenzeLimit)
+      const chenze: ChenzeOptions | undefined = chenzeStyle
+        ? {
+            display_name: chenzeName.trim(),
+            douyin_id: chenzeId.trim(),
+            homepage_url: chenzeHome.trim(),
+            column: chenzeColumn,
+            ...(chenzeLimit.trim() && Number.isFinite(limit) && limit > 0 ? { max_seconds: limit } : {}),
+          }
+        : undefined
+      const job = await startDouyinProduce(selectedVideoId, instruction.trim(), 0, layout, chenzeStyle, chenze)
       toast.success('已开始生成抖音短视频')
       navigate(editTaskPath(job))
     } catch (error) {
@@ -196,6 +221,56 @@ export default function EditPage() {
                 <span>{item.detail}</span>
               </button>
             ))}
+          </div>
+          <div className="studio-chenze">
+            <div className="studio-chenze-row">
+              <Switch checked={chenzeStyle} onChange={setChenzeStyle} label="使用陈泽剪辑方式" />
+              <div>
+                <strong>陈泽剪辑方式</strong>
+                <p className="studio-fine">可选，默认关闭。关闭时仍按现在的方式选段和出片。</p>
+              </div>
+            </div>
+            {chenzeStyle && (
+              <>
+                <p className="studio-fine">
+                  打开后会自动识别事件单元并挑选候选，不用逐条手点规则。知识包 v1 的个人风格还没有人工验收，没被明确打开的规则不会自动执行。账号要对上已核的「陈泽-」、抖音号 9896719.（含尾点）和本人主页，同名或转载不会当成本人。
+                </p>
+                <div className="studio-chenze-fields">
+                  <label>
+                    展示名
+                    <input value={chenzeName} onChange={(event) => setChenzeName(event.target.value)} placeholder="陈泽-" autoComplete="off" />
+                  </label>
+                  <label>
+                    抖音号
+                    <input value={chenzeId} onChange={(event) => setChenzeId(event.target.value)} placeholder="9896719." autoComplete="off" />
+                  </label>
+                  <label className="studio-chenze-wide">
+                    本人主页
+                    <input value={chenzeHome} onChange={(event) => setChenzeHome(event.target.value)} placeholder="已核本人主页链接" autoComplete="off" />
+                  </label>
+                  <label>
+                    栏目
+                    <select
+                      value={chenzeColumn}
+                      onChange={(event) => setChenzeColumn(event.target.value as '' | '综艺' | '评审' | '游戏' | '通用保真')}
+                    >
+                      {CHENZE_COLUMNS.map((item) => (
+                        <option key={item.title} value={item.id}>{item.title}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    单条时长上限（秒）
+                    <input
+                      value={chenzeLimit}
+                      onChange={(event) => setChenzeLimit(event.target.value)}
+                      inputMode="decimal"
+                      placeholder="不填则用本次成片上限"
+                    />
+                  </label>
+                </div>
+              </>
+            )}
           </div>
           <button className="studio-cta" type="submit" disabled={starting || !selectedVideoId} aria-busy={starting}>
             {starting ? '正在提交…' : '生成抖音短视频'}

@@ -8,6 +8,7 @@ import {
   retryDouyinProduce,
   fetchVideos,
   saveDouyinToLibrary,
+  type ChenzeReviewCandidate,
   type DouyinShort,
   type EditJob,
   type Video,
@@ -24,6 +25,75 @@ import {
   taskSourceTitle,
 } from '../features/edit/studio'
 import { toast } from '../ui'
+
+const CHENZE_REVIEW: Record<string, string> = {
+  NO_FIT: '放不进时长 NO_FIT',
+  context_required: '缺语境 context_required',
+  pending: '待复核 pending',
+}
+
+function reviewLabel(status: string) {
+  return CHENZE_REVIEW[status] || status
+}
+
+function ChenzePanel({ job }: { job: EditJob }) {
+  const info = job.result?.chenze
+  const requested = Boolean(job.input?.chenze_style || info?.requested)
+  if (!requested) return null
+  const running = job.status === 'pending' || job.status === 'running'
+  const reviews = info?.review_candidates || []
+  const appliedRules = info?.applied_rule_ids || []
+  let headline = '已选择陈泽剪辑方式'
+  let detail = '正在自动整理事件单元。'
+  if (!running && info?.applied) {
+    headline = '已自动跑完陈泽剪辑流程'
+    detail = '按事件单元挑选候选。个人风格尚未人工验收，下面都不是定稿。'
+  } else if (!running && info && info.applied === false) {
+    headline = '没有按陈泽本人剪辑'
+    detail = info.identity?.reason || '账号没有对上已核本人，所以没有套用本人风格。'
+  } else if (!running && !info) {
+    detail = '这次没有留下陈泽流程结果。'
+  }
+  return (
+    <section className="studio-review" aria-label="陈泽剪辑方式">
+      <div className="studio-reel-head">
+        <div>
+          <h2>{headline}</h2>
+          <p>{detail}</p>
+        </div>
+      </div>
+      {info?.applied && (
+        <p className="studio-fine">
+          知识包 {info.pack_id || 'v1'} · {info.column || '通用保真'}
+          {appliedRules.length ? ` · 已执行规则 ${appliedRules.join('、')}` : ' · 没有自动启用风格规则'}
+          {info.publication_approved ? '' : ' · 未批准发布'}
+        </p>
+      )}
+      {reviews.length > 0 && (
+        <ul className="studio-review-list">
+          {reviews.map((item) => (
+            <ReviewRow key={`${item.status}-${item.start}-${item.end}-${item.reason}`} item={item} />
+          ))}
+        </ul>
+      )}
+    </section>
+  )
+}
+
+function ReviewRow({ item }: { item: ChenzeReviewCandidate }) {
+  const notes = item.rights_notes || []
+  return (
+    <li>
+      <b>{reviewLabel(item.status)}</b>
+      <span className="tnum">{clock(item.start)}–{clock(item.end)}</span>
+      {item.preview && <em>可预览</em>}
+      {item.fit_label && <em>{item.fit_label}</em>}
+      <p>{item.reason}</p>
+      {item.text && <p className="studio-fine">{item.text}</p>}
+      {notes.map((note) => <p key={note} className="studio-fine">{note}</p>)}
+    </li>
+  )
+}
 
 export default function DouyinProducePage() {
   const { jobId = '' } = useParams()
@@ -193,6 +263,8 @@ export default function DouyinProducePage() {
         <p className="studio-empty">这次没有可预览的成片。换一条口播更集中的原片，或把想留的内容写具体一点。</p>
       )}
 
+      {job && <ChenzePanel job={job} />}
+
       {running && shorts.length > 0 && (
         <p className="studio-fine">已经做好的可以先看。其余还在渲染。</p>
       )}
@@ -249,6 +321,8 @@ export default function DouyinProducePage() {
                 {typeof active.score === 'number' && active.score > 0 ? ` · 评分 ${active.score}` : ''}
                 {' · '}{framingLabel(active)}
                 {active.captions_burned === false ? ' · 字幕没烧进画面' : ' · 字幕已烧录'}
+                {active.review_status === 'pending' ? ' · 待复核，不是定稿' : ''}
+                {active.publication_approved === false && active.review_status ? ' · 未批准发布' : ''}
               </p>
               <div className="studio-actions">
                 <button

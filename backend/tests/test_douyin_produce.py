@@ -416,7 +416,7 @@ class DouyinJobPackagingTests(unittest.TestCase):
                         patch("app.services.douyin_flow.resolve_media", return_value=Path(tmp) / "source.mp4"), \
                         patch("app.services.douyin_flow.probe_source", return_value={"duration": 80, "width": 1920, "height": 1080, "has_audio": True}), \
                         patch("app.services.douyin_flow.transcribe", return_value=[{"start": 0, "end": 2, "text": "你好"}]), \
-                        patch("app.services.douyin_flow.plan_douyin_shorts", return_value=plan), \
+                        patch("app.services.douyin_flow.plan_intelligent_edit", return_value=plan), \
                         patch("app.services.douyin_flow.load_subject_boxes", return_value=[]), \
                         patch("app.services.douyin_flow.sample_skin_boxes", return_value=[{"time": 4, "box": {"x": 100, "y": 100, "width": 80, "height": 80}}]), \
                         patch("app.services.douyin_flow.render_short", side_effect=fake_render), \
@@ -475,7 +475,7 @@ class DouyinRouteTests(unittest.TestCase):
     def test_produce_job_is_tracked_as_edit_douyin(self):
         from app.jobs import update
 
-        def run(job_id, video_id, instruction, max_clips, layout="interview"):
+        def run(job_id, video_id, instruction, max_clips, layout="interview", **_extra):
             update(
                 job_id,
                 status="success",
@@ -512,7 +512,7 @@ class DouyinRouteTests(unittest.TestCase):
     def test_retry_reuses_input_and_refuses_a_running_job(self):
         from app.jobs import update
 
-        def run(job_id, video_id, instruction, max_clips, layout="interview"):
+        def run(job_id, video_id, instruction, max_clips, layout="interview", **_extra):
             update(job_id, status="failed", stage="failed", label="失败", error={"message": "转写失败"})
 
         with patch("app.routers.edit.fetch", return_value={"id": 3, "title": "原片"}), \
@@ -524,7 +524,7 @@ class DouyinRouteTests(unittest.TestCase):
         failed = created.json()
         self.assertEqual(failed["status"], "failed")
 
-        def succeed(job_id, video_id, instruction, max_clips, layout="interview"):
+        def succeed(job_id, video_id, instruction, max_clips, layout="interview", **_extra):
             update(
                 job_id, status="success", progress=100, stage="done", label="完成",
                 result={"video_id": video_id, "layout": layout, "shorts": [], "pack_url": ""},
@@ -551,7 +551,7 @@ class DouyinRouteTests(unittest.TestCase):
     def test_task_center_retry_opens_another_douyin_job(self):
         from app.jobs import update
 
-        def run(job_id, video_id, instruction, max_clips, layout="interview"):
+        def run(job_id, video_id, instruction, max_clips, layout="interview", **_extra):
             update(job_id, status="failed", stage="failed", label="失败", error={"code": "asr", "message": "转写失败", "action": "检查音轨"})
 
         with patch("app.routers.edit.fetch", return_value={"id": 5, "title": "原片"}), \

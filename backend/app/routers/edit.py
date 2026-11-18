@@ -71,11 +71,35 @@ class HighlightBody(BaseModel):
     use_llm: bool = True
 
 
+class ChenzeStyleBody(BaseModel):
+    display_name: str = ""
+    douyin_id: str = ""
+    homepage_url: str = ""
+    column: Literal["", "综艺", "评审", "游戏", "通用保真"] = ""
+    max_seconds: float | None = Field(default=None, ge=1, le=600)
+    low_res: bool = False
+
+
 class DouyinProduceBody(BaseModel):
     video_id: int
     instruction: str = ""
     max_clips: int = Field(default=0, ge=0, le=10)
     layout: Literal["interview", "podcast"] = "interview"
+    chenze_style: bool = False
+    chenze: ChenzeStyleBody | None = None
+
+
+def _chenze_payload(body: DouyinProduceBody) -> dict:
+    if body.chenze is None:
+        return {
+            "display_name": "",
+            "douyin_id": "",
+            "homepage_url": "",
+            "column": "",
+            "max_seconds": None,
+            "low_res": False,
+        }
+    return body.chenze.model_dump()
 
 
 class DouyinLibraryBody(BaseModel):
@@ -87,6 +111,7 @@ def douyin_produce(body: DouyinProduceBody):
     """从素材库一条原片生成多条竖屏短视频。不发布，只给预览、下载和入库。"""
     fetch(body.video_id)
     instruction = body.instruction.strip()[:400]
+    chenze = _chenze_payload(body)
     job = create(
         "edit.douyin",
         "抖音成片",
@@ -95,12 +120,20 @@ def douyin_produce(body: DouyinProduceBody):
             "instruction": instruction,
             "max_clips": body.max_clips,
             "layout": body.layout,
+            "chenze_style": body.chenze_style,
+            "chenze": chenze,
         },
     )
     return submit(
         job,
         lambda job_id: produce_douyin(
-            job_id, body.video_id, instruction, body.max_clips, layout=body.layout,
+            job_id,
+            body.video_id,
+            instruction,
+            body.max_clips,
+            layout=body.layout,
+            chenze_style=body.chenze_style,
+            chenze_options=chenze,
         ),
     )
 
@@ -172,6 +205,8 @@ def douyin_retry(job_id: str):
     except (TypeError, ValueError):
         max_clips = 0
     layout = payload.get("layout") if payload.get("layout") in {"interview", "podcast"} else "interview"
+    chenze_style = bool(payload.get("chenze_style"))
+    chenze = payload.get("chenze") if isinstance(payload.get("chenze"), dict) else {}
     job = create(
         "edit.douyin",
         "抖音成片",
@@ -180,12 +215,22 @@ def douyin_retry(job_id: str):
             "instruction": instruction,
             "max_clips": max_clips,
             "layout": layout,
+            "chenze_style": chenze_style,
+            "chenze": chenze,
             "retry_of": previous["id"],
         },
     )
     return submit(
         job,
-        lambda new_id: produce_douyin(new_id, video_id, instruction, max_clips, layout=layout),
+        lambda new_id: produce_douyin(
+            new_id,
+            video_id,
+            instruction,
+            max_clips,
+            layout=layout,
+            chenze_style=chenze_style,
+            chenze_options=chenze,
+        ),
     )
 
 

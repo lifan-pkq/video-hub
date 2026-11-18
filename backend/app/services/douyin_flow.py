@@ -10,10 +10,10 @@ from engine.errors import EngineError
 from app.config import douyin_settings
 from app.jobs import cancelled, report, update
 from app.services.ai_edit import AIResponseError, AIServiceError, TranscriptionCancelled, transcribe
+from app.services.chenze_pipeline import plan_intelligent_edit
 from app.services.douyin_plan import (
     boxes_from_understanding,
     build_subject_track,
-    plan_douyin_shorts,
 )
 from app.services.douyin_render import (
     build_clip_zip,
@@ -65,6 +65,8 @@ def produce_douyin(
     max_clips: int = 0,
     *,
     layout: str = "interview",
+    chenze_style: bool = False,
+    chenze_options: dict | None = None,
 ) -> None:
     video = fetch(int(video_id))
     source = resolve_media(video)
@@ -91,13 +93,18 @@ def produce_douyin(
             action="确认原片有人声。纯音乐或静音没法抽成抖音口播。",
             status=422,
         )
-    report(job_id, 42, "plan", "挑选适合抖音的高光")
+    report(job_id, 42, "plan", "按陈泽剪辑方式整理候选" if chenze_style else "挑选适合抖音的高光")
     try:
-        plan = plan_douyin_shorts(
+        plan = plan_intelligent_edit(
             segments,
             float(meta["duration"]),
             instruction=instruction.strip()[:400],
             max_clips=max_clips,
+            chenze_style=bool(chenze_style),
+            chenze_options=chenze_options or {},
+            video=video,
+            width=int(meta["width"]) if meta.get("width") else None,
+            height=int(meta["height"]) if meta.get("height") else None,
             log=_log(job_id),
         )
     except (AIServiceError, AIResponseError) as exc:
@@ -110,6 +117,29 @@ def produce_douyin(
     for note in plan.get("warnings") or []:
         update(job_id, log=note)
     clips = plan["clips"]
+    chenze = plan.get("chenze") if isinstance(plan.get("chenze"), dict) else None
+    if not clips and chenze and chenze.get("applied") and chenze.get("review_candidates"):
+        update(
+            job_id,
+            status="success",
+            progress=100,
+            stage="done",
+            label="陈泽候选需人工复核",
+            result={
+                "video_id": int(video_id),
+                "source_title": title,
+                "source": plan["source"],
+                "budget": plan["budget"],
+                "duration": round(float(meta["duration"]), 2),
+                "sentences": len(segments),
+                "warnings": list(plan.get("warnings") or []),
+                "layout": layout,
+                "pack_url": "",
+                "shorts": [],
+                "chenze": chenze,
+            },
+        )
+        return
     root = data_dir() / "douyin" / job_id
     root.mkdir(parents=True, exist_ok=True)
     from app.services.media import free_mb
@@ -139,6 +169,7 @@ def produce_douyin(
                 "layout": layout,
                 "pack_url": pack_url,
                 "shorts": list(shorts),
+                **({"chenze": chenze} if chenze else {}),
             },
         )
 
@@ -247,6 +278,7 @@ def produce_douyin(
             "layout": layout,
             "pack_url": pack_url,
             "shorts": shorts,
+            **({"chenze": chenze} if chenze else {}),
         },
     )
 
@@ -281,6 +313,9 @@ def _public_short(
         "cover_url": f"/api/edit/douyin/{job_id}/shorts/{index}/cover" if cover_ok else "",
         "kit_url": f"/api/edit/douyin/{job_id}/shorts/{index}/pack" if kit_ok else "",
         "video_id": None,
+        "review_status": clip.get("review_status") or "",
+        "publication_approved": bool(clip.get("publication_approved")),
+        "fit_label": clip.get("fit_label"),
     }
 
 

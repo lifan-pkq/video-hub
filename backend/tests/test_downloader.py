@@ -151,6 +151,40 @@ class DownloaderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(max_active, 1)
         self.assertTrue(all(task.status == "success" for task in tasks))
 
+    def test_fallback_download_stops_when_the_task_is_cancelled(self):
+        from app.services.douyin_fallback import FallbackCancelled
+
+        task = FakeTask()
+        task.cancelled = True
+        task.download_dir = self.tmp_root
+
+        def fake_download(url, out, should_cancel=None, **kwargs):
+            self.assertTrue(should_cancel())
+            raise FallbackCancelled("下载已取消")
+
+        with patch("app.services.downloader.download_douyin", side_effect=fake_download):
+            with self.assertRaises(downloader.DownloadCancelled):
+                downloader._douyin_fallback_download(task, "https://v.douyin.com/abc")
+
+    def test_fallback_download_stops_when_the_timeout_event_is_set(self):
+        from app.services.douyin_fallback import FallbackCancelled
+
+        task = FakeTask()
+        task.download_dir = self.tmp_root
+        event = threading.Event()
+        event.set()
+        downloader._download_cancel_events[task.id] = event
+        self.addCleanup(lambda: downloader._download_cancel_events.pop(task.id, None))
+
+        def fake_download(url, out, should_cancel=None, **kwargs):
+            self.assertFalse(getattr(task, "cancelled", False))
+            self.assertTrue(should_cancel())
+            raise FallbackCancelled("下载已取消")
+
+        with patch("app.services.downloader.download_douyin", side_effect=fake_download):
+            with self.assertRaises(downloader.DownloadCancelled):
+                downloader._douyin_fallback_download(task, "https://v.douyin.com/abc")
+
 
 if __name__ == "__main__":
     unittest.main()

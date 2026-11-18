@@ -3,7 +3,10 @@ from __future__ import annotations
 
 import json
 import math
+import os
+import select
 import shutil
+import signal
 import subprocess
 import tempfile
 import threading
@@ -46,6 +49,10 @@ def _cache_path(video_path: Path) -> Path:
 # requests 的 multipart 编码会先把整个文件读进内存，7GB 视频在 3.4GB 内存的
 # 服务器上会直接 MemoryError。先抽成 64k mp3 再按段切分，单段文件只有约 2.4MB。
 _CHUNK_SECONDS = 300
+_PCM_RATE = 16000
+# 16 kHz s16le 约 500 秒。单段上限高于 300 秒分段，低于把整段长视频解进内存。
+_PCM_BYTE_CAP = 16_000_000
+_MAX_UNKNOWN_CHUNKS = 48
 
 
 def _stop_if_cancelled(should_cancel) -> None:
@@ -179,24 +186,131 @@ def _transcribe_shared(video_path: Path, log=print, *, job_id: str | None = None
         return out
 
 
-def _decode_audio_array(video_path: Path):
-    """照 ASR 服务 _decode_audio 的做法：ffmpeg 解码成 16k 单声道 float32 数组。
+class AudioDecodeLimit(AIServiceError):
+    """单段 PCM 超过内存上限。调用方应改为抽音频后分段，而不是把整段波形留在内存里。"""
+
+
+def _stop_process(proc: subprocess.Popen) -> None:
+    if proc.poll() is not None:
+        return
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError, OSError):
+        proc.kill()
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait(timeout=5)
+
+
+def _decode_audio_array(video_path: Path, *, timeout: int = 180, should_cancel=None):
+    """ffmpeg 解码成 16k 单声道 float32。带超时、取消和字节上限。
 
     不要把文件路径直接交给 faster-whisper 的 model.transcribe：
     faster-whisper 1.2.1 + av 19.0.2 会在 av.open(metadata_errors=...) 处报 TypeError。
+    `-vn` 避免顺手解码视频帧。stdout 超过 _PCM_BYTE_CAP 就杀掉进程，
+    不能等 subprocess 把整段 PCM 收进内存后再判断。
     """
     import numpy as np
 
-    result = subprocess.run(
-        ["ffmpeg", "-nostdin", "-v", "error", "-i", str(video_path),
-         "-f", "s16le", "-ac", "1", "-acodec", "pcm_s16le", "-ar", "16000", "-"],
-        capture_output=True,
+    proc = subprocess.Popen(
+        [
+            "ffmpeg", "-nostdin", "-v", "error", "-i", str(video_path), "-vn",
+            "-f", "s16le", "-ac", "1", "-acodec", "pcm_s16le", "-ar", str(_PCM_RATE), "-",
+        ],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
     )
-    if result.returncode != 0:
-        raise AIServiceError(
-            "ffmpeg 解码音频失败：" + result.stderr.decode(errors="ignore")[:300]
+    stderr_parts: list[bytes] = []
+
+    def _read_stderr() -> None:
+        assert proc.stderr is not None
+        try:
+            stderr_parts.append(proc.stderr.read())
+        finally:
+            proc.stderr.close()
+
+    stderr_thread = threading.Thread(target=_read_stderr, daemon=True)
+    stderr_thread.start()
+    chunks: list[bytes] = []
+    total = 0
+    started = time.monotonic()
+    stop: str | None = None
+    assert proc.stdout is not None
+    try:
+        while stop is None:
+            if callable(should_cancel) and should_cancel():
+                stop = "cancel"
+                break
+            if time.monotonic() - started > timeout:
+                stop = "timeout"
+                break
+            ready, _, _ = select.select([proc.stdout], [], [], 0.2)
+            if not ready:
+                if proc.poll() is not None:
+                    rest = proc.stdout.read()
+                    if rest:
+                        total += len(rest)
+                        chunks.append(rest)
+                        if total > _PCM_BYTE_CAP:
+                            stop = "cap"
+                    break
+                continue
+            try:
+                piece = os.read(proc.stdout.fileno(), 65536)
+            except OSError:
+                break
+            if not piece:
+                break
+            total += len(piece)
+            if total > _PCM_BYTE_CAP:
+                stop = "cap"
+                break
+            chunks.append(piece)
+    finally:
+        if stop is not None:
+            _stop_process(proc)
+        else:
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                _stop_process(proc)
+        stderr_thread.join(timeout=2)
+        try:
+            proc.stdout.close()
+        except OSError:
+            pass
+
+    if stop == "cancel":
+        raise TranscriptionCancelled("任务已取消")
+    if stop == "timeout":
+        raise AIServiceError(f"ffmpeg 解码音频超时（{timeout}s）")
+    if stop == "cap" or total > _PCM_BYTE_CAP:
+        raise AudioDecodeLimit(
+            "解码音频超过单段内存上限。长视频会先抽成小音频再分段；"
+            "单段仍超限时请缩短素材后重试。"
         )
-    return np.frombuffer(result.stdout, np.int16).astype(np.float32) / 32768.0
+    if proc.returncode not in (0, None):
+        err = b"".join(stderr_parts).decode(errors="ignore")[:300]
+        raise AIServiceError("ffmpeg 解码音频失败：" + err)
+    pcm = b"".join(chunks)
+    if len(pcm) % 2:
+        pcm = pcm[:-1]
+    return np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
+
+
+def _pcm_seconds(audio) -> float | None:
+    shape = getattr(audio, "shape", None)
+    count = shape[0] if shape else None
+    if count is None:
+        try:
+            count = len(audio)
+        except TypeError:
+            return None
+    return float(count) / _PCM_RATE
 
 
 def _collect_whisper_segments(segments, offset: float) -> list[dict]:
@@ -231,30 +345,51 @@ def _transcribe_local_chunked(
         tmpdir = Path(tmp)
         audio_path = tmpdir / "audio.mp3"
         _extract_audio(video_path, audio_path, job_id=job_id, should_cancel=should_cancel)
-        heard = float(probe_video(audio_path).get("duration") or duration or 0)
+        heard = float(probe_video(audio_path).get("duration") or 0)
         if heard <= 0:
-            heard = duration
-        total = max(1, int(math.ceil(heard / _CHUNK_SECONDS)))
-        log(f"本地转写按 {_CHUNK_SECONDS}s 分段，共 {total} 段，避免整段音频进内存")
+            heard = float(duration or 0)
         out: list[dict] = []
         info = None
-        for index in range(total):
+        if heard > 0:
+            total = max(1, int(math.ceil(heard / _CHUNK_SECONDS)))
+            log(f"本地转写按 {_CHUNK_SECONDS}s 分段，共 {total} 段，避免整段音频进内存")
+            spans = [
+                (index, index * _CHUNK_SECONDS, min(_CHUNK_SECONDS, max(0.1, heard - index * _CHUNK_SECONDS)))
+                for index in range(total)
+            ]
+        else:
+            total = None
+            log(f"读不到音频时长，按 {_CHUNK_SECONDS}s 试切，避免整段波形进内存")
+            spans = [
+                (index, index * _CHUNK_SECONDS, float(_CHUNK_SECONDS))
+                for index in range(_MAX_UNKNOWN_CHUNKS)
+            ]
+        for index, start, length in spans:
             _stop_if_cancelled(should_cancel)
-            start = index * _CHUNK_SECONDS
-            length = min(_CHUNK_SECONDS, max(0.1, heard - start))
             seg_path = tmpdir / f"seg{index + 1}.mp3"
-            _cut_audio_segment(audio_path, start, length, seg_path, job_id=job_id, should_cancel=should_cancel)
-            audio = _decode_audio_array(seg_path)
             try:
+                _cut_audio_segment(
+                    audio_path, start, length, seg_path, job_id=job_id, should_cancel=should_cancel,
+                )
+            except AIServiceError:
+                if index == 0:
+                    raise
+                log(f"第 {index + 1} 段已到音频末尾，停止试切")
+                break
+            audio = _decode_audio_array(seg_path, should_cancel=should_cancel)
+            try:
+                heard_chunk = _pcm_seconds(audio)
                 part, info = _run_whisper(model, audio, start)
             finally:
                 del audio
                 seg_path.unlink(missing_ok=True)
             out.extend(part)
-            log(
-                f"本地转写进度：第 {index + 1}/{total} 段完成（{len(part)} 句），"
-                f"已转写 {min(heard, start + length):.0f}s/{heard:.0f}s"
-            )
+            done = min(heard, start + length) if heard > 0 else start + (heard_chunk or length)
+            total_label = f"{heard:.0f}" if heard > 0 else "未知"
+            step = f"{index + 1}/{total}" if total else str(index + 1)
+            log(f"本地转写进度：第 {step} 段完成（{len(part)} 句），已转写 {done:.0f}s/{total_label}s")
+            if heard <= 0 and (heard_chunk is None or heard_chunk < _CHUNK_SECONDS - 1.5):
+                break
         out.sort(key=lambda item: item["start"])
         if info is not None:
             log(f"转写完成：{len(out)} 句（检测语言 {info.language}）")
@@ -276,11 +411,17 @@ def _transcribe_local(video_path: Path, log=print, *, job_id: str | None = None,
         log(f"转写完成：{len(out)} 句（检测语言 {info.language}，时长 {info.duration:.0f}s）")
         return out
     duration = float(probe_video(video_path).get("duration") or 0)
-    if duration > _CHUNK_SECONDS:
+    if duration <= 0 or duration > _CHUNK_SECONDS:
         return _transcribe_local_chunked(
             video_path, model, duration, log, job_id=job_id, should_cancel=should_cancel,
         )
-    audio = _decode_audio_array(video_path)
+    try:
+        audio = _decode_audio_array(video_path, should_cancel=should_cancel)
+    except AudioDecodeLimit:
+        log("整段解码超过内存上限，改为抽音频后分段转写")
+        return _transcribe_local_chunked(
+            video_path, model, duration, log, job_id=job_id, should_cancel=should_cancel,
+        )
     try:
         out, info = _run_whisper(model, audio, 0.0)
     finally:

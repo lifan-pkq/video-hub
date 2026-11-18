@@ -95,11 +95,19 @@ systemctl daemon-reload
 systemctl enable video-hub-backend
 systemctl restart video-hub-backend
 
+# 与 deploy.sh 的 SERVER_IP 默认值一致。nginx 入口要带这个 Host，否则 guard 返回 444。
+HEALTH_HOST="${VIDEO_HUB_HEALTH_HOST:-39.105.112.189}"
+
 wait_for() {
   local url="$1"
   local name="$2"
+  local host_header="${3:-}"
+  local -a curl_args=(-sf)
+  if [ -n "$host_header" ]; then
+    curl_args+=(-H "Host: ${host_header}")
+  fi
   for attempt in {1..45}; do
-    if curl -sf "$url" >/dev/null; then
+    if curl "${curl_args[@]}" "$url" >/dev/null; then
       echo "$name 健康检查通过"
       return 0
     fi
@@ -151,7 +159,7 @@ if ! nginx -t; then
   exit 1
 fi
 systemctl reload nginx
-if ! wait_for http://localhost/api/health video-hub-public; then
+if ! wait_for http://127.0.0.1/api/health video-hub-public "$HEALTH_HOST"; then
   rollback
   exit 1
 fi

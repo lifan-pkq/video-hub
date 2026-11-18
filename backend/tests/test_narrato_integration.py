@@ -7,6 +7,12 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class RemovedLegacyTests(unittest.TestCase):
+    def test_restored_douyin_fallback_is_not_listed_as_removed(self):
+        self.assertTrue((ROOT / "backend/app/services/douyin_fallback.py").is_file())
+        source = Path(__file__).read_text()
+        listed = source.split("for relative in (", 1)[1].split("):", 1)[0]
+        self.assertNotIn("douyin_fallback.py", listed)
+
     def test_legacy_trees_are_gone(self):
         for relative in (
             "narratoai",

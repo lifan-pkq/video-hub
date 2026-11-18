@@ -37,13 +37,17 @@ rsync -az --delete -e "$RSYNC_SSH" \
   "$PROJECT_DIR/" "$SERVER_USER@$SERVER_IP:$REMOTE_DIR/"
 
 echo "=== [3/4] 安装依赖、迁移配置并启动服务 ==="
-"${SSH_CMD[@]}" "REMOTE_DIR='$REMOTE_DIR' bash '$REMOTE_DIR/deploy/remote-install.sh'"
+# 公网 Host 传给远端安装脚本。guard 的 default_server 对 localhost 直接 444。
+"${SSH_CMD[@]}" "REMOTE_DIR='$REMOTE_DIR' VIDEO_HUB_HEALTH_HOST='$SERVER_IP' bash '$REMOTE_DIR/deploy/remote-install.sh'"
 
 echo "=== [4/4] 统一入口健康检查 ==="
-"${SSH_CMD[@]}" bash -s <<'EOF'
+# 打到本机 nginx，但 Host 必须是站点名。不带 Host 时 video-hub-guard 返回 444，curl -sf 会失败。
+# 8000 端口的 uvicorn 不经过这层，远程安装脚本里那次检查保持直连。
+"${SSH_CMD[@]}" bash -s -- "$SERVER_IP" <<'EOF'
 set -e
+health_host="$1"
 for attempt in {1..30}; do
-  if curl -sf http://localhost/api/health; then
+  if curl -sf -H "Host: ${health_host}" http://127.0.0.1/api/health; then
     echo
     break
   fi
@@ -53,7 +57,7 @@ for attempt in {1..30}; do
   fi
   sleep 2
 done
-curl -sf -o /dev/null -w 'Video Hub HTTP %{http_code}\n' http://localhost/
+curl -sf -H "Host: ${health_host}" -o /dev/null -w 'Video Hub HTTP %{http_code}\n' http://127.0.0.1/
 EOF
 
 echo "=== 部署完成：http://$SERVER_IP ==="

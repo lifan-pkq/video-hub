@@ -207,6 +207,128 @@ class LocalChunkedTranscriptionTests(unittest.TestCase):
         cut.assert_not_called()
         model.transcribe.assert_called_once()
 
+    def test_missing_duration_extracts_audio_instead_of_decoding_the_file(self):
+        import numpy as np
+
+        from app.services.transcription import _transcribe_local
+
+        class Info:
+            language = "zh"
+            duration = 20
+
+        model = Mock()
+        model.transcribe.return_value = ([], Info())
+        arrays = [
+            np.zeros(16000 * 300, dtype=np.float32),
+            np.zeros(16000 * 20, dtype=np.float32),
+        ]
+
+        def decode(path, **kwargs):
+            self.assertNotEqual(Path(path), Path("mystery.mp4"))
+            return arrays.pop(0)
+
+        with patch("app.services.transcription._get_model", return_value=model), \
+                patch("app.services.transcription.shutil.which", return_value="/usr/bin/ffmpeg"), \
+                patch("app.services.transcription.probe_video", return_value={}), \
+                patch("app.services.transcription._extract_audio") as extract, \
+                patch("app.services.transcription._cut_audio_segment") as cut, \
+                patch("app.services.transcription._decode_audio_array", side_effect=decode):
+            _transcribe_local(Path("mystery.mp4"), log=lambda _: None)
+
+        extract.assert_called_once()
+        self.assertEqual(cut.call_count, 2)
+        self.assertEqual(model.transcribe.call_count, 2)
+        self.assertEqual(arrays, [])
+
+    def test_missing_duration_does_not_swallow_the_first_cut_error(self):
+        from app.services.transcription import _transcribe_local
+
+        model = Mock()
+        with patch("app.services.transcription._get_model", return_value=model), \
+                patch("app.services.transcription.shutil.which", return_value="/usr/bin/ffmpeg"), \
+                patch("app.services.transcription.probe_video", return_value={}), \
+                patch("app.services.transcription._extract_audio"), \
+                patch("app.services.transcription._cut_audio_segment", side_effect=AIServiceError("切分失败")), \
+                patch("app.services.transcription._decode_audio_array") as decode:
+            with self.assertRaises(AIServiceError):
+                _transcribe_local(Path("mystery.mp4"), log=lambda _: None)
+        decode.assert_not_called()
+        model.transcribe.assert_not_called()
+
+    def test_underestimated_duration_retries_in_chunks_when_pcm_is_capped(self):
+        from app.services.transcription import AudioDecodeLimit, _transcribe_local
+
+        class Info:
+            language = "zh"
+            duration = 8
+
+        model = Mock()
+        model.transcribe.return_value = ([], Info())
+        with patch("app.services.transcription._get_model", return_value=model), \
+                patch("app.services.transcription.shutil.which", return_value="/usr/bin/ffmpeg"), \
+                patch("app.services.transcription.probe_video", return_value={"duration": 8}), \
+                patch("app.services.transcription._decode_audio_array", side_effect=AudioDecodeLimit("cap")), \
+                patch("app.services.transcription._transcribe_local_chunked", return_value=[{"start": 0, "end": 1, "text": "分段"}]) as chunked:
+            result = _transcribe_local(Path("short-lie.mp4"), log=lambda _: None)
+        self.assertEqual(result[0]["text"], "分段")
+        chunked.assert_called_once()
+
+
+class DecodeLimitTests(unittest.TestCase):
+    def test_decode_stops_past_the_pcm_cap_and_skips_video(self):
+        import os
+        import shutil
+        import subprocess
+        import tempfile
+
+        from app.services.ai_edit import AIServiceError
+        from app.services.transcription import _decode_audio_array
+
+        if not shutil.which("ffmpeg"):
+            self.skipTest("需要 ffmpeg")
+        commands = []
+        real_popen = subprocess.Popen
+
+        def spy(cmd, **kwargs):
+            commands.append(cmd)
+            return real_popen(cmd, **kwargs)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            wav = os.path.join(tmp, "tone.wav")
+            subprocess.run(
+                ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                 "-f", "lavfi", "-i", "sine=frequency=440:duration=1",
+                 "-ar", "16000", "-ac", "1", wav],
+                check=True, timeout=30,
+            )
+            with patch("app.services.transcription.subprocess.Popen", side_effect=spy), \
+                    patch("app.services.transcription._PCM_BYTE_CAP", 1000):
+                with self.assertRaises(AIServiceError) as caught:
+                    _decode_audio_array(Path(wav), timeout=30)
+        self.assertIn("内存上限", str(caught.exception))
+        self.assertTrue(commands)
+        self.assertIn("-vn", commands[0])
+
+    def test_decode_timeout_kills_a_blocked_ffmpeg(self):
+        import os
+        import shutil
+        import tempfile
+        import time
+
+        from app.services.ai_edit import AIServiceError
+        from app.services.transcription import _decode_audio_array
+
+        if not shutil.which("ffmpeg"):
+            self.skipTest("需要 ffmpeg")
+        with tempfile.TemporaryDirectory() as tmp:
+            fifo = os.path.join(tmp, "block.fifo")
+            os.mkfifo(fifo)
+            started = time.monotonic()
+            with self.assertRaises(AIServiceError) as caught:
+                _decode_audio_array(Path(fifo), timeout=1)
+        self.assertIn("超时", str(caught.exception))
+        self.assertLess(time.monotonic() - started, 8)
+
 
 class TranscriptionCancelTests(unittest.TestCase):
     def test_cancel_before_start_does_not_touch_the_file(self):

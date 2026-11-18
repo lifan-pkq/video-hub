@@ -89,6 +89,16 @@ def _extract_audio(video_path: Path, audio_path: Path, *, job_id: str | None = N
         raise AIServiceError("抽取音频失败：没有写出音频")
 
 
+def _segment_seconds(path: Path) -> float | None:
+    try:
+        seconds = float(probe_video(path).get("duration") or 0)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(seconds) or seconds <= 0.05:
+        return None
+    return seconds
+
+
 def _cut_audio_segment(
     audio_path: Path,
     start: float,
@@ -97,8 +107,12 @@ def _cut_audio_segment(
     *,
     job_id: str | None = None,
     should_cancel=None,
-) -> None:
-    """从已抽出的 mp3 里切出一段（重编码，保证切点可用）。"""
+) -> float:
+    """从已抽出的 mp3 里切出一段，返回这段的秒数。
+
+    取消仍是 TranscriptionCancelled，超时和 ffmpeg 失败仍是 AIServiceError。
+    只有成功退出且没有可播放音频时，才抛 AudioPastEnd。
+    """
     _stop_if_cancelled(should_cancel)
     _ffmpeg_audio(
         ["-ss", f"{start:.3f}", "-t", f"{length:.3f}", "-i", str(audio_path),
@@ -109,7 +123,16 @@ def _cut_audio_segment(
         fail=f"切分音频失败（{start:.0f}s 段）",
     )
     if not out_path.exists() or out_path.stat().st_size == 0:
+        if start > 0:
+            raise AudioPastEnd(f"切点 {start:.0f}s 已越过音频末尾")
         raise AIServiceError(f"切分音频失败（{start:.0f}s 段）：没有写出音频")
+    seconds = _segment_seconds(out_path)
+    if seconds is None:
+        # 越过结尾时 ffmpeg 6 仍会写出大约 300 字节的空 mp3，ffprobe 读不到时长。
+        if start > 0 and out_path.stat().st_size < 1024:
+            raise AudioPastEnd(f"切点 {start:.0f}s 已越过音频末尾")
+        raise AIServiceError(f"切分音频失败（{start:.0f}s 段）：读不出这一段的时长")
+    return seconds
 
 
 def _transcribe_shared(video_path: Path, log=print, *, job_id: str | None = None, should_cancel=None) -> list[dict]:
@@ -188,6 +211,14 @@ def _transcribe_shared(video_path: Path, log=print, *, job_id: str | None = None
 
 class AudioDecodeLimit(AIServiceError):
     """单段 PCM 超过内存上限。调用方应改为抽音频后分段，而不是把整段波形留在内存里。"""
+
+
+class AudioPastEnd(Exception):
+    """切点已经越过音频末尾。
+
+    不是 AIServiceError：超时、取消和真正的解码失败必须继续往外抛，
+    不能被「已经到结尾」吞掉。越过结尾时 ffmpeg 往往仍以 0 退出，并留下只有文件头的小 mp3。
+    """
 
 
 def _stop_process(proc: subprocess.Popen) -> None:
@@ -302,6 +333,15 @@ def _decode_audio_array(video_path: Path, *, timeout: int = 180, should_cancel=N
     return np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
 
 
+def _as_seconds(value) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    number = float(value)
+    if not math.isfinite(number) or number <= 0:
+        return None
+    return number
+
+
 def _pcm_seconds(audio) -> float | None:
     shape = getattr(audio, "shape", None)
     count = shape[0] if shape else None
@@ -364,32 +404,54 @@ def _transcribe_local_chunked(
                 (index, index * _CHUNK_SECONDS, float(_CHUNK_SECONDS))
                 for index in range(_MAX_UNKNOWN_CHUNKS)
             ]
+        reached_end = False
         for index, start, length in spans:
             _stop_if_cancelled(should_cancel)
             seg_path = tmpdir / f"seg{index + 1}.mp3"
             try:
-                _cut_audio_segment(
+                produced = _cut_audio_segment(
                     audio_path, start, length, seg_path, job_id=job_id, should_cancel=should_cancel,
                 )
-            except AIServiceError:
-                if index == 0:
-                    raise
-                log(f"第 {index + 1} 段已到音频末尾，停止试切")
+            except AudioPastEnd as exc:
+                if index == 0 or heard > 0:
+                    raise AIServiceError(
+                        f"第 {index + 1} 段没有可转写的音频（起点 {start:.0f}s）。"
+                        "已停止，避免把不完整的口播当成全文。"
+                    ) from exc
+                log(f"第 {index + 1} 段已到音频末尾")
+                reached_end = True
                 break
             audio = _decode_audio_array(seg_path, should_cancel=should_cancel)
             try:
                 heard_chunk = _pcm_seconds(audio)
+                produced_s = _as_seconds(produced)
+                if heard <= 0 and heard_chunk is None:
+                    raise AIServiceError(
+                        f"第 {index + 1} 段无法确认采样长度。"
+                        "已停止，避免把未转写的后半段当成完整口播。"
+                    )
+                if heard <= 0 and produced_s is not None and heard_chunk + 1.0 < produced_s:
+                    raise AIServiceError(
+                        f"第 {index + 1} 段解码只有 {heard_chunk:.1f}s，切出的文件有 {produced_s:.1f}s。"
+                        "已停止，避免漏掉没解完的口播。"
+                    )
                 part, info = _run_whisper(model, audio, start)
             finally:
                 del audio
                 seg_path.unlink(missing_ok=True)
             out.extend(part)
-            done = min(heard, start + length) if heard > 0 else start + (heard_chunk or length)
+            done = min(heard, start + length) if heard > 0 else start + (heard_chunk or 0)
             total_label = f"{heard:.0f}" if heard > 0 else "未知"
             step = f"{index + 1}/{total}" if total else str(index + 1)
             log(f"本地转写进度：第 {step} 段完成（{len(part)} 句），已转写 {done:.0f}s/{total_label}s")
-            if heard <= 0 and (heard_chunk is None or heard_chunk < _CHUNK_SECONDS - 1.5):
+            if heard <= 0 and heard_chunk < _CHUNK_SECONDS - 1.5:
+                reached_end = True
                 break
+        if heard <= 0 and not reached_end:
+            raise AIServiceError(
+                f"读不到时长，已转写 {len(spans)} 段仍未到结尾。"
+                "为避免漏掉后面的口播，本次失败。"
+            )
         out.sort(key=lambda item: item["start"])
         if info is not None:
             log(f"转写完成：{len(out)} 句（检测语言 {info.language}）")

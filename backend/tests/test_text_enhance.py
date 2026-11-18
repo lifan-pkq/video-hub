@@ -138,6 +138,12 @@ class TextRulesTests(unittest.TestCase):
 
 @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "ffmpeg required")
 class TextRenderTests(unittest.TestCase):
+    def _require_cjk_font(self):
+        from app.services.douyin_render import caption_font
+        _name, path = caption_font()
+        if path is None or not Path(path).is_file():
+            self.skipTest("本机没有可预检的中文字体文件，文字效果会拒绝烧录")
+
     def _source(self, root: Path) -> Path:
         source = root / "source.mp4"
         _ffmpeg(
@@ -149,6 +155,7 @@ class TextRenderTests(unittest.TestCase):
         return source
 
     def test_enabled_burns_chinese_title_and_caption_disabled_does_not(self):
+        self._require_cjk_font()
         from app.services.douyin_render import render_short
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -207,6 +214,7 @@ class TextRenderTests(unittest.TestCase):
             self.assertGreater(frame_path.stat().st_size, 1000)
 
     def test_injection_and_overlap_do_not_reach_ffmpeg_graph(self):
+        self._require_cjk_font()
         from app.services.douyin_render import render_short
 
         with tempfile.TemporaryDirectory() as tmp:

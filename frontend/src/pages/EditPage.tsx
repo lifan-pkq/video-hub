@@ -10,6 +10,7 @@ import {
   startDouyinProduce,
   type ChenzeOptions,
   type DouyinLayout,
+  type TextEnhanceOptions,
   type TaskSummary,
   type Video,
 } from '../api'
@@ -45,6 +46,12 @@ export default function EditPage() {
   const [chenzeHome, setChenzeHome] = useState('')
   const [chenzeColumn, setChenzeColumn] = useState<'' | '综艺' | '评审' | '游戏' | '通用保真'>('')
   const [chenzeLimit, setChenzeLimit] = useState('')
+  const [textEnhance, setTextEnhance] = useState(false)
+  const [burnCaptions, setBurnCaptions] = useState(true)
+  const [titleNote, setTitleNote] = useState('')
+  const [textStyle, setTextStyle] = useState<TextEnhanceOptions['style']>('outline')
+  const [textMotion, setTextMotion] = useState<TextEnhanceOptions['emphasis']>('none')
+  const [textFade, setTextFade] = useState(false)
   const [starting, setStarting] = useState(false)
 
   const load = useCallback(async () => {
@@ -94,7 +101,17 @@ export default function EditPage() {
             ...(chenzeLimit.trim() && Number.isFinite(limit) && limit > 0 ? { max_seconds: limit } : {}),
           }
         : undefined
-      const job = await startDouyinProduce(selectedVideoId, instruction.trim(), 0, layout, chenzeStyle, chenze)
+      const enhance: TextEnhanceOptions | undefined = textEnhance
+        ? {
+            enabled: true,
+            captions: burnCaptions,
+            title_text: titleNote.trim(),
+            style: textStyle,
+            emphasis: textMotion,
+            fade: textFade,
+          }
+        : { enabled: false }
+      const job = await startDouyinProduce(selectedVideoId, instruction.trim(), 0, layout, chenzeStyle, chenze, enhance)
       toast.success('已开始生成抖音短视频')
       navigate(editTaskPath(job))
     } catch (error) {
@@ -267,6 +284,58 @@ export default function EditPage() {
                       inputMode="decimal"
                       placeholder="不填则用本次成片上限"
                     />
+                  </label>
+                </div>
+              </>
+            )}
+          </div>
+          <div className="studio-chenze">
+            <div className="studio-chenze-row">
+              <Switch checked={textEnhance} onChange={setTextEnhance} label="使用文字与轻效果" />
+              <div>
+                <strong>文字与轻效果</strong>
+                <p className="studio-fine">可选，默认关闭。关闭后仍按现在的方式烧录口播字幕。这些是通用效果，不是已验收的陈泽风格。</p>
+              </div>
+            </div>
+            {textEnhance && (
+              <>
+                <p className="studio-fine">
+                  口播字幕来自转写草稿，烧进去之后仍要核对。旁注是你加的说明，不是原话。原声会保留，这里不加音乐或音效。
+                </p>
+                <div className="studio-chenze-fields">
+                  <label>
+                    <span>烧录口播字幕</span>
+                    <select value={burnCaptions ? 'yes' : 'no'} onChange={(event) => setBurnCaptions(event.target.value === 'yes')}>
+                      <option value="yes">烧录转写草稿</option>
+                      <option value="no">不烧口播字幕</option>
+                    </select>
+                  </label>
+                  <label>
+                    字幕样式
+                    <select value={textStyle} onChange={(event) => setTextStyle(event.target.value as TextEnhanceOptions['style'])}>
+                      <option value="outline">白字描边</option>
+                      <option value="yellow">黄字描边</option>
+                      <option value="plain">纯白</option>
+                    </select>
+                  </label>
+                  <label>
+                    字的动效
+                    <select value={textMotion} onChange={(event) => setTextMotion(event.target.value as TextEnhanceOptions['emphasis'])}>
+                      <option value="none">不动</option>
+                      <option value="fade">淡入淡出</option>
+                      <option value="pop">轻微弹出</option>
+                    </select>
+                  </label>
+                  <label>
+                    画面
+                    <select value={textFade ? 'yes' : 'no'} onChange={(event) => setTextFade(event.target.value === 'yes')}>
+                      <option value="no">不淡化</option>
+                      <option value="yes">开头结尾淡入淡出</option>
+                    </select>
+                  </label>
+                  <label className="studio-chenze-wide">
+                    旁注（编辑说明，不是原话）
+                    <input value={titleNote} maxLength={40} onChange={(event) => setTitleNote(event.target.value)} placeholder="例如：只保留观点，不代表原片结论" />
                   </label>
                 </div>
               </>

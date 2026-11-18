@@ -264,7 +264,7 @@ class ChenzeRouteTests(unittest.TestCase):
 
         seen = []
 
-        def run(job_id, video_id, instruction, max_clips, layout="interview", chenze_style=False, chenze_options=None):
+        def run(job_id, video_id, instruction, max_clips, layout="interview", chenze_style=False, chenze_options=None, **_extra):
             seen.append({"chenze_style": chenze_style, "chenze_options": chenze_options})
             update(job_id, status="success", progress=100, stage="done", label="完成", result={"shorts": []})
 

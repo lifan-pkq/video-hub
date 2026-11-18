@@ -24,6 +24,7 @@ from app.services.douyin_render import (
     write_copy_files,
     write_cover,
 )
+from app.services.text_enhance import TextEnhanceError, normalize_settings, public_status, write_srt
 from app.services.videos import data_dir, fetch, ingest, resolve_media
 
 
@@ -67,6 +68,7 @@ def produce_douyin(
     layout: str = "interview",
     chenze_style: bool = False,
     chenze_options: dict | None = None,
+    text_enhance: dict | None = None,
 ) -> None:
     video = fetch(int(video_id))
     source = resolve_media(video)
@@ -74,6 +76,10 @@ def produce_douyin(
     settings = douyin_settings()
     title = str(video.get("title") or source.name)
     layout = "podcast" if layout == "podcast" else "interview"
+    try:
+        enhance = normalize_settings(text_enhance)
+    except TextEnhanceError as exc:
+        raise EngineError(exc.message, code=exc.code, action="检查旁注和样式后再生成。", status=400) from exc
     report(job_id, 4, "asr", f"转写「{title}」")
     try:
         segments = transcribe(source, log=_log(job_id), job_id=job_id, should_cancel=_check(job_id))
@@ -137,6 +143,7 @@ def produce_douyin(
                 "pack_url": "",
                 "shorts": [],
                 "chenze": chenze,
+                "text_enhance": public_status(enhance),
             },
         )
         return
@@ -169,6 +176,7 @@ def produce_douyin(
                 "layout": layout,
                 "pack_url": pack_url,
                 "shorts": list(shorts),
+                "text_enhance": public_status(enhance),
                 **({"chenze": chenze} if chenze else {}),
             },
         )
@@ -208,6 +216,7 @@ def produce_douyin(
                 layout=layout,
                 job_id=job_id,
                 should_cancel=_check(job_id),
+                enhance=enhance if enhance.get("enabled") else None,
             )
         except EngineError as exc:
             if exc.code == "cancelled":
@@ -216,8 +225,10 @@ def produce_douyin(
             update(job_id, log=failures[-1])
             continue
         cover_ok = write_cover(folder / "video.mp4", folder / "cover.jpg", job_id=job_id, should_cancel=_check(job_id))
-        if not rendered["captions_burned"] and clip.get("captions"):
+        if not rendered["captions_burned"] and (clip.get("captions") or (enhance.get("enabled") and enhance.get("title_text"))):
             update(job_id, log=f"「{label}」字幕没烧进去，文案和字幕稿仍可下载。")
+        if enhance.get("enabled") and rendered.get("quote_cues"):
+            write_srt(rendered["quote_cues"], folder / "captions.srt")
         kit_ok = False
         try:
             kit_ok = build_clip_zip(folder)
@@ -278,6 +289,7 @@ def produce_douyin(
             "layout": layout,
             "pack_url": pack_url,
             "shorts": shorts,
+            "text_enhance": public_status(enhance, applied=_collected_effects(shorts)),
             **({"chenze": chenze} if chenze else {}),
         },
     )
@@ -316,7 +328,20 @@ def _public_short(
         "review_status": clip.get("review_status") or "",
         "publication_approved": bool(clip.get("publication_approved")),
         "fit_label": clip.get("fit_label"),
+        "quote_cues": list(rendered.get("quote_cues") or []),
+        "text_effects": list(rendered.get("text_effects") or []),
+        "title_text": str(rendered.get("title_text") or ""),
+        "srt_url": f"/api/edit/douyin/{job_id}/shorts/{index}/srt" if rendered.get("quote_cues") else "",
     }
+
+
+def _collected_effects(shorts: list[dict]) -> list[str]:
+    effects: list[str] = []
+    for short in shorts:
+        for name in short.get("text_effects") or []:
+            if name not in effects:
+                effects.append(name)
+    return effects
 
 
 def _job_or_raise(job_id: str) -> dict:
@@ -328,7 +353,7 @@ def _job_or_raise(job_id: str) -> dict:
     return job
 
 
-def short_file(job_id: str, index: int, *, cover: bool = False, kit: bool = False) -> Path:
+def short_file(job_id: str, index: int, *, cover: bool = False, kit: bool = False, srt: bool = False) -> Path:
     job = _job_or_raise(job_id)
     if job.get("status") not in {"success", "partial", "running"}:
         raise EngineError("成片还没完成", code="missing_file", action="等任务结束，或看失败原因。", status=404)
@@ -338,7 +363,7 @@ def short_file(job_id: str, index: int, *, cover: bool = False, kit: bool = Fals
     root = (data_dir() / "douyin" / job["id"]).resolve()
     folder = (root / f"{int(index):02d}").resolve()
     folder.relative_to(root)
-    name = "kit.zip" if kit else "cover.jpg" if cover else "video.mp4"
+    name = "kit.zip" if kit else "captions.srt" if srt else "cover.jpg" if cover else "video.mp4"
     path = folder / name
     if not path.is_file():
         raise EngineError("文件不在磁盘上", code="missing_file", action="重新跑一次一键生成。", status=404)
@@ -355,6 +380,89 @@ def download_name(job_id: str, index: int, *, cover: bool = False, kit: bool = F
     stem = stem or f"短视频{index}"
     suffix = ".zip" if kit else ".jpg" if cover else ".mp4"
     return f"{int(index):02d}-{stem}{suffix}"
+
+
+def reburn_short(job_id: str, index: int, cues: list, title_text: str | None = None) -> dict:
+    """用改过的口播字幕和旁注重烧这一条。不改切点，也不加新音轨。"""
+    from app.config import douyin_settings
+    from app.jobs import update
+
+    job = _job_or_raise(job_id)
+    if job.get("status") not in {"success", "partial"}:
+        raise EngineError("成片还没完成，不能改字幕", code="not_ready", action="等生成结束。", status=409)
+    try:
+        enhance = normalize_settings((job.get("input") or {}).get("text_enhance"))
+    except TextEnhanceError as exc:
+        raise EngineError(exc.message, code=exc.code, status=400) from exc
+    if not enhance.get("enabled"):
+        raise EngineError(
+            "这次没有打开文字效果，不能把通用字幕当成另一种风格重烧。",
+            code="disabled",
+            action="回到智能剪辑，打开文字与轻效果后再生成。",
+            status=400,
+        )
+    result = dict(job.get("result") or {})
+    shorts = [dict(item) for item in (result.get("shorts") or [])]
+    short = next((item for item in shorts if int(item.get("index") or 0) == int(index)), None)
+    if short is None:
+        raise EngineError("没有这条成片", code="missing_file", status=404)
+    if title_text is not None:
+        cleaned = str(title_text).replace("\x00", "").strip()
+        if len(cleaned) > 40:
+            raise EngineError("旁注请控制在 40 字以内", code="title", status=400)
+        enhance["title_text"] = cleaned
+    enhance["captions"] = True
+    try:
+        video_id = int(result.get("video_id") or (job.get("input") or {}).get("video_id") or 0)
+    except (TypeError, ValueError):
+        video_id = 0
+    video = fetch(video_id)
+    source = resolve_media(video)
+    meta = probe_source(source)
+    start = float(short.get("start") or 0)
+    end = float(short.get("end") or 0)
+    if end <= start:
+        raise EngineError("这条成片没有有效切点", code="INVALID_INTERVAL", status=400)
+    layout = short.get("layout") if short.get("layout") in {"interview", "podcast"} else result.get("layout")
+    layout = "podcast" if layout == "podcast" else "interview"
+    settings = douyin_settings()
+    boxes = [] if layout == "podcast" else load_subject_boxes(video_id)
+    if layout == "podcast":
+        track = []
+    else:
+        in_boxes = [item for item in boxes if start - 1 <= float(item["time"]) <= end + 1]
+        track = build_subject_track(start, end, [], in_boxes, [])
+    folder = data_dir() / "douyin" / job["id"] / f"{int(index):02d}"
+    rendered = render_short(
+        source,
+        folder / "video.mp4",
+        start=start,
+        end=end,
+        src_w=int(meta["width"]),
+        src_h=int(meta["height"]),
+        has_audio=bool(meta["has_audio"]),
+        track=track,
+        captions=list(cues or []),
+        out_w=int(settings["width"]),
+        out_h=int(settings["height"]),
+        threads=int(settings["threads"]),
+        layout=layout,
+        job_id=job_id,
+        enhance=enhance,
+    )
+    if rendered.get("quote_cues"):
+        write_srt(rendered["quote_cues"], folder / "captions.srt")
+    elif (folder / "captions.srt").is_file():
+        (folder / "captions.srt").unlink()
+    short["quote_cues"] = list(rendered.get("quote_cues") or [])
+    short["title_text"] = str(rendered.get("title_text") or "")
+    short["text_effects"] = list(rendered.get("text_effects") or [])
+    short["captions_burned"] = bool(rendered.get("captions_burned"))
+    short["srt_url"] = f"/api/edit/douyin/{job_id}/shorts/{int(index)}/srt" if short["quote_cues"] else ""
+    result["shorts"] = shorts
+    result["text_enhance"] = public_status(enhance, applied=_collected_effects(shorts))
+    update(job_id, result=result)
+    return {"short": short, "text_enhance": result["text_enhance"]}
 
 
 def pack_file(job_id: str) -> Path:

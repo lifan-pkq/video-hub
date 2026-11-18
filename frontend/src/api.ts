@@ -77,8 +77,9 @@ export interface Task {
     instruction?: string
     max_clips?: number
     layout?: string
-    chenze_style?: boolean
-    chenze?: ChenzeOptions
+  chenze_style?: boolean
+  chenze?: ChenzeOptions
+  text_enhance?: TextEnhanceOptions
     format?: string
     fps?: number
     width?: number
@@ -101,6 +102,7 @@ export interface Task {
     video_id?: number
     layout?: string
     chenze?: ChenzeAutomation
+    text_enhance?: TextEnhanceStatus
     shorts?: DouyinShort[]
     filename?: string
     format?: string
@@ -521,6 +523,29 @@ export interface DouyinShort {
   review_status?: string
   publication_approved?: boolean
   fit_label?: string | null
+  quote_cues?: Array<{ start: number; end: number; text: string; role?: string }>
+  text_effects?: string[]
+  title_text?: string
+  srt_url?: string
+}
+
+export interface TextEnhanceOptions {
+  enabled?: boolean
+  captions?: boolean
+  title_text?: string
+  style?: 'outline' | 'plain' | 'yellow'
+  fade?: boolean
+  emphasis?: 'none' | 'fade' | 'pop'
+}
+
+export interface TextEnhanceStatus extends TextEnhanceOptions {
+  applied_effects?: string[]
+  review_status?: string
+  validated_chenze_style?: boolean
+  audio?: string
+  added_audio?: boolean
+  font?: string
+  typography_note?: string
 }
 
 export interface ChenzeOptions {
@@ -619,6 +644,7 @@ export async function startDouyinProduce(
   layout: DouyinLayout = 'interview',
   chenzeStyle = false,
   chenze?: ChenzeOptions,
+  textEnhance?: TextEnhanceOptions,
 ): Promise<EditJob> {
   try {
     const { data } = await http.post<EditJob>('/edit/douyin', {
@@ -628,6 +654,24 @@ export async function startDouyinProduce(
       layout,
       chenze_style: chenzeStyle,
       ...(chenzeStyle && chenze ? { chenze } : {}),
+      ...(textEnhance ? { text_enhance: textEnhance } : {}),
+    }, { timeout: 0 })
+    return data
+  } catch (error) {
+    raiseApi(error)
+  }
+}
+
+export async function reburnDouyinShort(
+  jobId: string,
+  index: number,
+  cues: Array<{ start: number; end: number; text: string }>,
+  titleText?: string,
+): Promise<{ short: DouyinShort; text_enhance?: TextEnhanceStatus }> {
+  try {
+    const { data } = await http.post(`/edit/douyin/${encodeURIComponent(jobId)}/shorts/${index}/reburn`, {
+      cues,
+      title_text: titleText,
     }, { timeout: 0 })
     return data
   } catch (error) {

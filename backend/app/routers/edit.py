@@ -8,7 +8,15 @@ from pydantic import BaseModel, Field
 
 from engine.schemas import Suggestion
 from app.jobs import create, get, submit
-from app.services.douyin_flow import download_name, pack_file, produce_douyin, send_to_library, short_file
+from app.services.douyin_flow import (
+    download_name,
+    pack_file,
+    produce_douyin,
+    reburn_short,
+    send_to_library,
+    short_file,
+)
+from app.services.text_enhance import disabled_settings
 from app.services.edit_flow import analyze_videos, build_highlight, export_clips, plan_suggestions
 from app.services.videos import fetch
 
@@ -80,6 +88,15 @@ class ChenzeStyleBody(BaseModel):
     low_res: bool = False
 
 
+class TextEnhanceBody(BaseModel):
+    enabled: bool = False
+    captions: bool = True
+    title_text: str = ""
+    style: Literal["outline", "plain", "yellow"] = "outline"
+    fade: bool = False
+    emphasis: Literal["none", "fade", "pop"] = "none"
+
+
 class DouyinProduceBody(BaseModel):
     video_id: int
     instruction: str = ""
@@ -87,6 +104,18 @@ class DouyinProduceBody(BaseModel):
     layout: Literal["interview", "podcast"] = "interview"
     chenze_style: bool = False
     chenze: ChenzeStyleBody | None = None
+    text_enhance: TextEnhanceBody | None = None
+
+
+class CaptionCueBody(BaseModel):
+    start: float
+    end: float
+    text: str = ""
+
+
+class ReburnBody(BaseModel):
+    cues: list[CaptionCueBody] = Field(default_factory=list, max_length=80)
+    title_text: str | None = None
 
 
 def _chenze_payload(body: DouyinProduceBody) -> dict:
@@ -112,6 +141,7 @@ def douyin_produce(body: DouyinProduceBody):
     fetch(body.video_id)
     instruction = body.instruction.strip()[:400]
     chenze = _chenze_payload(body)
+    text_enhance = body.text_enhance.model_dump() if body.text_enhance else disabled_settings()
     job = create(
         "edit.douyin",
         "抖音成片",
@@ -122,6 +152,7 @@ def douyin_produce(body: DouyinProduceBody):
             "layout": body.layout,
             "chenze_style": body.chenze_style,
             "chenze": chenze,
+            "text_enhance": text_enhance,
         },
     )
     return submit(
@@ -134,6 +165,7 @@ def douyin_produce(body: DouyinProduceBody):
             layout=body.layout,
             chenze_style=body.chenze_style,
             chenze_options=chenze,
+            text_enhance=text_enhance,
         ),
     )
 
@@ -162,6 +194,23 @@ def douyin_short_pack(job_id: str, index: int):
         path,
         media_type="application/zip",
         filename=download_name(job_id, index, kit=True),
+    )
+
+
+@router.get("/douyin/{job_id}/shorts/{index}/srt")
+def douyin_short_srt(job_id: str, index: int):
+    path = short_file(job_id, index, srt=True)
+    return FileResponse(path, media_type="application/x-subrip", filename=f"{int(index):02d}-captions.srt")
+
+
+@router.post("/douyin/{job_id}/shorts/{index}/reburn")
+def douyin_reburn(job_id: str, index: int, body: ReburnBody):
+    """按校对后的口播字幕重烧这一条。旁注仍是编辑说明，不是原话。"""
+    return reburn_short(
+        job_id,
+        index,
+        [item.model_dump() for item in body.cues],
+        title_text=body.title_text,
     )
 
 
@@ -207,6 +256,7 @@ def douyin_retry(job_id: str):
     layout = payload.get("layout") if payload.get("layout") in {"interview", "podcast"} else "interview"
     chenze_style = bool(payload.get("chenze_style"))
     chenze = payload.get("chenze") if isinstance(payload.get("chenze"), dict) else {}
+    text_enhance = payload.get("text_enhance") if isinstance(payload.get("text_enhance"), dict) else disabled_settings()
     job = create(
         "edit.douyin",
         "抖音成片",
@@ -217,6 +267,7 @@ def douyin_retry(job_id: str):
             "layout": layout,
             "chenze_style": chenze_style,
             "chenze": chenze,
+            "text_enhance": text_enhance,
             "retry_of": previous["id"],
         },
     )
@@ -230,6 +281,7 @@ def douyin_retry(job_id: str):
             layout=layout,
             chenze_style=chenze_style,
             chenze_options=chenze,
+            text_enhance=text_enhance,
         ),
     )
 

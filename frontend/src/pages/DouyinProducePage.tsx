@@ -6,6 +6,7 @@ import {
   errorMessage,
   fetchJob,
   retryDouyinProduce,
+  reburnDouyinShort,
   fetchVideos,
   saveDouyinToLibrary,
   type ChenzeReviewCandidate,
@@ -75,6 +76,95 @@ function ChenzePanel({ job }: { job: EditJob }) {
             <ReviewRow key={`${item.status}-${item.start}-${item.end}-${item.reason}`} item={item} />
           ))}
         </ul>
+      )}
+    </section>
+  )
+}
+
+function TextReview({
+  job,
+  active,
+  onUpdated,
+}: {
+  job: EditJob
+  active: DouyinShort | null
+  onUpdated: (short: DouyinShort) => void
+}) {
+  const status = job.result?.text_enhance
+  const enabled = Boolean(job.input?.text_enhance?.enabled || status?.enabled)
+  const [cues, setCues] = useState(active?.quote_cues || [])
+  const [title, setTitle] = useState(active?.title_text || '')
+  const [busy, setBusy] = useState(false)
+  useEffect(() => {
+    setCues(active?.quote_cues || [])
+    setTitle(active?.title_text || '')
+  }, [active?.index, active?.quote_cues, active?.title_text])
+  if (!enabled) return null
+  const effectNames: Record<string, string> = {
+    captions: '口播字幕',
+    title: '旁注',
+    fade: '画面淡入淡出',
+    emphasis_fade: '字的淡入淡出',
+    emphasis_pop: '字的弹出',
+  }
+  const effects = (status?.applied_effects || active?.text_effects || []).map((name) => effectNames[name] || name)
+  async function reburn() {
+    if (!active || busy) return
+    setBusy(true)
+    try {
+      const saved = await reburnDouyinShort(job.id, active.index, cues.map((cue) => ({
+        start: Number(cue.start),
+        end: Number(cue.end),
+        text: cue.text,
+      })), title)
+      onUpdated(saved.short)
+      toast.success('已按校对字幕重新烧录')
+    } catch (cause) {
+      toast.error(errorMessage(cause))
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <section className="studio-review" aria-label="文字与轻效果">
+      <div className="studio-reel-head">
+        <div>
+          <h2>文字与轻效果</h2>
+          <p>
+            {effects.length ? `已烧录：${effects.join('、')}。` : '这次打开了文字效果。'}
+            口播字幕是转写草稿，旁注是编辑说明，都不是已验收的陈泽风格。原声保留，没有另加音乐。
+          </p>
+        </div>
+      </div>
+      {status?.typography_note && <p className="studio-fine">{status.typography_note}</p>}
+      {active && (
+        <div className="studio-chenze-fields">
+          <label className="studio-chenze-wide">
+            旁注
+            <input value={title} maxLength={40} onChange={(event) => setTitle(event.target.value)} />
+          </label>
+          {cues.map((cue, index) => (
+            <label key={`${active.index}-${index}`} className="studio-chenze-wide">
+              {`口播 ${Number(cue.start).toFixed(1)}–${Number(cue.end).toFixed(1)} 秒`}
+              <input
+                value={cue.text}
+                onChange={(event) => {
+                  const next = cues.slice()
+                  next[index] = { ...cue, text: event.target.value }
+                  setCues(next)
+                }}
+              />
+            </label>
+          ))}
+          <button type="button" className="studio-pill" disabled={busy} onClick={() => void reburn()}>
+            {busy ? '正在重烧…' : '按校对字幕重新烧录'}
+          </button>
+          {active.srt_url && (
+            <button type="button" className="studio-quiet" onClick={() => downloadFile(active.srt_url || '')}>
+              下载字幕稿
+            </button>
+          )}
+        </div>
       )}
     </section>
   )
@@ -264,6 +354,24 @@ export default function DouyinProducePage() {
       )}
 
       {job && <ChenzePanel job={job} />}
+      {job && (
+        <TextReview
+          job={job}
+          active={active}
+          onUpdated={(short) => {
+            setJob((current) => {
+              if (!current?.result?.shorts) return current
+              return {
+                ...current,
+                result: {
+                  ...current.result,
+                  shorts: current.result.shorts.map((item) => item.index === short.index ? { ...item, ...short } : item),
+                },
+              }
+            })
+          }}
+        />
+      )}
 
       {running && shorts.length > 0 && (
         <p className="studio-fine">已经做好的可以先看。其余还在渲染。</p>

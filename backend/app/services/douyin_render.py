@@ -12,6 +12,14 @@ from engine.errors import EngineError
 from engine.media import ffmpeg, filter_path, probe
 from app.services.douyin_plan import build_ass, sample_times, skin_subject_box, vertical_filter
 from app.services.media import render_semaphore
+from app.services.text_enhance import (
+    TextEnhanceError,
+    assert_font_covers,
+    build_document,
+    fade_filter,
+    font_selected,
+    prepare_cues,
+)
 
 _FONT_CANDIDATES = (
     ("WenQuanYi Micro Hei", Path("/usr/share/fonts/truetype/wqy/wqy-microhei.ttc")),
@@ -84,7 +92,8 @@ def _encode(
     threads: int,
     job_id: str | None,
     should_cancel,
-) -> None:
+    loglevel: str = "error",
+) -> str:
     preroll = min(2.0, max(0.0, start))
     seek = max(0.0, start - preroll)
     complex_graph = ";" in graph
@@ -116,7 +125,7 @@ def _encode(
         args.append("-an")
     args.append(str(dest))
     with render_semaphore:
-        ffmpeg(args, timeout=900, job_id=job_id, should_cancel=should_cancel)
+        return ffmpeg(args, timeout=900, job_id=job_id, should_cancel=should_cancel, loglevel=loglevel)
 
 
 def render_short(
@@ -136,6 +145,7 @@ def render_short(
     layout: str = "interview",
     job_id: str | None = None,
     should_cancel=None,
+    enhance: dict | None = None,
 ) -> dict:
     """裁成竖屏并尽量烧上字幕。字幕滤镜失败时保留无字幕成片，由调用方记警告。
 
@@ -147,14 +157,41 @@ def render_short(
     font_name, font_path = caption_font()
     ass_path = dest.parent / "captions.ass"
     burned = False
-    if captions:
+    enhance_on = bool(enhance and enhance.get("enabled"))
+    prepared_cues: list[dict] = []
+    title_text = ""
+    if enhance_on:
+        try:
+            if enhance.get("captions", True):
+                prepared_cues = prepare_cues(captions, duration)
+            title_text = str(enhance.get("title_text") or "")
+            sample = title_text + "".join(cue["text"] for cue in prepared_cues)
+            if sample:
+                assert_font_covers(font_path, sample)
+            if prepared_cues or title_text:
+                ass_path.write_text(build_document(
+                    prepared_cues,
+                    title_text,
+                    width=out_w,
+                    height=out_h,
+                    font_name=font_name,
+                    style=str(enhance.get("style") or "outline"),
+                    emphasis=str(enhance.get("emphasis") or "none"),
+                ), encoding="utf-8")
+        except TextEnhanceError as exc:
+            raise EngineError(exc.message, code=exc.code, action="改字幕或换一种样式后再渲染。", status=400) from exc
+    elif captions:
         ass_path.write_text(build_ass(captions, out_w, out_h, font_name), encoding="utf-8")
 
     portrait = "podcast" if layout == "podcast" else "interview"
+    fade = fade_filter(duration) if enhance_on and enhance.get("fade") else ""
 
     def graph_for(points: list[dict], with_subs: bool) -> tuple[str, str]:
         video_filter, mode = vertical_filter(src_w, src_h, points, out_w, out_h, portrait)
-        if with_subs and captions and ass_path.is_file():
+        if fade:
+            video_filter += f",{fade}"
+        use_subs = with_subs and ass_path.is_file() and (prepared_cues or title_text or (captions and not enhance_on))
+        if use_subs:
             fonts = f":fontsdir='{filter_path(font_path.parent)}'" if font_path else ""
             video_filter += f",subtitles='{filter_path(ass_path)}'{fonts}"
         if mode == "podcast":
@@ -162,6 +199,7 @@ def render_short(
         return video_filter, mode
 
     attempts: list[list[dict]] = [[]] if portrait == "podcast" else [track]
+    want_subs = bool(prepared_cues or title_text or (captions and not enhance_on))
     if portrait != "podcast":
         if len(track) > 1:
             attempts.append([track[len(track) // 2]])
@@ -171,13 +209,14 @@ def render_short(
     mode = "center"
     partial = dest.with_suffix(".part.mp4")
     for points in attempts:
-        for with_subs in ((True, False) if captions else (False,)):
+        for with_subs in ((True, False) if want_subs else (False,)):
             video_filter, mode = graph_for(points, with_subs)
             try:
-                _encode(
+                log = _encode(
                     source, partial,
                     start=start, duration=duration, graph=video_filter, has_audio=has_audio,
                     threads=threads, job_id=job_id, should_cancel=should_cancel,
+                    loglevel="info" if enhance_on and with_subs else "error",
                 )
             except EngineError as exc:
                 if exc.code == "cancelled":
@@ -190,9 +229,36 @@ def render_short(
                 partial.unlink(missing_ok=True)
                 last_error = EngineError("渲染结果为空", code="ffmpeg", action="确认原片能播放，然后重试。", status=500)
                 continue
+            if enhance_on and with_subs and font_path:
+                selected = font_selected(log, font_name)
+                if selected is False:
+                    partial.unlink(missing_ok=True)
+                    raise EngineError(
+                        "字幕没有用到预检过的字体，已停止烧录。",
+                        code="FONT_FALLBACK",
+                        action="确认系统里的中文字体仍在，然后重试。",
+                        status=500,
+                    )
             partial.replace(dest)
             burned = with_subs
-            return {"framing": mode, "captions_burned": burned, "width": out_w, "height": out_h}
+            applied = []
+            if enhance_on and burned and prepared_cues:
+                applied.append("captions")
+            if enhance_on and burned and title_text:
+                applied.append("title")
+            if enhance_on and fade:
+                applied.append("fade")
+            if enhance_on and burned and enhance.get("emphasis") in {"fade", "pop"}:
+                applied.append(f"emphasis_{enhance.get('emphasis')}")
+            result = {"framing": mode, "captions_burned": burned, "width": out_w, "height": out_h}
+            if enhance_on:
+                result["text_effects"] = applied
+                result["title_text"] = title_text
+                result["quote_cues"] = [
+                    {"start": float(cue["start"]), "end": float(cue["end"]), "text": cue["text"], "role": "quote"}
+                    for cue in prepared_cues
+                ]
+            return result
     if last_error:
         raise last_error
     raise EngineError("没有生成竖屏成片", code="ffmpeg", action="确认 ffmpeg 可用后重试。", status=500)
@@ -240,7 +306,7 @@ def build_clip_zip(folder: Path) -> bool:
     temporary = folder / "kit.part.zip"
     try:
         with zipfile.ZipFile(temporary, "w", compression=zipfile.ZIP_STORED) as archive:
-            for name in ("video.mp4", "cover.jpg", "copy.txt"):
+            for name in ("video.mp4", "cover.jpg", "copy.txt", "captions.srt"):
                 path = folder / name
                 if path.is_file():
                     archive.write(path, name)

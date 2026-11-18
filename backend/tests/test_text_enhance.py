@@ -129,20 +129,30 @@ class TextRulesTests(unittest.TestCase):
         with self.assertRaises(TextEnhanceError) as missing:
             assert_font_covers(Path("/tmp/does-not-exist-font.ttf"), "字幕")
         self.assertEqual(missing.exception.code, "FONT_FILE_NOT_FOUND")
-        font = Path("/usr/share/fonts/truetype/wqy/wqy-microhei.ttc")
-        if not font.is_file():
-            self.skipTest("wqy font missing")
-        self.assertEqual(font_covers(font, "口播字幕"), [])
-        self.assertIn("\ue000", font_covers(font, "甲\ue000"))
+        from app.services.douyin_render import caption_font, reset_font_cache
+        reset_font_cache()
+        _name, font = caption_font()
+        if font is None or not Path(font).is_file():
+            message = "caption_font() 没有找到可预检的中文字体文件"
+            if os.environ.get("VIDEO_HUB_REQUIRE_CJK_FONT") == "1":
+                self.fail(message)
+            self.skipTest(message)
+        self.assertEqual(font_covers(Path(font), "口播字幕"), [])
+        self.assertIn("\ue000", font_covers(Path(font), "甲\ue000"))
 
 
 @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "ffmpeg required")
 class TextRenderTests(unittest.TestCase):
     def _require_cjk_font(self):
-        from app.services.douyin_render import caption_font
-        _name, path = caption_font()
-        if path is None or not Path(path).is_file():
-            self.skipTest("本机没有可预检的中文字体文件，文字效果会拒绝烧录")
+        from app.services.douyin_render import caption_font, reset_font_cache
+        reset_font_cache()
+        name, path = caption_font()
+        if path is not None and Path(path).is_file():
+            return path
+        message = f"caption_font() 没有找到可预检的中文字体文件（当前 {name}）"
+        if os.environ.get("VIDEO_HUB_REQUIRE_CJK_FONT") == "1":
+            self.fail(message)
+        self.skipTest(message)
 
     def _source(self, root: Path) -> Path:
         source = root / "source.mp4"

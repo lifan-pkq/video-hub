@@ -1,6 +1,7 @@
 """本机或远端转写。和选题、废片分析分开，避免把 whisper 生命周期揉进剪辑提示词。"""
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import shutil
@@ -16,6 +17,9 @@ from app.services.media import probe_video, render_semaphore
 
 _model = None
 _model_lock = threading.Lock()
+# 同一个 WhisperModel 不能两路同时解码。缓存的检查、计算和写入也要放在这把锁里，
+# 否则后完成的一路会把先完成的正确结果盖掉。
+_inference_lock = threading.Lock()
 
 def _get_model():
     global _model
@@ -33,13 +37,90 @@ def _get_model():
             except Exception as exc:
                 raise AIServiceError(
                     f"加载转写模型「{WHISPER_MODEL}」失败：{exc}。"
+                    "没有改用别的模型，这次不能当成转写成功。"
                     "确认模型名是 tiny、base 或 small，磁盘还有空间，并且首次下载能访问模型仓库。"
                 ) from exc
         return _model
 
 
-def _cache_path(video_path: Path) -> Path:
-    return TMP_DIR / "transcripts" / f"{video_path.stem}.json"
+_FAST_MODELS = {"tiny", "tiny.en", "base", "base.en"}
+_STANDARD_MODELS = {"small", "small.en"}
+_run_local = threading.local()
+
+
+def decode_settings(model_name: str) -> dict:
+    """锁定中文。提示词只说明用简体，不放入任何待转写的句子。
+
+    同一条口播上，不写这个提示时 small 会输出繁体或丢掉个别字。
+    温度回退仍用库默认，不把温度钉死。精度差别主要来自模型大小。
+    请求的模型加载失败时不会改用更小的模型。
+    """
+    del model_name
+    return {
+        "language": "zh",
+        "task": "transcribe",
+        "vad_filter": True,
+        "beam_size": 5,
+        "condition_on_previous_text": True,
+        "initial_prompt": "以下是简体中文。",
+    }
+
+
+def asr_preset(model_name: str) -> str:
+    if model_name in _FAST_MODELS:
+        return "fast"
+    if model_name in _STANDARD_MODELS:
+        return "standard"
+    if model_name == "remote":
+        return "remote"
+    return "custom"
+
+
+def public_asr_status(run: dict | None) -> dict:
+    run = run or {}
+    model = str(run.get("model") or "")
+    preset = asr_preset(model) if model else ""
+    ok = bool(run.get("ok")) and bool(model)
+    if not ok:
+        note = "转写没有成功完成，不能当成一次可用的草稿。"
+    elif preset == "fast":
+        note = f"这次用的是较快模型 {model}。草稿需要核对，不是标准精度结果。"
+    elif preset == "standard":
+        note = f"这次用的是标准模型 {model}，语言锁定为中文。草稿仍可能有错，需要核对，不是无错引用。"
+    elif preset == "remote":
+        note = "这次走的是远端转写服务，不是本机标准模型。草稿需要核对。"
+    else:
+        note = f"这次用的是模型 {model}。没有把它记成标准精度。"
+    return {
+        "model": model,
+        "preset": preset if ok else "",
+        "language": "zh",
+        "ok": ok,
+        "cache_hit": bool(run.get("cache_hit")),
+        "note": note,
+    }
+
+
+def last_asr_run() -> dict:
+    return dict(getattr(_run_local, "run", {}) or {})
+
+
+def _remember_run(run: dict) -> None:
+    _run_local.run = dict(run)
+
+
+def _fingerprint(model_name: str, settings: dict) -> str:
+    raw = json.dumps({"model": model_name, "decode": settings}, ensure_ascii=False, sort_keys=True)
+    return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+
+def _cache_path(video_path: Path, model_name: str | None = None, settings: dict | None = None) -> Path:
+    if not model_name:
+        model_name = "remote" if ASR_URL else WHISPER_MODEL
+    if settings is None:
+        settings = {"language": "zh"} if model_name == "remote" else decode_settings(model_name)
+    size = video_path.stat().st_size if video_path.exists() else 0
+    return TMP_DIR / "transcripts" / f"{video_path.stem}-{size}-{_fingerprint(model_name, settings)}.json"
 
 
 # 共享 ASR 分段转写：每段 300s。不要把原视频直接传给 transcribe_remote——
@@ -199,29 +280,61 @@ def _decode_audio_array(video_path: Path):
     return np.frombuffer(result.stdout, np.int16).astype(np.float32) / 32768.0
 
 
+def _review_reason(segment) -> str:
+    """低置信标记只提示核对，不改写、不补说话人、不补否定词。"""
+    reasons = []
+    avg = getattr(segment, "avg_logprob", None)
+    no_speech = getattr(segment, "no_speech_prob", None)
+    compression = getattr(segment, "compression_ratio", None)
+    try:
+        if avg is not None and float(avg) < -0.8:
+            reasons.append("平均对数概率偏低")
+    except (TypeError, ValueError):
+        pass
+    try:
+        if no_speech is not None and float(no_speech) > 0.6:
+            reasons.append("非语音概率偏高")
+    except (TypeError, ValueError):
+        pass
+    try:
+        if compression is not None and float(compression) > 2.4:
+            reasons.append("压缩比偏高")
+    except (TypeError, ValueError):
+        pass
+    return "、".join(reasons)
+
+
 def _collect_whisper_segments(segments, offset: float) -> list[dict]:
     out = []
     for seg in segments:
         text = str(getattr(seg, "text", "") or "").strip()
         if not text:
             continue
-        out.append({
+        reason = _review_reason(seg)
+        item = {
             "start": round(float(seg.start) + offset, 2),
             "end": round(float(seg.end) + offset, 2),
             "text": text,
-        })
+            "origin": "asr",
+            "confirmed": False,
+            "low_confidence": bool(reason),
+        }
+        if reason:
+            item["review_reason"] = reason
+        out.append(item)
     return out
 
 
-def _run_whisper(model, audio, offset: float):
+def _run_whisper(model, audio, offset: float, settings: dict):
     """在渲染锁内把生成器消费完。faster-whisper 的计算发生在迭代时，不能出了锁再读。"""
     with render_semaphore:
-        segments, info = model.transcribe(audio, language="zh", vad_filter=True)
+        segments, info = model.transcribe(audio, **settings)
         return _collect_whisper_segments(segments, offset), info
 
 
 def _transcribe_local_chunked(
     video_path: Path, model, duration: float, log, *, job_id: str | None = None, should_cancel=None,
+    settings: dict | None = None,
 ) -> list[dict]:
     """长音频按 300s 分段解码再转写，避免整段 float32 波形和模型同时占满内存。"""
     import tempfile
@@ -246,7 +359,7 @@ def _transcribe_local_chunked(
             _cut_audio_segment(audio_path, start, length, seg_path, job_id=job_id, should_cancel=should_cancel)
             audio = _decode_audio_array(seg_path)
             try:
-                part, info = _run_whisper(model, audio, start)
+                part, info = _run_whisper(model, audio, start, settings or decode_settings(WHISPER_MODEL))
             finally:
                 del audio
                 seg_path.unlink(missing_ok=True)
@@ -257,57 +370,122 @@ def _transcribe_local_chunked(
             )
         out.sort(key=lambda item: item["start"])
         if info is not None:
-            log(f"转写完成：{len(out)} 句（检测语言 {info.language}）")
+            log(f"转写完成：{len(out)} 句（模型 {WHISPER_MODEL}，检测语言 {info.language}）")
         return out
 
 
-def _transcribe_local(video_path: Path, log=print, *, job_id: str | None = None, should_cancel=None) -> list[dict]:
+def _transcribe_local(
+    video_path: Path, log=print, *, job_id: str | None = None, should_cancel=None,
+    settings: dict | None = None,
+) -> list[dict]:
     """本地 whisper 路径：优先传解码后的 numpy 数组，避开 av bug。长文件走分段。"""
+    settings = settings or decode_settings(WHISPER_MODEL)
     model = _get_model()
     if not shutil.which("ffmpeg"):
         log("未找到 ffmpeg，回落到文件路径直接转写（可能撞 av TypeError）")
         try:
-            out, info = _run_whisper(model, str(video_path), 0.0)
+            out, info = _run_whisper(model, str(video_path), 0.0, settings)
         except Exception as exc:  # noqa: BLE001 - 回落失败必须报出真实错误
             raise AIServiceError(
                 "本地 whisper 转写失败（ffmpeg 不可用，已回落文件路径）："
                 f"{str(exc) or type(exc).__name__}"
             ) from exc
-        log(f"转写完成：{len(out)} 句（检测语言 {info.language}，时长 {info.duration:.0f}s）")
+        log(f"转写完成：{len(out)} 句（模型 {WHISPER_MODEL}，检测语言 {info.language}，时长 {info.duration:.0f}s）")
         return out
     duration = float(probe_video(video_path).get("duration") or 0)
     if duration > _CHUNK_SECONDS:
         return _transcribe_local_chunked(
-            video_path, model, duration, log, job_id=job_id, should_cancel=should_cancel,
+            video_path, model, duration, log, job_id=job_id, should_cancel=should_cancel, settings=settings,
         )
     audio = _decode_audio_array(video_path)
     try:
-        out, info = _run_whisper(model, audio, 0.0)
+        out, info = _run_whisper(model, audio, 0.0, settings)
     finally:
         del audio
-    log(f"转写完成：{len(out)} 句（检测语言 {info.language}，时长 {info.duration:.0f}s）")
+    log(f"转写完成：{len(out)} 句（模型 {WHISPER_MODEL}，检测语言 {info.language}，时长 {info.duration:.0f}s）")
     return out
 
 
-def transcribe(video_path: Path, log=print, *, job_id: str | None = None, should_cancel=None) -> list[dict]:
-    """语音转写，返回 [{start, end, text}]（秒）。结果按 文件名+大小 缓存。"""
-    _stop_if_cancelled(should_cancel)
-    cache = _cache_path(video_path)
-    if cache.exists():
+def _cacheable(segments: list[dict], duration: float) -> bool:
+    """时间明显超出音频的结果不进缓存，避免把一次坏解码留给后面的任务。"""
+    if not duration or duration <= 0:
+        return True
+    limit = float(duration) + 1.0
+    for item in segments:
+        if not isinstance(item, dict):
+            return False
         try:
-            cached = json.loads(cache.read_text())
-            if cached.get("size") == video_path.stat().st_size:
-                log(f"命中转写缓存（{len(cached['segments'])} 句）")
-                return cached["segments"]
+            end = float(item.get("end"))
+        except (TypeError, ValueError):
+            return False
+        if end > limit:
+            return False
+    return True
+
+
+def _read_cache(cache: Path, size: int, model_name: str, settings: dict):
+    if not cache.exists():
+        return None
+    try:
+        cached = json.loads(cache.read_text())
+    except Exception:
+        return None
+    if cached.get("size") != size or cached.get("model") != model_name or cached.get("decode") != settings:
+        return None
+    segments = cached.get("segments")
+    if not isinstance(segments, list):
+        return None
+    return segments
+
+
+def transcribe(video_path: Path, log=print, *, job_id: str | None = None, should_cancel=None) -> list[dict]:
+    """语音转写，返回 [{start, end, text}]（秒）。缓存按文件大小、模型和编码参数分开。"""
+    _stop_if_cancelled(should_cancel)
+    with _inference_lock:
+        return _transcribe_unlocked(video_path, log, job_id=job_id, should_cancel=should_cancel)
+
+
+def _transcribe_unlocked(video_path: Path, log=print, *, job_id: str | None = None, should_cancel=None) -> list[dict]:
+    if ASR_URL:
+        model_name = "remote"
+        settings = {"language": "zh"}
+    else:
+        model_name = WHISPER_MODEL
+        settings = decode_settings(model_name)
+    size = video_path.stat().st_size
+    cache = _cache_path(video_path, model_name, settings)
+    cached = _read_cache(cache, size, model_name, settings)
+    if cached is not None:
+        _remember_run({"model": model_name, "ok": True, "cache_hit": True})
+        log(f"命中转写缓存（模型 {model_name}，{len(cached)} 句）")
+        return cached
+    try:
+        if ASR_URL:
+            out = _transcribe_shared(video_path, log=log, job_id=job_id, should_cancel=should_cancel)
+            for item in out:
+                if isinstance(item, dict):
+                    item.setdefault("origin", "asr")
+                    item.setdefault("confirmed", False)
+        else:
+            out = _transcribe_local(
+                video_path, log=log, job_id=job_id, should_cancel=should_cancel, settings=settings,
+            )
+    except Exception:
+        _remember_run({"model": model_name, "ok": False, "cache_hit": False})
+        raise
+    _remember_run({"model": model_name, "ok": True, "cache_hit": False})
+    heard = float(probe_video(video_path).get("duration") or 0)
+    if not _cacheable(out, heard):
+        log(f"转写时间超出音频 {heard:.1f}s，这次不写入缓存")
+    else:
+        try:
+            cache.parent.mkdir(parents=True, exist_ok=True)
+            cache.write_text(json.dumps({
+                "size": size,
+                "model": model_name,
+                "decode": settings,
+                "segments": out,
+            }, ensure_ascii=False))
         except Exception:
             pass
-    if ASR_URL:
-        out = _transcribe_shared(video_path, log=log, job_id=job_id, should_cancel=should_cancel)
-    else:
-        out = _transcribe_local(video_path, log=log, job_id=job_id, should_cancel=should_cancel)
-    try:
-        cache.parent.mkdir(parents=True, exist_ok=True)
-        cache.write_text(json.dumps({"size": video_path.stat().st_size, "segments": out}, ensure_ascii=False))
-    except Exception:
-        pass
     return out

@@ -199,11 +199,17 @@ def build_captions(segments: list[dict], start: float, end: float) -> list[dict]
         for index, piece in enumerate(pieces):
             cue_start = left + span * index
             cue_end = left + span * (index + 1)
-            cues.append({
+            cue = {
                 "start": round(cue_start - start, 2),
                 "end": round(max(cue_start - start + 0.2, cue_end - start), 2),
                 "text": piece,
-            })
+                "origin": str(segment.get("origin") or "asr"),
+                "confirmed": bool(segment.get("confirmed")),
+                "low_confidence": bool(segment.get("low_confidence")),
+            }
+            if segment.get("review_reason"):
+                cue["review_reason"] = str(segment.get("review_reason"))
+            cues.append(cue)
     cues.sort(key=lambda item: (item["start"], item["end"]))
     return cues
 

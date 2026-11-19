@@ -208,6 +208,104 @@ class LocalChunkedTranscriptionTests(unittest.TestCase):
         model.transcribe.assert_called_once()
 
 
+class AsrQualityTests(unittest.TestCase):
+    def test_overlong_timestamps_are_not_cacheable(self):
+        from app.services.transcription import _cacheable
+
+        self.assertFalse(_cacheable([{"end": 29.3, "text": "半句"}], 7.2))
+        self.assertTrue(_cacheable([{"end": 7.0, "text": "整句"}], 7.2))
+
+    def test_low_confidence_marks_the_decoder_text(self):
+        from app.services.transcription import _collect_whisper_segments
+
+        class Segment:
+            start = 1.0
+            end = 2.0
+            text = " 待核对原句 "
+            avg_logprob = -1.2
+            no_speech_prob = 0.1
+            compression_ratio = 1.1
+
+        rows = _collect_whisper_segments([Segment()], 0)
+        self.assertEqual(rows[0]["text"], "待核对原句")
+        self.assertTrue(rows[0]["low_confidence"])
+        self.assertEqual(rows[0]["origin"], "asr")
+        self.assertFalse(rows[0]["confirmed"])
+        self.assertNotIn("speaker", rows[0])
+
+    def test_cache_key_follows_the_requested_model(self):
+        import json
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+
+        from app.services import transcription as tr
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            video = root / "clip.mp4"
+            video.write_bytes(b"video-bytes")
+            tiny_settings = tr.decode_settings("tiny")
+            with patch.object(tr, "TMP_DIR", root):
+                cache = tr._cache_path(video, "tiny", tiny_settings)
+                cache.parent.mkdir(parents=True, exist_ok=True)
+                cache.write_text(json.dumps({
+                    "size": video.stat().st_size,
+                    "model": "tiny",
+                    "decode": tiny_settings,
+                    "segments": [{"start": 0, "end": 1, "text": "小模型草稿"}],
+                }, ensure_ascii=False), encoding="utf-8")
+                self.assertNotEqual(
+                    tr._cache_path(video, "tiny", tiny_settings),
+                    tr._cache_path(video, "small", tr.decode_settings("small")),
+                )
+                with patch.object(tr, "ASR_URL", ""), \
+                        patch.object(tr, "WHISPER_MODEL", "small"), \
+                        patch.object(tr, "_transcribe_local", return_value=[{"start": 0, "end": 1, "text": "标准草稿"}]) as local:
+                    result = tr.transcribe(video, log=lambda *_: None)
+            self.assertEqual(result[0]["text"], "标准草稿")
+            local.assert_called_once()
+            status = tr.public_asr_status(tr.last_asr_run())
+            self.assertEqual(status["model"], "small")
+            self.assertEqual(status["preset"], "standard")
+            self.assertTrue(status["ok"])
+            self.assertFalse(status["cache_hit"])
+
+    def test_missing_model_is_not_a_successful_pass(self):
+        import sys
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import Mock, patch
+
+        from app.services.ai_edit import AIServiceError
+        from app.services import transcription as tr
+
+        with tempfile.TemporaryDirectory() as tmp:
+            video = Path(tmp) / "clip.mp4"
+            video.write_bytes(b"video-bytes")
+            previous_model = tr._model
+            previous_module = sys.modules.get("faster_whisper")
+            tr._model = None
+            fake = Mock()
+            fake.WhisperModel.side_effect = OSError("model missing")
+            sys.modules["faster_whisper"] = fake
+            try:
+                with patch.object(tr, "ASR_URL", ""), patch.object(tr, "WHISPER_MODEL", "small"):
+                    with self.assertRaises(AIServiceError) as caught:
+                        tr.transcribe(video, log=lambda *_: None)
+                self.assertIn("small", str(caught.exception))
+                self.assertIn("没有改用", str(caught.exception))
+                status = tr.public_asr_status(tr.last_asr_run())
+                self.assertFalse(status["ok"])
+                self.assertNotEqual(status["preset"], "standard")
+            finally:
+                tr._model = previous_model
+                if previous_module is None:
+                    sys.modules.pop("faster_whisper", None)
+                else:
+                    sys.modules["faster_whisper"] = previous_module
+
+
 class TranscriptionCancelTests(unittest.TestCase):
     def test_cancel_before_start_does_not_touch_the_file(self):
         from app.services.ai_edit import TranscriptionCancelled, transcribe

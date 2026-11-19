@@ -105,6 +105,7 @@ class DouyinProduceBody(BaseModel):
     chenze_style: bool = False
     chenze: ChenzeStyleBody | None = None
     text_enhance: TextEnhanceBody | None = None
+    source_captions: Literal["unknown", "burned_in", "none", "transcribe"] | None = None
 
 
 class CaptionCueBody(BaseModel):
@@ -116,6 +117,7 @@ class CaptionCueBody(BaseModel):
 class ReburnBody(BaseModel):
     cues: list[CaptionCueBody] = Field(default_factory=list, max_length=80)
     title_text: str | None = None
+    source_captions: Literal["unknown", "burned_in", "none", "transcribe"] | None = None
 
 
 def _chenze_payload(body: DouyinProduceBody) -> dict:
@@ -142,18 +144,21 @@ def douyin_produce(body: DouyinProduceBody):
     instruction = body.instruction.strip()[:400]
     chenze = _chenze_payload(body)
     text_enhance = body.text_enhance.model_dump() if body.text_enhance else disabled_settings()
+    stored = {
+        "video_id": body.video_id,
+        "instruction": instruction,
+        "max_clips": body.max_clips,
+        "layout": body.layout,
+        "chenze_style": body.chenze_style,
+        "chenze": chenze,
+        "text_enhance": text_enhance,
+    }
+    if body.source_captions:
+        stored["source_captions"] = body.source_captions
     job = create(
         "edit.douyin",
         "抖音成片",
-        {
-            "video_id": body.video_id,
-            "instruction": instruction,
-            "max_clips": body.max_clips,
-            "layout": body.layout,
-            "chenze_style": body.chenze_style,
-            "chenze": chenze,
-            "text_enhance": text_enhance,
-        },
+        stored,
     )
     return submit(
         job,
@@ -166,6 +171,7 @@ def douyin_produce(body: DouyinProduceBody):
             chenze_style=body.chenze_style,
             chenze_options=chenze,
             text_enhance=text_enhance,
+            source_captions=body.source_captions,
         ),
     )
 
@@ -211,6 +217,7 @@ def douyin_reburn(job_id: str, index: int, body: ReburnBody):
         index,
         [item.model_dump() for item in body.cues],
         title_text=body.title_text,
+        source_captions=body.source_captions,
     )
 
 
@@ -257,19 +264,28 @@ def douyin_retry(job_id: str):
     chenze_style = bool(payload.get("chenze_style"))
     chenze = payload.get("chenze") if isinstance(payload.get("chenze"), dict) else {}
     text_enhance = payload.get("text_enhance") if isinstance(payload.get("text_enhance"), dict) else disabled_settings()
+    source_captions = payload.get("source_captions") if payload.get("source_captions") in {
+        "unknown", "burned_in", "none", "transcribe",
+    } else None
+    confirmed_cues = payload.get("confirmed_cues") if isinstance(payload.get("confirmed_cues"), list) else None
+    stored = {
+        "video_id": video_id,
+        "instruction": instruction,
+        "max_clips": max_clips,
+        "layout": layout,
+        "chenze_style": chenze_style,
+        "chenze": chenze,
+        "text_enhance": text_enhance,
+        "retry_of": previous["id"],
+    }
+    if source_captions:
+        stored["source_captions"] = source_captions
+    if confirmed_cues:
+        stored["confirmed_cues"] = confirmed_cues
     job = create(
         "edit.douyin",
         "抖音成片",
-        {
-            "video_id": video_id,
-            "instruction": instruction,
-            "max_clips": max_clips,
-            "layout": layout,
-            "chenze_style": chenze_style,
-            "chenze": chenze,
-            "text_enhance": text_enhance,
-            "retry_of": previous["id"],
-        },
+        stored,
     )
     return submit(
         job,
@@ -282,6 +298,8 @@ def douyin_retry(job_id: str):
             chenze_style=chenze_style,
             chenze_options=chenze,
             text_enhance=text_enhance,
+            source_captions=source_captions,
+            confirmed_cues=confirmed_cues,
         ),
     )
 

@@ -80,6 +80,8 @@ export interface Task {
   chenze_style?: boolean
   chenze?: ChenzeOptions
   text_enhance?: TextEnhanceOptions
+    source_captions?: SourceCaptions
+    confirmed_cues?: Array<{ start: number; end: number; text: string }>
     format?: string
     fps?: number
     width?: number
@@ -103,6 +105,8 @@ export interface Task {
     layout?: string
     chenze?: ChenzeAutomation
     text_enhance?: TextEnhanceStatus
+    caption_policy?: CaptionPolicy
+    asr?: AsrStatus
     shorts?: DouyinShort[]
     filename?: string
     format?: string
@@ -523,10 +527,39 @@ export interface DouyinShort {
   review_status?: string
   publication_approved?: boolean
   fit_label?: string | null
-  quote_cues?: Array<{ start: number; end: number; text: string; role?: string }>
+  quote_cues?: CaptionCue[]
+  asr_cues?: CaptionCue[]
   text_effects?: string[]
   title_text?: string
   srt_url?: string
+}
+
+export type SourceCaptions = 'unknown' | 'burned_in' | 'none' | 'transcribe'
+
+export interface CaptionCue {
+  start: number
+  end: number
+  text: string
+  role?: string
+  origin?: 'asr' | 'user'
+  confirmed?: boolean
+  low_confidence?: boolean
+  review_reason?: string
+}
+
+export interface CaptionPolicy {
+  source_captions: SourceCaptions | 'legacy'
+  burns_transcript: boolean
+  note: string
+}
+
+export interface AsrStatus {
+  model: string
+  preset: string
+  language: string
+  ok: boolean
+  cache_hit?: boolean
+  note: string
 }
 
 export interface TextEnhanceOptions {
@@ -645,6 +678,7 @@ export async function startDouyinProduce(
   chenzeStyle = false,
   chenze?: ChenzeOptions,
   textEnhance?: TextEnhanceOptions,
+  sourceCaptions: SourceCaptions = 'unknown',
 ): Promise<EditJob> {
   try {
     const { data } = await http.post<EditJob>('/edit/douyin', {
@@ -653,6 +687,7 @@ export async function startDouyinProduce(
       max_clips: maxClips,
       layout,
       chenze_style: chenzeStyle,
+      source_captions: sourceCaptions,
       ...(chenzeStyle && chenze ? { chenze } : {}),
       ...(textEnhance ? { text_enhance: textEnhance } : {}),
     }, { timeout: 0 })
@@ -667,11 +702,13 @@ export async function reburnDouyinShort(
   index: number,
   cues: Array<{ start: number; end: number; text: string }>,
   titleText?: string,
-): Promise<{ short: DouyinShort; text_enhance?: TextEnhanceStatus }> {
+  sourceCaptions?: SourceCaptions,
+): Promise<{ short: DouyinShort; text_enhance?: TextEnhanceStatus; caption_policy?: CaptionPolicy; source_captions?: string }> {
   try {
     const { data } = await http.post(`/edit/douyin/${encodeURIComponent(jobId)}/shorts/${index}/reburn`, {
       cues,
       title_text: titleText,
+      ...(sourceCaptions ? { source_captions: sourceCaptions } : {}),
     }, { timeout: 0 })
     return data
   } catch (error) {

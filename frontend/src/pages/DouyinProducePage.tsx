@@ -9,9 +9,11 @@ import {
   reburnDouyinShort,
   fetchVideos,
   saveDouyinToLibrary,
+  type CaptionPolicy,
   type ChenzeReviewCandidate,
   type DouyinShort,
   type EditJob,
+  type SourceCaptions,
   type Video,
 } from '../api'
 import {
@@ -81,6 +83,28 @@ function ChenzePanel({ job }: { job: EditJob }) {
   )
 }
 
+const CAPTION_CHOICES: Array<{ id: SourceCaptions; title: string }> = [
+  { id: 'unknown', title: '还不确定' },
+  { id: 'burned_in', title: '原片已有字幕' },
+  { id: 'none', title: '不要另加字幕' },
+  { id: 'transcribe', title: '烧录转写字幕' },
+]
+
+const CAPTION_NOTES: Record<SourceCaptions, string> = {
+  unknown: '还没确认原片有没有字幕。保存后仍只保留草稿，不烧进画面。',
+  burned_in: '已标明原片自带字幕。保存后不会再烧一层转写，也不会改原画面像素。',
+  none: '已标明不要另加字幕。保存后转写仍可下载，不会烧进画面。',
+  transcribe: '保存后会把核对过的口播字幕烧进画面。',
+}
+
+function chosenCaptionMode(job: EditJob): SourceCaptions | 'legacy' {
+  const value = job.result?.caption_policy?.source_captions || job.input?.source_captions
+  if (value === 'unknown' || value === 'burned_in' || value === 'none' || value === 'transcribe' || value === 'legacy') {
+    return value
+  }
+  return 'legacy'
+}
+
 function TextReview({
   job,
   active,
@@ -88,18 +112,24 @@ function TextReview({
 }: {
   job: EditJob
   active: DouyinShort | null
-  onUpdated: (short: DouyinShort) => void
+  onUpdated: (short: DouyinShort, policy?: CaptionPolicy) => void
 }) {
   const status = job.result?.text_enhance
   const enabled = Boolean(job.input?.text_enhance?.enabled || status?.enabled)
+  const storedMode = chosenCaptionMode(job)
   const [cues, setCues] = useState(active?.quote_cues || [])
   const [title, setTitle] = useState(active?.title_text || '')
+  const [mode, setMode] = useState<SourceCaptions | 'legacy'>(storedMode)
   const [busy, setBusy] = useState(false)
   useEffect(() => {
     setCues(active?.quote_cues || [])
     setTitle(active?.title_text || '')
   }, [active?.index, active?.quote_cues, active?.title_text])
-  if (!enabled) return null
+  useEffect(() => {
+    setMode(storedMode)
+  }, [storedMode, job.id])
+  const hasDraft = Boolean(active?.quote_cues?.length || active?.asr_cues?.length)
+  if (!enabled && !hasDraft && storedMode === 'legacy' && !job.result?.caption_policy && !job.result?.asr) return null
   const effectNames: Record<string, string> = {
     captions: '口播字幕',
     title: '旁注',
@@ -108,6 +138,10 @@ function TextReview({
     emphasis_pop: '字的弹出',
   }
   const effects = (status?.applied_effects || active?.text_effects || []).map((name) => effectNames[name] || name)
+  const asrText = (active?.asr_cues || []).map((cue) => cue.text).join('\n')
+  const editedText = cues.map((cue) => cue.text).join('\n')
+  const showDraft = Boolean(asrText) && asrText !== editedText
+  const willBurn = mode === 'transcribe' || (mode === 'legacy' && (!enabled || Boolean(job.input?.text_enhance?.captions ?? true)))
   async function reburn() {
     if (!active || busy) return
     setBusy(true)
@@ -116,9 +150,9 @@ function TextReview({
         start: Number(cue.start),
         end: Number(cue.end),
         text: cue.text,
-      })), title)
-      onUpdated(saved.short)
-      toast.success('已按校对字幕重新烧录')
+      })), enabled ? title : undefined, mode === 'legacy' ? undefined : mode)
+      onUpdated(saved.short, saved.caption_policy)
+      toast.success(saved.caption_policy?.burns_transcript ? '已按校对字幕重新烧录' : '已保存校对，没有烧进画面')
     } catch (cause) {
       toast.error(errorMessage(cause))
     } finally {
@@ -126,26 +160,49 @@ function TextReview({
     }
   }
   return (
-    <section className="studio-review" aria-label="文字与轻效果">
+    <section className="studio-review" aria-label="原片字幕和转写">
       <div className="studio-reel-head">
         <div>
-          <h2>文字与轻效果</h2>
+          <h2>原片字幕和转写</h2>
           <p>
-            {effects.length ? `已烧录：${effects.join('、')}。` : '这次打开了文字效果。'}
-            口播字幕是转写草稿，旁注是编辑说明，都不是已验收的陈泽风格。原声保留，没有另加音乐。
+            {active?.captions_burned ? '这条成片已经烧进了口播字幕。' : '这条成片没有另烧口播字幕。'}
+            {effects.length ? ` 文字效果：${effects.join('、')}。` : ''}
+            转写草稿和核对后的文字分开保存。旁注是编辑说明，不是原话。原声保留。
           </p>
         </div>
       </div>
+      {job.result?.asr?.note && <p className="studio-fine">{job.result.asr.note}</p>}
+      <p className="studio-fine">{mode === 'legacy' ? (job.result?.caption_policy?.note || '这条任务沿用旧的字幕处理。') : CAPTION_NOTES[mode]}</p>
       {status?.typography_note && <p className="studio-fine">{status.typography_note}</p>}
+      <div className="studio-layouts" role="radiogroup" aria-label="核对时的原片字幕">
+        {CAPTION_CHOICES.map((item) => (
+          <button
+            key={item.id}
+            type="button"
+            role="radio"
+            aria-checked={mode === item.id}
+            className={`studio-layout ${mode === item.id ? 'is-on' : ''}`}
+            onClick={() => setMode(item.id)}
+          >
+            <strong>{item.title}</strong>
+          </button>
+        ))}
+      </div>
       {active && (
         <div className="studio-chenze-fields">
-          <label className="studio-chenze-wide">
-            旁注
-            <input value={title} maxLength={40} onChange={(event) => setTitle(event.target.value)} />
-          </label>
+          {enabled && (
+            <label className="studio-chenze-wide">
+              旁注
+              <input value={title} maxLength={40} onChange={(event) => setTitle(event.target.value)} />
+            </label>
+          )}
+          {showDraft && (
+            <p className="studio-fine">转写草稿仍保留：{asrText}</p>
+          )}
           {cues.map((cue, index) => (
             <label key={`${active.index}-${index}`} className="studio-chenze-wide">
               {`口播 ${Number(cue.start).toFixed(1)}–${Number(cue.end).toFixed(1)} 秒`}
+              {cue.confirmed ? ' · 已核对' : cue.low_confidence ? ` · 待核对${cue.review_reason ? `（${cue.review_reason}）` : ''}` : ' · 转写草稿'}
               <input
                 value={cue.text}
                 onChange={(event) => {
@@ -157,11 +214,11 @@ function TextReview({
             </label>
           ))}
           <button type="button" className="studio-pill" disabled={busy} onClick={() => void reburn()}>
-            {busy ? '正在重烧…' : '按校对字幕重新烧录'}
+            {busy ? '正在保存…' : willBurn ? '按校对字幕重新烧录' : '保存校对，不烧进画面'}
           </button>
           {active.srt_url && (
             <button type="button" className="studio-quiet" onClick={() => downloadFile(active.srt_url || '')}>
-              下载字幕稿
+              {active.captions_burned ? '下载已烧录字幕稿' : '下载转写草稿'}
             </button>
           )}
         </div>
@@ -358,13 +415,17 @@ export default function DouyinProducePage() {
         <TextReview
           job={job}
           active={active}
-          onUpdated={(short) => {
+          onUpdated={(short, policy) => {
             setJob((current) => {
               if (!current?.result?.shorts) return current
               return {
                 ...current,
+                input: policy && policy.source_captions !== 'legacy'
+                  ? { ...current.input, source_captions: policy.source_captions }
+                  : current.input,
                 result: {
                   ...current.result,
+                  caption_policy: policy || current.result.caption_policy,
                   shorts: current.result.shorts.map((item) => item.index === short.index ? { ...item, ...short } : item),
                 },
               }

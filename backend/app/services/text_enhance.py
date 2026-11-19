@@ -39,6 +39,111 @@ def disabled_settings() -> dict:
     }
 
 
+# 原片字幕和「要不要另烧转写」是一件事，和文字效果开关分开。
+# 缺省（旧任务、旧客户端没传这个字段）保持当时会烧录转写的行为，不把新规则套回旧任务。
+SOURCE_CAPTION_MODES = ("unknown", "burned_in", "none", "transcribe")
+LEGACY_SOURCE_CAPTIONS = "legacy"
+SOURCE_CAPTION_NOTES = {
+    "unknown": "还没确认原片有没有字幕。转写只作草稿，没有烧进画面。核对后再选「烧录转写字幕」。",
+    "burned_in": "已标明原片自带字幕。没有再烧一层转写，也没有改原画面像素。",
+    "none": "已标明不要另加字幕。转写仍可核对，没有烧进画面。",
+    "transcribe": "已选择把转写烧进画面。烧录前仍应核对草稿。",
+    "legacy": "这条任务没有新的原片字幕选项，仍按当时的方式处理口播字幕。",
+}
+
+
+def normalize_source_captions(value) -> str:
+    """缺省视为旧行为。新界面会显式传入四个选项之一。"""
+    if value is None or value == "":
+        return LEGACY_SOURCE_CAPTIONS
+    text = str(value).strip()
+    if text not in SOURCE_CAPTION_MODES:
+        raise TextEnhanceError("source_captions", "原片字幕选项不在范围内")
+    return text
+
+
+def burn_new_captions(mode: str, enhance: dict | None) -> bool:
+    """是否把转写或核对后的口播字幕烧进画面。原片已有字幕、未确认和不要另加，都不烧。"""
+    if mode in {"unknown", "burned_in", "none"}:
+        return False
+    if mode not in {LEGACY_SOURCE_CAPTIONS, "transcribe"}:
+        return False
+    settings = enhance or {}
+    if settings.get("enabled") and not settings.get("captions", True):
+        return False
+    return True
+
+
+def caption_policy_status(mode: str, enhance: dict | None) -> dict:
+    return {
+        "source_captions": mode,
+        "burns_transcript": burn_new_captions(mode, enhance),
+        "note": SOURCE_CAPTION_NOTES.get(mode, SOURCE_CAPTION_NOTES[LEGACY_SOURCE_CAPTIONS]),
+    }
+
+
+def apply_confirmed_cues(clip: dict, confirmed: list | None) -> dict:
+    """用户核对过的句子留在口播字幕上，转写草稿另存，不被同一次转写覆盖。"""
+    updated = dict(clip)
+    draft = [dict(item) for item in (clip.get("captions") or []) if isinstance(item, dict)]
+    updated["asr_cues"] = draft
+    if not confirmed:
+        return updated
+    try:
+        start = float(clip.get("start") or 0)
+        end = float(clip.get("end") or 0)
+    except (TypeError, ValueError):
+        return updated
+    hits = []
+    for cue in confirmed:
+        if not isinstance(cue, dict):
+            continue
+        try:
+            cue_start = float(cue.get("start"))
+            cue_end = float(cue.get("end"))
+        except (TypeError, ValueError):
+            continue
+        if cue_end <= start or cue_start >= end:
+            continue
+        left = max(start, cue_start)
+        right = min(end, cue_end)
+        if right - left < 0.05:
+            continue
+        text = str(cue.get("text") or "").strip()
+        if not text:
+            continue
+        hits.append({
+            "start": round(left - start, 2),
+            "end": round(max(left - start + 0.2, right - start), 2),
+            "text": text,
+            "origin": "user",
+            "confirmed": True,
+            "low_confidence": False,
+        })
+    if hits:
+        hits.sort(key=lambda item: (item["start"], item["end"]))
+        updated["captions"] = hits
+    return updated
+
+
+def merge_confirmed_cues(existing: list | None, start: float, end: float, replacement: list[dict]) -> list[dict]:
+    """替换这一段时间里的核对稿，其它时间段的核对稿保留。"""
+    kept = []
+    for cue in existing or []:
+        if not isinstance(cue, dict):
+            continue
+        try:
+            cue_start = float(cue.get("start"))
+            cue_end = float(cue.get("end"))
+        except (TypeError, ValueError):
+            continue
+        if cue_end <= start or cue_start >= end:
+            kept.append(dict(cue))
+    kept.extend(dict(item) for item in replacement)
+    kept.sort(key=lambda item: (float(item.get("start") or 0), float(item.get("end") or 0)))
+    return kept
+
+
 def normalize_settings(raw: dict | None) -> dict:
     settings = disabled_settings()
     if not isinstance(raw, dict):

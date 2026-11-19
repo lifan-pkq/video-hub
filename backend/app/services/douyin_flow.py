@@ -10,6 +10,7 @@ from engine.errors import EngineError
 from app.config import douyin_settings
 from app.jobs import cancelled, report, update
 from app.services.ai_edit import AIResponseError, AIServiceError, TranscriptionCancelled, transcribe
+from app.services.transcription import last_asr_run, public_asr_status
 from app.services.chenze_pipeline import plan_intelligent_edit
 from app.services.douyin_plan import (
     boxes_from_understanding,
@@ -24,7 +25,18 @@ from app.services.douyin_render import (
     write_copy_files,
     write_cover,
 )
-from app.services.text_enhance import TextEnhanceError, normalize_settings, public_status, write_srt
+from app.services.text_enhance import (
+    TextEnhanceError,
+    apply_confirmed_cues,
+    burn_new_captions,
+    caption_policy_status,
+    merge_confirmed_cues,
+    normalize_settings,
+    normalize_source_captions,
+    prepare_cues,
+    public_status,
+    write_srt,
+)
 from app.services.videos import data_dir, fetch, ingest, resolve_media
 
 
@@ -69,6 +81,8 @@ def produce_douyin(
     chenze_style: bool = False,
     chenze_options: dict | None = None,
     text_enhance: dict | None = None,
+    source_captions=None,
+    confirmed_cues: list | None = None,
 ) -> None:
     video = fetch(int(video_id))
     source = resolve_media(video)
@@ -78,8 +92,10 @@ def produce_douyin(
     layout = "podcast" if layout == "podcast" else "interview"
     try:
         enhance = normalize_settings(text_enhance)
+        caption_mode = normalize_source_captions(source_captions)
     except TextEnhanceError as exc:
         raise EngineError(exc.message, code=exc.code, action="检查旁注和样式后再生成。", status=400) from exc
+    policy = caption_policy_status(caption_mode, enhance)
     report(job_id, 4, "asr", f"转写「{title}」")
     try:
         segments = transcribe(source, log=_log(job_id), job_id=job_id, should_cancel=_check(job_id))
@@ -92,6 +108,10 @@ def produce_douyin(
             action="确认本机 ffmpeg 和 faster-whisper 可用。长视频会先抽音频再按 300 秒分段，避免整段进内存。",
             status=502,
         ) from exc
+    asr_status = public_asr_status(last_asr_run())
+    if asr_status.get("note"):
+        update(job_id, log=str(asr_status["note"]))
+    update(job_id, log=str(policy["note"]))
     if not segments:
         raise EngineError(
             "没有识别到口播",
@@ -144,6 +164,8 @@ def produce_douyin(
                 "shorts": [],
                 "chenze": chenze,
                 "text_enhance": public_status(enhance),
+                "caption_policy": policy,
+                "asr": asr_status,
             },
         )
         return
@@ -177,6 +199,8 @@ def produce_douyin(
                 "pack_url": pack_url,
                 "shorts": list(shorts),
                 "text_enhance": public_status(enhance),
+                "caption_policy": policy,
+                "asr": asr_status,
                 **({"chenze": chenze} if chenze else {}),
             },
         )
@@ -199,6 +223,11 @@ def produce_douyin(
             ]
             skin = [] if in_boxes else sample_skin_boxes(source, float(clip["start"]), float(clip["end"]), segments)
             track = build_subject_track(float(clip["start"]), float(clip["end"]), segments, in_boxes, skin)
+        clip = apply_confirmed_cues(dict(clip), confirmed_cues)
+        burn = burn_new_captions(caption_mode, enhance)
+        render_enhance = dict(enhance) if enhance.get("enabled") else None
+        if render_enhance is not None and not burn:
+            render_enhance["captions"] = False
         try:
             rendered = render_short(
                 source,
@@ -209,14 +238,14 @@ def produce_douyin(
                 src_h=int(meta["height"]),
                 has_audio=bool(meta["has_audio"]),
                 track=track,
-                captions=list(clip.get("captions") or []),
+                captions=list(clip.get("captions") or []) if burn else [],
                 out_w=int(settings["width"]),
                 out_h=int(settings["height"]),
                 threads=int(settings["threads"]),
                 layout=layout,
                 job_id=job_id,
                 should_cancel=_check(job_id),
-                enhance=enhance if enhance.get("enabled") else None,
+                enhance=render_enhance,
             )
         except EngineError as exc:
             if exc.code == "cancelled":
@@ -225,16 +254,23 @@ def produce_douyin(
             update(job_id, log=failures[-1])
             continue
         cover_ok = write_cover(folder / "video.mp4", folder / "cover.jpg", job_id=job_id, should_cancel=_check(job_id))
-        if not rendered["captions_burned"] and (clip.get("captions") or (enhance.get("enabled") and enhance.get("title_text"))):
+        review = _review_cues(clip, rendered)
+        if not burn and clip.get("captions"):
+            update(job_id, log=f"「{label}」{policy['note']}")
+        elif not rendered["captions_burned"] and (clip.get("captions") or (enhance.get("enabled") and enhance.get("title_text"))):
             update(job_id, log=f"「{label}」字幕没烧进去，文案和字幕稿仍可下载。")
-        if enhance.get("enabled") and rendered.get("quote_cues"):
-            write_srt(rendered["quote_cues"], folder / "captions.srt")
+        if review:
+            write_srt(review, folder / "captions.srt")
         kit_ok = False
         try:
             kit_ok = build_clip_zip(folder)
         except Exception as exc:  # noqa: BLE001 - 成片已写出，单条打包失败仍可预览
             update(job_id, log=f"「{label}」单条发布包没打成：{exc}")
-        shorts.append(_public_short(job_id, index, clip, rendered, cover_ok, layout=layout, kit_ok=kit_ok))
+        short = _public_short(job_id, index, clip, rendered, cover_ok, layout=layout, kit_ok=kit_ok)
+        short["quote_cues"] = review
+        short["asr_cues"] = _cue_rows(clip.get("asr_cues") or [])
+        short["srt_url"] = f"/api/edit/douyin/{job_id}/shorts/{index}/srt" if review else ""
+        shorts.append(short)
         publish_live()
     if not shorts:
         detail = failures[0] if failures else "没有可渲染的片段。"
@@ -290,6 +326,8 @@ def produce_douyin(
             "pack_url": pack_url,
             "shorts": shorts,
             "text_enhance": public_status(enhance, applied=_collected_effects(shorts)),
+            "caption_policy": policy,
+            "asr": asr_status,
             **({"chenze": chenze} if chenze else {}),
         },
     )
@@ -333,6 +371,57 @@ def _public_short(
         "title_text": str(rendered.get("title_text") or ""),
         "srt_url": f"/api/edit/douyin/{job_id}/shorts/{index}/srt" if rendered.get("quote_cues") else "",
     }
+
+
+def _cue_rows(cues: list) -> list[dict]:
+    rows = []
+    for cue in cues:
+        if not isinstance(cue, dict):
+            continue
+        text = str(cue.get("text") or "").strip()
+        if not text:
+            continue
+        try:
+            start = float(cue.get("start"))
+            end = float(cue.get("end"))
+        except (TypeError, ValueError):
+            continue
+        row = {
+            "start": start,
+            "end": end,
+            "text": text,
+            "role": "quote",
+            "origin": "user" if cue.get("origin") == "user" or cue.get("confirmed") else "asr",
+            "confirmed": bool(cue.get("confirmed")),
+            "low_confidence": bool(cue.get("low_confidence")) and not cue.get("confirmed"),
+        }
+        if row["low_confidence"] and cue.get("review_reason"):
+            row["review_reason"] = str(cue.get("review_reason"))
+        rows.append(row)
+    return rows
+
+
+def _review_cues(clip: dict, rendered: dict) -> list[dict]:
+    burned = bool(rendered.get("captions_burned"))
+    if burned and rendered.get("quote_cues"):
+        source = rendered.get("quote_cues") or []
+        flags = list(clip.get("captions") or [])
+    else:
+        source = clip.get("captions") or []
+        flags = source
+    rows = _cue_rows(source)
+    for index, row in enumerate(rows):
+        flag = flags[index] if index < len(flags) and isinstance(flags[index], dict) else {}
+        if flag.get("origin") == "user" or flag.get("confirmed"):
+            row["origin"] = "user"
+            row["confirmed"] = True
+            row["low_confidence"] = False
+            row.pop("review_reason", None)
+        elif flag.get("low_confidence"):
+            row["low_confidence"] = True
+            if flag.get("review_reason"):
+                row["review_reason"] = str(flag.get("review_reason"))
+    return rows
 
 
 def _collected_effects(shorts: list[dict]) -> list[str]:
@@ -382,38 +471,47 @@ def download_name(job_id: str, index: int, *, cover: bool = False, kit: bool = F
     return f"{int(index):02d}-{stem}{suffix}"
 
 
-def reburn_short(job_id: str, index: int, cues: list, title_text: str | None = None) -> dict:
-    """用改过的口播字幕和旁注重烧这一条。不改切点，也不加新音轨。"""
+def reburn_short(
+    job_id: str,
+    index: int,
+    cues: list,
+    title_text: str | None = None,
+    source_captions=None,
+) -> dict:
+    """保存核对后的口播字幕。只有选择烧录时才写进画面，不改切点，也不加新音轨。"""
     from app.config import douyin_settings
     from app.jobs import update
 
     job = _job_or_raise(job_id)
     if job.get("status") not in {"success", "partial"}:
         raise EngineError("成片还没完成，不能改字幕", code="not_ready", action="等生成结束。", status=409)
+    payload = dict(job.get("input") or {})
     try:
-        enhance = normalize_settings((job.get("input") or {}).get("text_enhance"))
+        enhance = normalize_settings(payload.get("text_enhance"))
+        caption_mode = normalize_source_captions(
+            source_captions if source_captions is not None else payload.get("source_captions")
+        )
     except TextEnhanceError as exc:
         raise EngineError(exc.message, code=exc.code, status=400) from exc
-    if not enhance.get("enabled"):
-        raise EngineError(
-            "这次没有打开文字效果，不能把通用字幕当成另一种风格重烧。",
-            code="disabled",
-            action="回到智能剪辑，打开文字与轻效果后再生成。",
-            status=400,
-        )
+    burn = burn_new_captions(caption_mode, enhance)
     result = dict(job.get("result") or {})
     shorts = [dict(item) for item in (result.get("shorts") or [])]
     short = next((item for item in shorts if int(item.get("index") or 0) == int(index)), None)
     if short is None:
         raise EngineError("没有这条成片", code="missing_file", status=404)
-    if title_text is not None:
+    if title_text is not None and enhance.get("enabled"):
         cleaned = str(title_text).replace("\x00", "").strip()
         if len(cleaned) > 40:
             raise EngineError("旁注请控制在 40 字以内", code="title", status=400)
         enhance["title_text"] = cleaned
-    enhance["captions"] = bool(cues)
+        stored = dict(payload.get("text_enhance") or {})
+        stored["title_text"] = cleaned
+        payload["text_enhance"] = stored
+    render_enhance = dict(enhance) if enhance.get("enabled") else None
+    if render_enhance is not None:
+        render_enhance["captions"] = bool(cues) and burn
     try:
-        video_id = int(result.get("video_id") or (job.get("input") or {}).get("video_id") or 0)
+        video_id = int(result.get("video_id") or payload.get("video_id") or 0)
     except (TypeError, ValueError):
         video_id = 0
     video = fetch(video_id)
@@ -423,6 +521,10 @@ def reburn_short(job_id: str, index: int, cues: list, title_text: str | None = N
     end = float(short.get("end") or 0)
     if end <= start:
         raise EngineError("这条成片没有有效切点", code="INVALID_INTERVAL", status=400)
+    try:
+        prepared = prepare_cues(list(cues or []), max(0.3, end - start))
+    except TextEnhanceError as exc:
+        raise EngineError(exc.message, code=exc.code, action="改字幕时间或文字后再保存。", status=400) from exc
     layout = short.get("layout") if short.get("layout") in {"interview", "podcast"} else result.get("layout")
     layout = "podcast" if layout == "podcast" else "interview"
     settings = douyin_settings()
@@ -433,6 +535,7 @@ def reburn_short(job_id: str, index: int, cues: list, title_text: str | None = N
         in_boxes = [item for item in boxes if start - 1 <= float(item["time"]) <= end + 1]
         track = build_subject_track(start, end, [], in_boxes, [])
     folder = data_dir() / "douyin" / job["id"] / f"{int(index):02d}"
+    folder.mkdir(parents=True, exist_ok=True)
     rendered = render_short(
         source,
         folder / "video.mp4",
@@ -442,28 +545,58 @@ def reburn_short(job_id: str, index: int, cues: list, title_text: str | None = N
         src_h=int(meta["height"]),
         has_audio=bool(meta["has_audio"]),
         track=track,
-        captions=list(cues or []),
+        captions=[{
+            "start": float(cue["start"]),
+            "end": float(cue["end"]),
+            "text": cue["text"],
+        } for cue in prepared] if burn else [],
         out_w=int(settings["width"]),
         out_h=int(settings["height"]),
         threads=int(settings["threads"]),
         layout=layout,
         job_id=job_id,
-        enhance=enhance,
+        enhance=render_enhance,
     )
-    if rendered.get("quote_cues"):
-        write_srt(rendered["quote_cues"], folder / "captions.srt")
+    review = [{
+        "start": float(cue["start"]),
+        "end": float(cue["end"]),
+        "text": cue["text"],
+        "role": "quote",
+        "origin": "user",
+        "confirmed": True,
+        "low_confidence": False,
+    } for cue in prepared]
+    if review:
+        write_srt(review, folder / "captions.srt")
     elif (folder / "captions.srt").is_file():
         (folder / "captions.srt").unlink()
     write_cover(folder / "video.mp4", folder / "cover.jpg", job_id=job_id)
-    short["quote_cues"] = list(rendered.get("quote_cues") or [])
-    short["title_text"] = str(rendered.get("title_text") or "")
+    short["quote_cues"] = review
+    short["title_text"] = str(rendered.get("title_text") or short.get("title_text") or "")
     short["text_effects"] = list(rendered.get("text_effects") or [])
     short["captions_burned"] = bool(rendered.get("captions_burned"))
-    short["srt_url"] = f"/api/edit/douyin/{job_id}/shorts/{int(index)}/srt" if short["quote_cues"] else ""
+    short["srt_url"] = f"/api/edit/douyin/{job_id}/shorts/{int(index)}/srt" if review else ""
     result["shorts"] = shorts
     result["text_enhance"] = public_status(enhance, applied=_collected_effects(shorts))
-    update(job_id, result=result)
-    return {"short": short, "text_enhance": result["text_enhance"]}
+    policy = caption_policy_status(caption_mode, enhance)
+    result["caption_policy"] = policy
+    if caption_mode != "legacy":
+        payload["source_captions"] = caption_mode
+    replacement = [{
+        "start": round(start + float(cue["start"]), 2),
+        "end": round(start + float(cue["end"]), 2),
+        "text": cue["text"],
+        "origin": "user",
+        "confirmed": True,
+    } for cue in review]
+    payload["confirmed_cues"] = merge_confirmed_cues(payload.get("confirmed_cues"), start, end, replacement)
+    update(job_id, input=payload, result=result)
+    return {
+        "short": short,
+        "text_enhance": result["text_enhance"],
+        "caption_policy": policy,
+        "source_captions": caption_mode,
+    }
 
 
 def pack_file(job_id: str) -> Path:

@@ -10,6 +10,7 @@ import {
   startDouyinProduce,
   type ChenzeOptions,
   type DouyinLayout,
+  type SourceCaptions,
   type TextEnhanceOptions,
   type TaskSummary,
   type Video,
@@ -20,6 +21,13 @@ import { Switch, toast } from '../ui'
 const LAYOUTS: Array<{ id: DouyinLayout; title: string; detail: string }> = [
   { id: 'interview', title: '访谈式', detail: '跟着说话人裁成 9:16' },
   { id: 'podcast', title: '满屏播客式', detail: '完整画面，背景铺满' },
+]
+
+const CAPTION_SOURCES: Array<{ id: SourceCaptions; title: string; detail: string }> = [
+  { id: 'unknown', title: '还不确定', detail: '只出转写草稿，不烧进画面' },
+  { id: 'burned_in', title: '原片已有字幕', detail: '不再烧一层转写' },
+  { id: 'none', title: '不要另加字幕', detail: '保留画面，转写只供核对' },
+  { id: 'transcribe', title: '烧录转写字幕', detail: '把草稿烧进画面' },
 ]
 
 const CHENZE_COLUMNS: Array<{ id: '' | '综艺' | '评审' | '游戏' | '通用保真'; title: string }> = [
@@ -47,7 +55,7 @@ export default function EditPage() {
   const [chenzeColumn, setChenzeColumn] = useState<'' | '综艺' | '评审' | '游戏' | '通用保真'>('')
   const [chenzeLimit, setChenzeLimit] = useState('')
   const [textEnhance, setTextEnhance] = useState(false)
-  const [burnCaptions, setBurnCaptions] = useState(true)
+  const [sourceCaptions, setSourceCaptions] = useState<SourceCaptions>('unknown')
   const [titleNote, setTitleNote] = useState('')
   const [textStyle, setTextStyle] = useState<TextEnhanceOptions['style']>('outline')
   const [textMotion, setTextMotion] = useState<TextEnhanceOptions['emphasis']>('none')
@@ -104,14 +112,23 @@ export default function EditPage() {
       const enhance: TextEnhanceOptions | undefined = textEnhance
         ? {
             enabled: true,
-            captions: burnCaptions,
+            captions: sourceCaptions === 'transcribe',
             title_text: titleNote.trim(),
             style: textStyle,
             emphasis: textMotion,
             fade: textFade,
           }
         : { enabled: false }
-      const job = await startDouyinProduce(selectedVideoId, instruction.trim(), 0, layout, chenzeStyle, chenze, enhance)
+      const job = await startDouyinProduce(
+        selectedVideoId,
+        instruction.trim(),
+        0,
+        layout,
+        chenzeStyle,
+        chenze,
+        enhance,
+        sourceCaptions,
+      )
       toast.success('已开始生成抖音短视频')
       navigate(editTaskPath(job))
     } catch (error) {
@@ -289,27 +306,41 @@ export default function EditPage() {
               </>
             )}
           </div>
+          <div className="studio-layouts" role="radiogroup" aria-label="原片字幕">
+            {CAPTION_SOURCES.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                role="radio"
+                aria-checked={sourceCaptions === item.id}
+                className={`studio-layout ${sourceCaptions === item.id ? 'is-on' : ''}`}
+                onClick={() => setSourceCaptions(item.id)}
+              >
+                <strong>{item.title}</strong>
+                <span>{item.detail}</span>
+              </button>
+            ))}
+          </div>
+          <p className="studio-fine">
+            原片字幕和文字效果是分开的。选「原片已有字幕」或「还不确定」时，即使文字效果关闭，也不会把转写再烧一遍。不会擦掉原画面里的字，也没有自动识别画面字幕。
+          </p>
           <div className="studio-chenze">
             <div className="studio-chenze-row">
               <Switch checked={textEnhance} onChange={setTextEnhance} label="使用文字与轻效果" />
               <div>
                 <strong>文字与轻效果</strong>
-                <p className="studio-fine">可选，默认关闭。关闭后仍按现在的方式烧录口播字幕。这些是通用效果，不是已验收的陈泽风格。</p>
+                <p className="studio-fine">可选，默认关闭。关闭后不加成片样式。口播字幕烧不烧，由上面的原片字幕选择决定。这些是通用效果，不是已验收的陈泽风格。</p>
               </div>
             </div>
             {textEnhance && (
               <>
                 <p className="studio-fine">
-                  口播字幕来自转写草稿，烧进去之后仍要核对。旁注是你加的说明，不是原话。原声会保留，这里不加音乐或音效。
+                  {sourceCaptions === 'transcribe'
+                    ? '口播字幕会按所选样式烧进画面，烧进去之后仍要核对。'
+                    : '当前选择不会另烧口播字幕。这里的样式只作用于旁注。'}
+                  旁注是你加的说明，不是原话。原声会保留，这里不加音乐或音效。
                 </p>
                 <div className="studio-chenze-fields">
-                  <label>
-                    <span>烧录口播字幕</span>
-                    <select value={burnCaptions ? 'yes' : 'no'} onChange={(event) => setBurnCaptions(event.target.value === 'yes')}>
-                      <option value="yes">烧录转写草稿</option>
-                      <option value="no">不烧口播字幕</option>
-                    </select>
-                  </label>
                   <label>
                     字幕样式
                     <select value={textStyle} onChange={(event) => setTextStyle(event.target.value as TextEnhanceOptions['style'])}>

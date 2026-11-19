@@ -7,6 +7,7 @@ import tempfile
 import unittest
 from decimal import Decimal
 from pathlib import Path
+from unittest.mock import patch
 
 os.environ.setdefault("VIDEO_HUB_AUTH_MODE", "off")
 
@@ -350,6 +351,202 @@ class TextEnhanceRouteTests(unittest.TestCase):
         self.assertEqual(retried.status_code, 200, retried.text)
         self.assertTrue(retried.json()["input"]["text_enhance"]["fade"])
         self.assertEqual(retried.json()["input"]["text_enhance"]["style"], "yellow")
+        self.assertNotIn("source_captions", off.json()["input"])
+
+    def test_retry_keeps_confirmed_text_and_burned_in_choice(self):
+        from app.jobs import create, get, update
+
+        job = create("edit.douyin", "抖音成片", {
+            "video_id": 1,
+            "text_enhance": {"enabled": False},
+            "source_captions": "burned_in",
+        })
+        update(job["id"], status="success", result={
+            "video_id": 1,
+            "layout": "podcast",
+            "shorts": [{
+                "index": 1,
+                "start": 0,
+                "end": 3,
+                "layout": "podcast",
+                "title": "片段",
+                "asr_cues": [{"start": 0.2, "end": 1, "text": "草稿甲"}],
+            }],
+        })
+        seen = {}
+
+        def render(*args, **kwargs):
+            seen["captions"] = list(kwargs.get("captions") or [])
+            seen["enhance"] = kwargs.get("enhance")
+            return {
+                "framing": "center",
+                "captions_burned": bool(kwargs.get("captions")),
+                "width": 360,
+                "height": 640,
+            }
+
+        with patch("app.services.douyin_flow.fetch", return_value={"id": 1}), \
+                patch("app.services.douyin_flow.resolve_media", return_value=Path(self.tmp.name) / "in.mp4"), \
+                patch("app.services.douyin_flow.probe_source", return_value={"width": 640, "height": 360, "has_audio": True}), \
+                patch("app.services.douyin_flow.render_short", side_effect=render), \
+                patch("app.services.douyin_flow.write_cover", return_value=True), \
+                patch("app.config.douyin_settings", return_value={"width": 360, "height": 640, "threads": 1}):
+            saved = self.client.post(f"/api/edit/douyin/{job['id']}/shorts/1/reburn", json={
+                "cues": [{"start": 0.2, "end": 1.0, "text": "核对甲"}],
+                "source_captions": "burned_in",
+            })
+        self.assertEqual(saved.status_code, 200, saved.text)
+        self.assertEqual(seen["captions"], [])
+        self.assertIsNone(seen["enhance"])
+        body = saved.json()
+        self.assertFalse(body["short"]["captions_burned"])
+        self.assertEqual(body["short"]["quote_cues"][0]["text"], "核对甲")
+        self.assertEqual(body["short"]["quote_cues"][0]["origin"], "user")
+        self.assertTrue(body["short"]["quote_cues"][0]["confirmed"])
+        self.assertFalse(body["caption_policy"]["burns_transcript"])
+        stored = get(job["id"])
+        self.assertEqual(stored["input"]["confirmed_cues"][0]["text"], "核对甲")
+        self.assertEqual(stored["input"]["source_captions"], "burned_in")
+        produced = {}
+
+        def run(job_id, video_id, instruction, max_clips, layout="interview", **extra):
+            produced.update(extra)
+            update(job_id, status="failed", error={"message": "停"})
+
+        with patch("app.routers.edit.fetch", return_value={"id": 1, "title": "原片"}), \
+                patch("app.routers.edit.produce_douyin", side_effect=run):
+            retried = self.client.post(f"/api/edit/douyin/{job['id']}/retry")
+        self.assertEqual(retried.status_code, 200, retried.text)
+        self.assertEqual(retried.json()["input"]["source_captions"], "burned_in")
+        self.assertEqual(retried.json()["input"]["confirmed_cues"][0]["text"], "核对甲")
+        self.assertEqual(produced["source_captions"], "burned_in")
+        self.assertEqual(produced["confirmed_cues"][0]["text"], "核对甲")
+
+
+class CaptionPolicyTests(unittest.TestCase):
+    def test_modes_are_independent_of_effects(self):
+        from app.services.text_enhance import (
+            apply_confirmed_cues,
+            burn_new_captions,
+            normalize_source_captions,
+        )
+
+        off = {"enabled": False, "captions": True}
+        on = {"enabled": True, "captions": True}
+        title_only = {"enabled": True, "captions": False}
+        omitted = None
+        for mode in ("unknown", "burned_in", "none"):
+            self.assertFalse(burn_new_captions(mode, off), mode)
+            self.assertFalse(burn_new_captions(mode, on), mode)
+            self.assertFalse(burn_new_captions(mode, omitted), mode)
+        self.assertTrue(burn_new_captions("transcribe", off))
+        self.assertTrue(burn_new_captions("transcribe", on))
+        self.assertFalse(burn_new_captions("transcribe", title_only))
+        self.assertTrue(burn_new_captions(normalize_source_captions(None), off))
+        self.assertTrue(burn_new_captions("legacy", off))
+        self.assertFalse(burn_new_captions("legacy", title_only))
+        with self.assertRaises(TextEnhanceError):
+            normalize_source_captions("ocr")
+
+    def test_confirmed_text_is_kept_apart_from_the_draft(self):
+        from app.services.text_enhance import apply_confirmed_cues
+
+        clip = apply_confirmed_cues(
+            {
+                "start": 0,
+                "end": 7.2,
+                "captions": [{"start": 4.4, "end": 6.4, "text": "草稿甲", "origin": "asr", "low_confidence": True}],
+            },
+            [{"start": 4.4, "end": 6.4, "text": "核对甲", "origin": "user", "confirmed": True}],
+        )
+        self.assertEqual(clip["captions"][0]["text"], "核对甲")
+        self.assertTrue(clip["captions"][0]["confirmed"])
+        self.assertEqual(clip["asr_cues"][0]["text"], "草稿甲")
+        self.assertTrue(clip["asr_cues"][0]["low_confidence"])
+
+    def test_low_confidence_survives_caption_layout_without_new_words(self):
+        from app.services.douyin_plan import build_captions
+
+        cues = build_captions(
+            [{
+                "start": 0.2,
+                "end": 2.0,
+                "text": "待核对的句子",
+                "origin": "asr",
+                "low_confidence": True,
+                "review_reason": "平均对数概率偏低",
+            }],
+            0,
+            3,
+        )
+        self.assertEqual(cues[0]["text"], "待核对的句子")
+        self.assertTrue(cues[0]["low_confidence"])
+        self.assertEqual(cues[0]["review_reason"], "平均对数概率偏低")
+        self.assertNotIn("speaker", cues[0])
+
+
+class SourceCaptionFrameTests(unittest.TestCase):
+    def _require_cjk_font(self):
+        from app.services.douyin_render import caption_font, reset_font_cache
+        reset_font_cache()
+        name, path = caption_font()
+        if path is not None and Path(path).is_file():
+            return path
+        message = f"caption_font() 没有找到可预检的中文字体文件（当前 {name}）"
+        if os.environ.get("VIDEO_HUB_REQUIRE_CJK_FONT") == "1":
+            self.fail(message)
+        self.skipTest(message)
+
+    def test_not_burning_leaves_the_source_mark_and_adds_no_second_line(self):
+        if not (shutil.which("ffmpeg") and shutil.which("ffprobe")):
+            self.skipTest("ffmpeg required")
+        self._require_cjk_font()
+        from app.services.douyin_render import render_short
+
+        def count_red(frame: bytes, width: int, height: int, y0: int, y1: int) -> int:
+            count = 0
+            for y in range(max(0, y0), min(height, y1)):
+                row = y * width * 3
+                for x in range(width):
+                    index = row + x * 3
+                    red, green, blue = frame[index], frame[index + 1], frame[index + 2]
+                    if red > 150 and red > green + 40 and red > blue + 40:
+                        count += 1
+            return count
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source.mp4"
+            _ffmpeg(
+                "-f", "lavfi", "-i",
+                "color=c=0x202020:s=640x360:r=25:d=3,drawbox=x=20:y=300:w=600:h=48:color=0xE10600:t=fill",
+                "-f", "lavfi", "-i", "sine=frequency=440:duration=3",
+                "-shortest", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac",
+                str(source),
+            )
+            common = dict(
+                start=0.2, end=2.4, src_w=640, src_h=360, has_audio=True, track=[],
+                out_w=360, out_h=640, threads=1, layout="podcast",
+            )
+            plain = root / "plain.mp4"
+            burned = root / "burned.mp4"
+            render_short(source, plain, captions=[], **common)
+            render_short(
+                source, burned,
+                captions=[{"start": 0.2, "end": 1.8, "text": "另加的一行字幕"}],
+                **common,
+            )
+            width, height, plain_frame = _rgb_frame(plain, 0.8)
+            _, _, burned_frame = _rgb_frame(burned, 0.8)
+            picture = (int(height * 0.58), int(height * 0.68))
+            lower = (int(height * 0.78), int(height * 0.96))
+            plain_red = count_red(plain_frame, width, height, *picture)
+            burned_red = count_red(burned_frame, width, height, *picture)
+            plain_white = _count_white(plain_frame, width, height, *lower)
+            burned_white = _count_white(burned_frame, width, height, *lower)
+            self.assertGreater(plain_red, 40)
+            self.assertGreater(burned_red, plain_red * 0.5)
+            self.assertGreater(burned_white, plain_white + 30)
 
 
 if __name__ == "__main__":

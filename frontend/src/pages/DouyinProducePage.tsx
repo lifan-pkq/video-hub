@@ -105,6 +105,16 @@ function chosenCaptionMode(job: EditJob): SourceCaptions | 'legacy' {
   return 'legacy'
 }
 
+function cueIsReviewed(cue: { confirmed?: boolean; review_state?: string }) {
+  return Boolean(cue.confirmed || cue.review_state === 'reviewed')
+}
+
+function shortHasUnverifiedSpeech(short: DouyinShort | null) {
+  const cues = short?.quote_cues || []
+  if (cues.length) return cues.some((cue) => !cueIsReviewed(cue))
+  return Boolean(short?.asr_cues?.length)
+}
+
 function TextReview({
   job,
   active,
@@ -167,7 +177,7 @@ function TextReview({
           <p>
             {active?.captions_burned ? '这条成片已经烧进了口播字幕。' : '这条成片没有另烧口播字幕。'}
             {effects.length ? ` 文字效果：${effects.join('、')}。` : ''}
-            转写草稿和核对后的文字分开保存。旁注是编辑说明，不是原话。原声保留。
+            没经人工保存的转写都是未核对草稿，不能当成原话。解码分数也不能用来判断对错。旁注是编辑说明。原声保留。
           </p>
         </div>
       </div>
@@ -202,7 +212,12 @@ function TextReview({
           {cues.map((cue, index) => (
             <label key={`${active.index}-${index}`} className="studio-chenze-wide">
               {`口播 ${Number(cue.start).toFixed(1)}–${Number(cue.end).toFixed(1)} 秒`}
-              {cue.confirmed ? ' · 已核对' : cue.low_confidence ? ` · 待核对${cue.review_reason ? `（${cue.review_reason}）` : ''}` : ' · 转写草稿'}
+              {cueIsReviewed(cue)
+                ? ' · 已核对'
+                : ' · 未核对，不能当成原话'}
+              {!cueIsReviewed(cue) && cue.low_confidence
+                ? ` · 解码分数偏低${cue.review_reason ? `（${cue.review_reason}）` : ''}，这不是对错证明`
+                : ''}
               <input
                 value={cue.text}
                 onChange={(event) => {
@@ -218,7 +233,9 @@ function TextReview({
           </button>
           {active.srt_url && (
             <button type="button" className="studio-quiet" onClick={() => downloadFile(active.srt_url || '')}>
-              {active.captions_burned ? '下载已烧录字幕稿' : '下载转写草稿'}
+              {active.captions_burned && !cues.some((cue) => !cueIsReviewed(cue))
+                ? '下载已核对字幕稿'
+                : '下载未核对草稿'}
             </button>
           )}
         </div>
@@ -483,13 +500,18 @@ export default function DouyinProducePage() {
 
             <div className="studio-copy">
               <h2>{active.title}</h2>
+              {shortHasUnverifiedSpeech(active) && (
+                <p className="studio-fine">标题、简介和口播来自未核对转写，不能当成原话。</p>
+              )}
               {(active.hashtags || []).length > 0 && <p className="studio-tags">{active.hashtags.join(' ')}</p>}
               {active.description && <p className="studio-desc">{active.description}</p>}
               <p className="studio-fine">
                 {clock(active.duration || active.end - active.start)}
                 {typeof active.score === 'number' && active.score > 0 ? ` · 评分 ${active.score}` : ''}
                 {' · '}{framingLabel(active)}
-                {active.captions_burned === false ? ' · 字幕没烧进画面' : ' · 字幕已烧录'}
+                {active.captions_burned
+                  ? (shortHasUnverifiedSpeech(active) ? ' · 已烧进画面，文字仍未核对' : ' · 已烧录核对后的文字')
+                  : ' · 没有另烧口播字幕'}
                 {active.review_status === 'pending' ? ' · 待复核，不是定稿' : ''}
                 {active.publication_approved === false && active.review_status ? ' · 未批准发布' : ''}
               </p>

@@ -230,8 +230,25 @@ class AsrQualityTests(unittest.TestCase):
         self.assertEqual(rows[0]["text"], "待核对原句")
         self.assertTrue(rows[0]["low_confidence"])
         self.assertEqual(rows[0]["origin"], "asr")
+        self.assertEqual(rows[0]["review_state"], "unverified")
         self.assertFalse(rows[0]["confirmed"])
         self.assertNotIn("speaker", rows[0])
+
+    def test_a_smoother_score_stays_unverified(self):
+        from app.services.transcription import _collect_whisper_segments
+
+        class Segment:
+            start = 0.0
+            end = 1.0
+            text = "看起来顺的句子"
+            avg_logprob = -0.27
+            no_speech_prob = 0.02
+            compression_ratio = 1.0
+
+        rows = _collect_whisper_segments([Segment()], 0)
+        self.assertFalse(rows[0]["low_confidence"])
+        self.assertEqual(rows[0]["review_state"], "unverified")
+        self.assertFalse(rows[0]["confirmed"])
 
     def test_cache_key_follows_the_requested_model(self):
         import json

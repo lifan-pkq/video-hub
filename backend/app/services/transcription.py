@@ -84,9 +84,15 @@ def public_asr_status(run: dict | None) -> dict:
     if not ok:
         note = "转写没有成功完成，不能当成一次可用的草稿。"
     elif preset == "fast":
-        note = f"这次用的是较快模型 {model}。草稿需要核对，不是标准精度结果。"
+        note = (
+            f"这次用的是较快模型 {model}。"
+            "解码分数不能用来判断字对不对。没经人工核对的文字都是未核对草稿，不是标准精度结果。"
+        )
     elif preset == "standard":
-        note = f"这次用的是标准模型 {model}，语言锁定为中文。草稿仍可能有错，需要核对，不是无错引用。"
+        note = (
+            f"这次用的是标准模型 {model}，语言锁定为中文。"
+            "解码分数不能用来判断字对不对。没经人工核对的文字都是未核对草稿，不是无错引用。"
+        )
     elif preset == "remote":
         note = "这次走的是远端转写服务，不是本机标准模型。草稿需要核对。"
     else:
@@ -317,6 +323,7 @@ def _collect_whisper_segments(segments, offset: float) -> list[dict]:
             "text": text,
             "origin": "asr",
             "confirmed": False,
+            "review_state": "unverified",
             "low_confidence": bool(reason),
         }
         if reason:

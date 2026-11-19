@@ -464,6 +464,28 @@ class CaptionPolicyTests(unittest.TestCase):
         self.assertEqual(clip["asr_cues"][0]["text"], "草稿甲")
         self.assertTrue(clip["asr_cues"][0]["low_confidence"])
 
+    def test_unreviewed_asr_stays_unverified_without_a_low_score(self):
+        from app.services.douyin_flow import _cue_rows
+
+        rows = _cue_rows([{
+            "start": 0.2,
+            "end": 1.2,
+            "text": "看起来顺的句子",
+            "origin": "asr",
+            "confirmed": False,
+            "low_confidence": False,
+        }])
+        self.assertEqual(rows[0]["review_state"], "unverified")
+        self.assertFalse(rows[0]["low_confidence"])
+        reviewed = _cue_rows([{
+            "start": 0.2,
+            "end": 1.2,
+            "text": "人工改过",
+            "origin": "user",
+            "confirmed": True,
+        }])
+        self.assertEqual(reviewed[0]["review_state"], "reviewed")
+
     def test_low_confidence_survives_caption_layout_without_new_words(self):
         from app.services.douyin_plan import build_captions
 

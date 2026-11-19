@@ -393,6 +393,7 @@ def _cue_rows(cues: list) -> list[dict]:
             "role": "quote",
             "origin": "user" if cue.get("origin") == "user" or cue.get("confirmed") else "asr",
             "confirmed": bool(cue.get("confirmed")),
+            "review_state": "reviewed" if cue.get("confirmed") or cue.get("origin") == "user" else "unverified",
             "low_confidence": bool(cue.get("low_confidence")) and not cue.get("confirmed"),
         }
         if row["low_confidence"] and cue.get("review_reason"):
@@ -415,6 +416,7 @@ def _review_cues(clip: dict, rendered: dict) -> list[dict]:
         if flag.get("origin") == "user" or flag.get("confirmed"):
             row["origin"] = "user"
             row["confirmed"] = True
+            row["review_state"] = "reviewed"
             row["low_confidence"] = False
             row.pop("review_reason", None)
         elif flag.get("low_confidence"):
@@ -564,6 +566,7 @@ def reburn_short(
         "role": "quote",
         "origin": "user",
         "confirmed": True,
+        "review_state": "reviewed",
         "low_confidence": False,
     } for cue in prepared]
     if review:

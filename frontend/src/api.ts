@@ -543,6 +543,7 @@ export interface CaptionCue {
   role?: string
   origin?: 'asr' | 'user'
   confirmed?: boolean
+  review_state?: 'unverified' | 'reviewed'
   low_confidence?: boolean
   review_reason?: string
 }

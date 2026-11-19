@@ -1,0 +1,142 @@
+{
+  "schema_version": "0.8-game-B-asr-keyframe-v1-human-pending",
+  "derived_from": "rules-draft.json",
+  "automatic_editing_enabled": false,
+  "rules": [
+    {
+      "rule_id": "CZ-C13",
+      "trigger": "从采访推导创作模板",
+      "action": "为AI二创实验分别标记用主播梗延伸或先故事后分角色路线，不预定优胜。",
+      "avoid": "一律最大化梗密度、把AI剧本经验冒充真人切片数据",
+      "source_ids": [
+        "S09",
+        "S10",
+        "D01"
+      ],
+      "confidence": "high_for_creator_attributed_intent_low_for_live_clip_transfer",
+      "verification_status": "secondary_interview_supported_transfer_unverified",
+      "exceptions": "对非AI录屏不直接迁移该因果",
+      "rule_kind": "derivative_creator_method_candidate",
+      "enabled_for_automatic_editing": false,
+      "evidence_grades": [
+        {
+          "source_id": "S09",
+          "level": "E2_named_creator_interview"
+        },
+        {
+          "source_id": "S10",
+          "level": "E2_named_creator_interview"
+        },
+        {
+          "source_id": "D01",
+          "level": "N0_normative_not_empirical"
+        }
+      ],
+      "legacy_rule_kind": "style_hypothesis",
+      "action_opcode": "CHOOSE_DERIVATIVE_TEST_ROUTE",
+      "evidence_bindings": [
+        {
+          "source_id": "S09",
+          "role": "context_only_not_edit_effect",
+          "supported_claim": "受访二创作者自己的方法与意图，不是本人剪辑要求"
+        },
+        {
+          "source_id": "S10",
+          "role": "context_only_not_edit_effect",
+          "supported_claim": "受访二创作者自己的方法与意图，不是本人剪辑要求"
+        },
+        {
+          "source_id": "D01",
+          "role": "normative_definition_not_empirical",
+          "supported_claim": "本地保真/验收门槛；不证实风格或固定数值"
+        }
+      ],
+      "required_inputs": [
+        "source_page_or_asset_id",
+        "declared_content_layer",
+        "review_scope"
+      ],
+      "failure_conditions": [
+        "无法定位到本条声明所对应的来源/原场时，返回UNVERIFIED，不执行风格化剪辑。",
+        "剪辑依赖的原音、说话人、关键否定或语义边界未核清时，返回NEEDS_HUMAN_REVIEW。",
+        "规则仅有元信息/二手描述支持而被要求当已验风格自动应用时，返回NOT_VALIDATED。"
+      ],
+      "postcondition": "输出可追溯审片/标注结果及状态；不得仅凭此规则直接发布或宣称视听完成。",
+      "sentence_tail_policy": "任何由此产生的片段必须保留完整句尾和结论所需承接；有词尾/尾音/否定/反驳依赖就不得切断。",
+      "duration_failure_policy": "先回溯更早完整句尾或重选完整单元；仍无法同时满足语义与请求上限则NO_FIT，不硬截、不超时冒充满足。",
+      "asr_review_policy": "自动转写和转载文稿仅为候选；人工对照原音审核后才允许用作准确字幕或引语；听不清保留unclear并停止依赖该词的选段。",
+      "numeric_edit_parameters": {},
+      "empirical_edit_effect_verified": false,
+      "style_status": "candidate_only_no_validated_person_specific_style"
+    },
+    {
+      "rule_id": "CZ-T03",
+      "trigger": "AI叙事作品或观看它的reaction",
+      "action": "为AI作品单元标注文戏悬念、持续动作与转场的功能，不设固定节拍。",
+      "avoid": "把长篇二创中舒缓/舞蹈转场当无用静音；把视觉猎奇当主播直播必选项",
+      "source_ids": [
+        "S10",
+        "S09",
+        "D01"
+      ],
+      "confidence": "high_for_attributed_intent_low_for_causal_effect",
+      "verification_status": "creator_interview_supported_not_video_validated",
+      "exceptions": "不直接迁移25分钟AI剧节奏到15秒真人切片；近10分钟是采访描述非时间码",
+      "rule_kind": "derivative_creator_method_candidate",
+      "enabled_for_automatic_editing": false,
+      "evidence_grades": [
+        {
+          "source_id": "S10",
+          "level": "E2_named_creator_interview"
+        },
+        {
+          "source_id": "S09",
+          "level": "E2_named_creator_interview"
+        },
+        {
+          "source_id": "D01",
+          "level": "N0_normative_not_empirical"
+        }
+      ],
+      "legacy_rule_kind": "text_grounded_hypothesis_not_audiovisual",
+      "action_opcode": "ANNOTATE_DERIVATIVE_PACING",
+      "evidence_bindings": [
+        {
+          "source_id": "S10",
+          "role": "context_only_not_edit_effect",
+          "supported_claim": "受访二创作者自己的方法与意图，不是本人剪辑要求"
+        },
+        {
+          "source_id": "S09",
+          "role": "context_only_not_edit_effect",
+          "supported_claim": "受访二创作者自己的方法与意图，不是本人剪辑要求"
+        },
+        {
+          "source_id": "D01",
+          "role": "normative_definition_not_empirical",
+          "supported_claim": "本地保真/验收门槛；不证实风格或固定数值"
+        }
+      ],
+      "required_inputs": [
+        "source_page_or_asset_id",
+        "declared_content_layer",
+        "review_scope",
+        "audible_playable_source",
+        "human_checked_speaker_transcript",
+        "original_timeline"
+      ],
+      "failure_conditions": [
+        "无法定位到本条声明所对应的来源/原场时，返回UNVERIFIED，不执行风格化剪辑。",
+        "剪辑依赖的原音、说话人、关键否定或语义边界未核清时，返回NEEDS_HUMAN_REVIEW。",
+        "规则仅有元信息/二手描述支持而被要求当已验风格自动应用时，返回NOT_VALIDATED。"
+      ],
+      "postcondition": "输出可追溯审片/标注结果及状态；不得仅凭此规则直接发布或宣称视听完成。",
+      "sentence_tail_policy": "任何由此产生的片段必须保留完整句尾和结论所需承接；有词尾/尾音/否定/反驳依赖就不得切断。",
+      "duration_failure_policy": "先回溯更早完整句尾或重选完整单元；仍无法同时满足语义与请求上限则NO_FIT，不硬截、不超时冒充满足。",
+      "asr_review_policy": "自动转写和转载文稿仅为候选；人工对照原音审核后才允许用作准确字幕或引语；听不清保留unclear并停止依赖该词的选段。",
+      "numeric_edit_parameters": {},
+      "empirical_edit_effect_verified": false,
+      "style_status": "candidate_only_no_validated_person_specific_style"
+    }
+  ]
+}

@@ -43,7 +43,13 @@ class ChineseSpeechPipelineTests(unittest.TestCase):
             self.skipTest("需要 ffmpeg 和 ffprobe")
         self.assertTrue(FIXTURE.is_file(), FIXTURE)
         previous = os.environ.get("VIDEO_HUB_WHISPER_MODEL")
+        previous_engine = os.environ.get("VIDEO_HUB_ASR_ENGINE")
         os.environ["VIDEO_HUB_WHISPER_MODEL"] = "tiny"
+        os.environ["VIDEO_HUB_ASR_ENGINE"] = "whisper"
+        self.addCleanup(
+            lambda: os.environ.__setitem__("VIDEO_HUB_ASR_ENGINE", previous_engine)
+            if previous_engine is not None else os.environ.pop("VIDEO_HUB_ASR_ENGINE", None)
+        )
         self.addCleanup(
             lambda: os.environ.__setitem__("VIDEO_HUB_WHISPER_MODEL", previous)
             if previous is not None else os.environ.pop("VIDEO_HUB_WHISPER_MODEL", None)

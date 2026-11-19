@@ -6,10 +6,14 @@ import {
   errorMessage,
   fetchJob,
   retryDouyinProduce,
+  reburnDouyinShort,
   fetchVideos,
   saveDouyinToLibrary,
+  type CaptionPolicy,
+  type ChenzeReviewCandidate,
   type DouyinShort,
   type EditJob,
+  type SourceCaptions,
   type Video,
 } from '../api'
 import {
@@ -24,6 +28,236 @@ import {
   taskSourceTitle,
 } from '../features/edit/studio'
 import { toast } from '../ui'
+
+const CHENZE_REVIEW: Record<string, string> = {
+  NO_FIT: '放不进时长 NO_FIT',
+  context_required: '缺语境 context_required',
+  pending: '待复核 pending',
+}
+
+function reviewLabel(status: string) {
+  return CHENZE_REVIEW[status] || status
+}
+
+function ChenzePanel({ job }: { job: EditJob }) {
+  const info = job.result?.chenze
+  const requested = Boolean(job.input?.chenze_style || info?.requested)
+  if (!requested) return null
+  const running = job.status === 'pending' || job.status === 'running'
+  const reviews = info?.review_candidates || []
+  const appliedRules = info?.applied_rule_ids || []
+  let headline = '已选择陈泽剪辑方式'
+  let detail = '正在自动整理事件单元。'
+  if (!running && info?.applied) {
+    headline = '已自动跑完陈泽剪辑流程'
+    detail = '按事件单元挑选候选。个人风格尚未人工验收，下面都不是定稿。'
+  } else if (!running && info && info.applied === false) {
+    headline = '没有按陈泽本人剪辑'
+    detail = info.identity?.reason || '账号没有对上已核本人，所以没有套用本人风格。'
+  } else if (!running && !info) {
+    detail = '这次没有留下陈泽流程结果。'
+  }
+  return (
+    <section className="studio-review" aria-label="陈泽剪辑方式">
+      <div className="studio-reel-head">
+        <div>
+          <h2>{headline}</h2>
+          <p>{detail}</p>
+        </div>
+      </div>
+      {info?.applied && (
+        <p className="studio-fine">
+          知识包 {info.pack_id || 'v1'} · {info.column || '通用保真'}
+          {appliedRules.length ? ` · 已执行规则 ${appliedRules.join('、')}` : ' · 没有自动启用风格规则'}
+          {info.publication_approved ? '' : ' · 未批准发布'}
+        </p>
+      )}
+      {reviews.length > 0 && (
+        <ul className="studio-review-list">
+          {reviews.map((item) => (
+            <ReviewRow key={`${item.status}-${item.start}-${item.end}-${item.reason}`} item={item} />
+          ))}
+        </ul>
+      )}
+    </section>
+  )
+}
+
+const CAPTION_CHOICES: Array<{ id: SourceCaptions; title: string }> = [
+  { id: 'unknown', title: '还不确定' },
+  { id: 'burned_in', title: '原片已有字幕' },
+  { id: 'none', title: '不要另加字幕' },
+  { id: 'transcribe', title: '烧录转写字幕' },
+]
+
+const CAPTION_NOTES: Record<SourceCaptions, string> = {
+  unknown: '还没确认原片有没有字幕。保存后仍只保留草稿，不烧进画面。',
+  burned_in: '已标明原片自带字幕。保存后不会再烧一层转写，也不会改原画面像素。',
+  none: '已标明不要另加字幕。保存后转写仍可下载，不会烧进画面。',
+  transcribe: '保存后会把核对过的口播字幕烧进画面。',
+}
+
+function chosenCaptionMode(job: EditJob): SourceCaptions | 'legacy' {
+  const value = job.result?.caption_policy?.source_captions || job.input?.source_captions
+  if (value === 'unknown' || value === 'burned_in' || value === 'none' || value === 'transcribe' || value === 'legacy') {
+    return value
+  }
+  return 'legacy'
+}
+
+function cueIsReviewed(cue: { confirmed?: boolean; review_state?: string }) {
+  return Boolean(cue.confirmed || cue.review_state === 'reviewed')
+}
+
+function shortHasUnverifiedSpeech(short: DouyinShort | null) {
+  const cues = short?.quote_cues || []
+  if (cues.length) return cues.some((cue) => !cueIsReviewed(cue))
+  return Boolean(short?.asr_cues?.length)
+}
+
+function TextReview({
+  job,
+  active,
+  onUpdated,
+}: {
+  job: EditJob
+  active: DouyinShort | null
+  onUpdated: (short: DouyinShort, policy?: CaptionPolicy) => void
+}) {
+  const status = job.result?.text_enhance
+  const enabled = Boolean(job.input?.text_enhance?.enabled || status?.enabled)
+  const storedMode = chosenCaptionMode(job)
+  const [cues, setCues] = useState(active?.quote_cues || [])
+  const [title, setTitle] = useState(active?.title_text || '')
+  const [mode, setMode] = useState<SourceCaptions | 'legacy'>(storedMode)
+  const [busy, setBusy] = useState(false)
+  useEffect(() => {
+    setCues(active?.quote_cues || [])
+    setTitle(active?.title_text || '')
+  }, [active?.index, active?.quote_cues, active?.title_text])
+  useEffect(() => {
+    setMode(storedMode)
+  }, [storedMode, job.id])
+  const hasDraft = Boolean(active?.quote_cues?.length || active?.asr_cues?.length)
+  if (!enabled && !hasDraft && storedMode === 'legacy' && !job.result?.caption_policy && !job.result?.asr) return null
+  const effectNames: Record<string, string> = {
+    captions: '口播字幕',
+    title: '旁注',
+    fade: '画面淡入淡出',
+    emphasis_fade: '字的淡入淡出',
+    emphasis_pop: '字的弹出',
+  }
+  const effects = (status?.applied_effects || active?.text_effects || []).map((name) => effectNames[name] || name)
+  const asrText = (active?.asr_cues || []).map((cue) => cue.text).join('\n')
+  const editedText = cues.map((cue) => cue.text).join('\n')
+  const showDraft = Boolean(asrText) && asrText !== editedText
+  const willBurn = mode === 'transcribe' || (mode === 'legacy' && (!enabled || Boolean(job.input?.text_enhance?.captions ?? true)))
+  async function reburn() {
+    if (!active || busy) return
+    setBusy(true)
+    try {
+      const saved = await reburnDouyinShort(job.id, active.index, cues.map((cue) => ({
+        start: Number(cue.start),
+        end: Number(cue.end),
+        text: cue.text,
+      })), enabled ? title : undefined, mode === 'legacy' ? undefined : mode)
+      onUpdated(saved.short, saved.caption_policy)
+      toast.success(saved.caption_policy?.burns_transcript ? '已按校对字幕重新烧录' : '已保存校对，没有烧进画面')
+    } catch (cause) {
+      toast.error(errorMessage(cause))
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <section className="studio-review" aria-label="原片字幕和转写">
+      <div className="studio-reel-head">
+        <div>
+          <h2>原片字幕和转写</h2>
+          <p>
+            {active?.captions_burned ? '这条成片已经烧进了口播字幕。' : '这条成片没有另烧口播字幕。'}
+            {effects.length ? ` 文字效果：${effects.join('、')}。` : ''}
+            没经人工保存的转写都是未核对草稿，不能当成原话。解码分数也不能用来判断对错。旁注是编辑说明。原声保留。
+          </p>
+        </div>
+      </div>
+      {job.result?.asr?.note && <p className="studio-fine">{job.result.asr.note}</p>}
+      <p className="studio-fine">{mode === 'legacy' ? (job.result?.caption_policy?.note || '这条任务沿用旧的字幕处理。') : CAPTION_NOTES[mode]}</p>
+      {status?.typography_note && <p className="studio-fine">{status.typography_note}</p>}
+      <div className="studio-layouts" role="radiogroup" aria-label="核对时的原片字幕">
+        {CAPTION_CHOICES.map((item) => (
+          <button
+            key={item.id}
+            type="button"
+            role="radio"
+            aria-checked={mode === item.id}
+            className={`studio-layout ${mode === item.id ? 'is-on' : ''}`}
+            onClick={() => setMode(item.id)}
+          >
+            <strong>{item.title}</strong>
+          </button>
+        ))}
+      </div>
+      {active && (
+        <div className="studio-chenze-fields">
+          {enabled && (
+            <label className="studio-chenze-wide">
+              旁注
+              <input value={title} maxLength={40} onChange={(event) => setTitle(event.target.value)} />
+            </label>
+          )}
+          {showDraft && (
+            <p className="studio-fine">转写草稿仍保留：{asrText}</p>
+          )}
+          {cues.map((cue, index) => (
+            <label key={`${active.index}-${index}`} className="studio-chenze-wide">
+              {`口播 ${Number(cue.start).toFixed(1)}–${Number(cue.end).toFixed(1)} 秒`}
+              {cueIsReviewed(cue)
+                ? ' · 已核对'
+                : ' · 未核对，不能当成原话'}
+              {!cueIsReviewed(cue) && cue.low_confidence
+                ? ` · 解码分数偏低${cue.review_reason ? `（${cue.review_reason}）` : ''}，这不是对错证明`
+                : ''}
+              <input
+                value={cue.text}
+                onChange={(event) => {
+                  const next = cues.slice()
+                  next[index] = { ...cue, text: event.target.value }
+                  setCues(next)
+                }}
+              />
+            </label>
+          ))}
+          <button type="button" className="studio-pill" disabled={busy} onClick={() => void reburn()}>
+            {busy ? '正在保存…' : willBurn ? '按校对字幕重新烧录' : '保存校对，不烧进画面'}
+          </button>
+          {active.srt_url && (
+            <button type="button" className="studio-quiet" onClick={() => downloadFile(active.srt_url || '')}>
+              {active.captions_burned && !cues.some((cue) => !cueIsReviewed(cue))
+                ? '下载已核对字幕稿'
+                : '下载未核对草稿'}
+            </button>
+          )}
+        </div>
+      )}
+    </section>
+  )
+}
+
+function ReviewRow({ item }: { item: ChenzeReviewCandidate }) {
+  const notes = item.rights_notes || []
+  return (
+    <li>
+      <b>{reviewLabel(item.status)}</b>
+      <span className="tnum">{clock(item.start)}–{clock(item.end)}</span>
+      {item.preview && <em>可预览</em>}
+      {item.fit_label && <em>{item.fit_label}</em>}
+      <p>{item.reason}</p>
+      {item.text && <p className="studio-fine">{item.text}</p>}
+      {notes.map((note) => <p key={note} className="studio-fine">{note}</p>)}
+    </li>
+  )
+}
 
 export default function DouyinProducePage() {
   const { jobId = '' } = useParams()
@@ -193,6 +427,30 @@ export default function DouyinProducePage() {
         <p className="studio-empty">这次没有可预览的成片。换一条口播更集中的原片，或把想留的内容写具体一点。</p>
       )}
 
+      {job && <ChenzePanel job={job} />}
+      {job && (
+        <TextReview
+          job={job}
+          active={active}
+          onUpdated={(short, policy) => {
+            setJob((current) => {
+              if (!current?.result?.shorts) return current
+              return {
+                ...current,
+                input: policy && policy.source_captions !== 'legacy'
+                  ? { ...current.input, source_captions: policy.source_captions }
+                  : current.input,
+                result: {
+                  ...current.result,
+                  caption_policy: policy || current.result.caption_policy,
+                  shorts: current.result.shorts.map((item) => item.index === short.index ? { ...item, ...short } : item),
+                },
+              }
+            })
+          }}
+        />
+      )}
+
       {running && shorts.length > 0 && (
         <p className="studio-fine">已经做好的可以先看。其余还在渲染。</p>
       )}
@@ -242,13 +500,20 @@ export default function DouyinProducePage() {
 
             <div className="studio-copy">
               <h2>{active.title}</h2>
+              {shortHasUnverifiedSpeech(active) && (
+                <p className="studio-fine">标题、简介和口播来自未核对转写，不能当成原话。</p>
+              )}
               {(active.hashtags || []).length > 0 && <p className="studio-tags">{active.hashtags.join(' ')}</p>}
               {active.description && <p className="studio-desc">{active.description}</p>}
               <p className="studio-fine">
                 {clock(active.duration || active.end - active.start)}
                 {typeof active.score === 'number' && active.score > 0 ? ` · 评分 ${active.score}` : ''}
                 {' · '}{framingLabel(active)}
-                {active.captions_burned === false ? ' · 字幕没烧进画面' : ' · 字幕已烧录'}
+                {active.captions_burned
+                  ? (shortHasUnverifiedSpeech(active) ? ' · 已烧进画面，文字仍未核对' : ' · 已烧录核对后的文字')
+                  : ' · 没有另烧口播字幕'}
+                {active.review_status === 'pending' ? ' · 待复核，不是定稿' : ''}
+                {active.publication_approved === false && active.review_status ? ' · 未批准发布' : ''}
               </p>
               <div className="studio-actions">
                 <button

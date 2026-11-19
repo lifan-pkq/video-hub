@@ -1,0 +1,97 @@
+{
+  "observation_time": "2026-11-18T18:00:00+08:00",
+  "source_ids": [
+    "P01",
+    "P02"
+  ],
+  "works": [
+    {
+      "source_id": "O01",
+      "url": "https://www.douyin.com/video/7640544941084609807",
+      "title": "OK了老铁们：第一集下",
+      "published_at": "2026-05-17T13:00:00+08:00",
+      "page_display_duration": "44:28",
+      "page_display_duration_seconds": 2668,
+      "duration_measurement": "page_display_not_media_probe",
+      "access_status": "parent_browser_metadata_verified_not_watched",
+      "audiovisual_reviewed": false
+    },
+    {
+      "source_id": "V19",
+      "url": "https://www.douyin.com/video/7640259548015529222",
+      "title": "OK了老铁们：第一集上",
+      "published_at": "2026-05-16T13:00:00+08:00",
+      "page_display_duration": "1:12:37",
+      "page_display_duration_seconds": 4357,
+      "duration_measurement": "page_display_not_media_probe",
+      "access_status": "parent_browser_metadata_verified_not_watched",
+      "audiovisual_reviewed": false
+    },
+    {
+      "source_id": "O02",
+      "url": "https://www.douyin.com/video/7639433959050333490",
+      "title": "OK了老铁们：培训篇",
+      "published_at": "2026-05-14T13:00:00+08:00",
+      "page_display_duration": "46:16",
+      "page_display_duration_seconds": 2776,
+      "duration_measurement": "page_display_not_media_probe",
+      "access_status": "parent_browser_metadata_verified_not_watched",
+      "audiovisual_reviewed": false
+    },
+    {
+      "source_id": "O03",
+      "url": "https://www.douyin.com/video/7674691543852191003",
+      "title": "OK了老铁们：第二集山城历险记下",
+      "published_at": "2026-08-17T13:00:00+08:00",
+      "page_display_duration": "1:14:56",
+      "page_display_duration_seconds": 4496,
+      "duration_measurement": "page_display_not_media_probe",
+      "access_status": "parent_browser_metadata_verified_not_watched",
+      "audiovisual_reviewed": false
+    },
+    {
+      "source_id": "O04",
+      "url": "https://www.douyin.com/video/7674287686701698323",
+      "title": "OK了老铁们：第二集中",
+      "published_at": "2026-08-16T13:00:00+08:00",
+      "page_display_duration": "1:29:53",
+      "page_display_duration_seconds": 5393,
+      "duration_measurement": "page_display_not_media_probe",
+      "access_status": "parent_browser_metadata_verified_not_watched",
+      "audiovisual_reviewed": false
+    },
+    {
+      "source_id": "O05",
+      "url": "https://www.douyin.com/video/7673937492818595087",
+      "title": "OK了老铁们：第二集上",
+      "published_at": "2026-08-15T13:00:00+08:00",
+      "page_display_duration": "1:16:56",
+      "page_display_duration_seconds": 4616,
+      "duration_measurement": "page_display_not_media_probe",
+      "access_status": "parent_browser_metadata_verified_not_watched",
+      "audiovisual_reviewed": false
+    },
+    {
+      "source_id": "O06",
+      "url": "https://www.douyin.com/video/7671340220918418688",
+      "title": "OK了老铁们：第二集预告",
+      "published_at": "2026-08-08T13:00:00+08:00",
+      "page_display_duration": "2:11",
+      "page_display_duration_seconds": 131,
+      "duration_measurement": "page_display_not_media_probe",
+      "access_status": "parent_browser_metadata_verified_not_watched",
+      "audiovisual_reviewed": false
+    },
+    {
+      "source_id": "O07",
+      "url": "https://www.douyin.com/video/7708406168997121330",
+      "title": "OK了老铁们：第三集大山的小孩预告",
+      "published_at": "2026-11-16T13:00:00+08:00",
+      "page_display_duration": "1:04",
+      "page_display_duration_seconds": 64,
+      "duration_measurement": "page_display_not_media_probe",
+      "access_status": "parent_browser_metadata_verified_not_watched",
+      "audiovisual_reviewed": false
+    }
+  ]
+}

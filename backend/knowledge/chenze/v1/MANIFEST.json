@@ -1,0 +1,33 @@
+{
+  "pack_id": "chenze-knowledge-v1",
+  "status_version": "0.8-game-B-asr-keyframe-v1-human-pending",
+  "as_of": "2026-11-18 Asia/Shanghai",
+  "included": [
+    "PACK.md",
+    "MANIFEST.json",
+    "identity.json",
+    "columns.json",
+    "current-status.json",
+    "knowledge-schema.json",
+    "knowledge-structure.md",
+    "rules-draft.json",
+    "general-fidelity-rules.json",
+    "chenze-style-candidates.json",
+    "derivative-method-candidates.json",
+    "design-requirements.md",
+    "quality-check.md",
+    "gaps.md",
+    "original-works.json",
+    "fit_qc.py",
+    "test_fit_qc.py"
+  ],
+  "excluded": [
+    "media files",
+    "local paths and download manifests",
+    "sources.json full ledger",
+    "knowledge-base.json (local media paths)",
+    "audiovisual notes, coverage dumps, and research scripts"
+  ],
+  "validated_person_specific_style_rules": 0,
+  "automatic_style_enabled": false
+}

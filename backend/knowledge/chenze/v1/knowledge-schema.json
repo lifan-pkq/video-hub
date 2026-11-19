@@ -1,0 +1,308 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Evidence-layered Streamer Knowledge Base",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "entity_records",
+    "claims",
+    "program_samples",
+    "derivative_works",
+    "editing_recommendations",
+    "review_queue",
+    "validation_runs",
+    "source_registry",
+    "rule_registry"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "entity_records": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "entity_id",
+          "entity_type",
+          "display_name",
+          "layer",
+          "source_ids",
+          "verification_status"
+        ],
+        "properties": {
+          "entity_type": {
+            "enum": [
+              "person",
+              "account",
+              "program",
+              "work",
+              "fictional_character",
+              "programme_scenario"
+            ]
+          },
+          "layer": {
+            "enum": [
+              "person_public_facts",
+              "program_content",
+              "derivative_fiction",
+              "editing_recommendation"
+            ]
+          },
+          "source_ids": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    },
+    "claims": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "claim_id",
+          "layer",
+          "subject_id",
+          "predicate",
+          "object_value",
+          "source_ids",
+          "evidence_status",
+          "attribution",
+          "supported_scope",
+          "limits",
+          "valid_at",
+          "contradiction_ids",
+          "supersedes"
+        ],
+        "properties": {
+          "claim_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "layer": {
+            "enum": [
+              "person_public_facts",
+              "program_content",
+              "derivative_fiction",
+              "editing_recommendation"
+            ]
+          },
+          "subject_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "predicate": {
+            "type": "string",
+            "minLength": 1
+          },
+          "object_value": {},
+          "source_ids": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "evidence_status": {
+            "type": "string",
+            "minLength": 1
+          },
+          "attribution": {
+            "type": "string",
+            "minLength": 1
+          },
+          "supported_scope": {
+            "type": "string",
+            "minLength": 1
+          },
+          "limits": {
+            "type": "string",
+            "minLength": 1
+          },
+          "valid_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "contradiction_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "supersedes": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    },
+    "program_samples": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "sample_id",
+          "program_id",
+          "asset_source_id",
+          "page_url",
+          "review_status",
+          "segment_start",
+          "segment_end",
+          "page_duration_seconds",
+          "probed_duration_seconds",
+          "structure",
+          "rights_status"
+        ],
+        "properties": {
+          "sample_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "asset_source_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "program_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "page_url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "review_status": {
+            "enum": [
+              "metadata_only",
+              "text_read",
+              "audio_aligned",
+              "audiovisual_reviewed",
+              "audiovisual_tool_coarse",
+              "audiovisual_tool_partial",
+              "audiovisual_tool_full_segmented",
+              "audiovisual_tool_repost_full_segmented",
+              "local_asr_keyframe_coarse"
+            ]
+          },
+          "segment_start": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "segment_end": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "page_duration_seconds": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "probed_duration_seconds": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "structure": {
+            "type": "object",
+            "required": [
+              "setup",
+              "conflict",
+              "reaction",
+              "payoff",
+              "tail"
+            ]
+          },
+          "rights_status": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "review_status": {
+                  "const": "metadata_only"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "segment_start": {
+                  "type": "null"
+                },
+                "segment_end": {
+                  "type": "null"
+                },
+                "speaker_transcript": {
+                  "type": "null"
+                },
+                "shot_observations": {
+                  "type": "null"
+                },
+                "audio_observations": {
+                  "type": "null"
+                },
+                "sentence_end": {
+                  "type": "null"
+                },
+                "semantic_closure": {
+                  "type": "null"
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    "derivative_works": {
+      "type": "array"
+    },
+    "editing_recommendations": {
+      "type": "array"
+    },
+    "review_queue": {
+      "type": "array"
+    },
+    "validation_runs": {
+      "type": "array"
+    },
+    "source_registry": {
+      "const": "sources.json"
+    },
+    "rule_registry": {
+      "const": "rules-draft.json"
+    }
+  },
+  "x-semantic-validation": [
+    "source_ids必须存在于来源账本",
+    "引用一般事实不能证明风格效果或固定剪辑数值",
+    "fictional_character不得等同person，仅允许带出处的based_on映射",
+    "节目发言不得直接提升为稳定人格事实",
+    "metadata_only不得填写实测音画或原片时间码",
+    "页面时长不等于媒体探测时长",
+    "未通过AV验收不得启用风格规则"
+  ]
+}

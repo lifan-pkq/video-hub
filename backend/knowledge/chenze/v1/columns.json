@@ -1,0 +1,57 @@
+{
+  "pack_id": "chenze-knowledge-v1",
+  "columns": ["综艺", "评审", "游戏", "通用保真"],
+  "note": "栏目只按规则 trigger 里已经写明的范围归类，不是新的风格结论。未写明单一栏目的候选不会自动套进某一栏。通用保真对应 rule_kind=universal_fidelity_and_provenance。二创方法不迁入本人切片。",
+  "detect": {
+    "综艺": ["综艺", "老铁们"],
+    "评审": ["评审", "读题", "辩论"],
+    "游戏": ["游戏", "谐音", "看图"]
+  },
+  "assignments": [
+    {
+      "rule_id": "CZ-C04",
+      "columns": ["综艺"],
+      "keywords": ["综艺", "多人任务"]
+    },
+    {
+      "rule_id": "CZ-T02",
+      "columns": ["综艺"],
+      "keywords": ["叫名字", "停止用餐"]
+    },
+    {
+      "rule_id": "CZ-C02",
+      "columns": ["评审"],
+      "keywords": ["评审", "读题", "辩论"]
+    },
+    {
+      "rule_id": "CZ-C01",
+      "columns": ["游戏"],
+      "keywords": ["双人游戏", "资源归属"]
+    },
+    {
+      "rule_id": "CZ-C14",
+      "columns": ["游戏"],
+      "keywords": ["谐音", "看图"]
+    },
+    {
+      "rule_id": "CZ-C15",
+      "columns": ["游戏", "评审"],
+      "keywords": ["改规则", "换题"]
+    },
+    {
+      "rule_id": "CZ-C16",
+      "columns": ["综艺", "评审", "游戏"],
+      "keywords": ["弹幕"]
+    },
+    {
+      "rule_id": "CZ-C13",
+      "columns": [],
+      "keywords": ["创作模板", "采访"]
+    },
+    {
+      "rule_id": "CZ-T03",
+      "columns": [],
+      "keywords": ["reaction", "二创"]
+    }
+  ]
+}

@@ -1,0 +1,26 @@
+{
+  "pack_id": "chenze-knowledge-v1",
+  "derived_from": [
+    "knowledge-base entity account:douyin_9896719_dot",
+    "claim F001",
+    "sources P01",
+    "sources P02",
+    "sources BA02"
+  ],
+  "display_name": "陈泽-",
+  "douyin_id": "9896719.",
+  "douyin_id_note": "必须保留英文尾点。去掉尾点的号码不能归并成本人。",
+  "homepage_url": "https://www.douyin.com/user/MS4wLjABAAAA58AFQVygQ3MfiCpOXp-RTUqdyHY-oVSJQHsyWhg4S78",
+  "homepage_sec_uid": "MS4wLjABAAAA58AFQVygQ3MfiCpOXp-RTUqdyHY-oVSJQHsyWhg4S78",
+  "platform_badge": "not_seen",
+  "platform_badge_note": "主页核查未见认证标识。身份匹配不等于平台认证，也不等于可以商用。",
+  "not_self": [
+    {
+      "source_ids": ["BA02", "V26"],
+      "display_name_seen": "陈泽-",
+      "homepage_url": "https://www.douyin.com/user/MS4wLjABAAAAgciE28Y7EtIqZJz8u2cjCEjtAbZCQncOeHY7ht2xeID1-Gaq9gt0msGsg56fuvE0",
+      "homepage_sec_uid": "MS4wLjABAAAAgciE28Y7EtIqZJz8u2cjCEjtAbZCQncOeHY7ht2xeID1-Gaq9gt0msGsg56fuvE0",
+      "note": "展示名同为「陈泽-」的另一账号。不是已核抖音号 9896719.，也不是已核本人主页。"
+    }
+  ]
+}

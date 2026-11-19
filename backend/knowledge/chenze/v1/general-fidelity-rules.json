@@ -1,0 +1,850 @@
+{
+  "schema_version": "0.8-game-B-asr-keyframe-v1-human-pending",
+  "derived_from": "rules-draft.json",
+  "automatic_editing_enabled": false,
+  "rules": [
+    {
+      "rule_id": "CZ-I01",
+      "trigger": "导入任一“陈泽”内容",
+      "action": "将新素材的发布者及原场链与已核目标账号进行比对，并写出本人/转载/未确认标签。",
+      "avoid": "因名字头像@提及或官方自称自动认证",
+      "source_ids": [
+        "P01",
+        "P02",
+        "D01",
+        "BA02",
+        "V26"
+      ],
+      "confidence": "high_for_account_match_not_platform_badge",
+      "verification_status": "target_account_identity_closed_other_uploaders_still_check",
+      "exceptions": "转载允许成为观测样本，但必须保留转载标记",
+      "rule_kind": "universal_fidelity_and_provenance",
+      "enabled_for_automatic_editing": false,
+      "evidence_grades": [
+        {
+          "source_id": "P01",
+          "level": "E1_primary_profile_browser"
+        },
+        {
+          "source_id": "P02",
+          "level": "E1_primary_profile_browser"
+        },
+        {
+          "source_id": "D01",
+          "level": "N0_normative_not_empirical"
+        },
+        {
+          "source_id": "BA02",
+          "level": "E2_parent_relayed_identification_not_this_agent_browser"
+        },
+        {
+          "source_id": "V26",
+          "level": "E4_updated_by_BA02_M04_AV09"
+        }
+      ],
+      "legacy_rule_kind": "provenance_guardrail",
+      "action_opcode": "CHECK_CREATOR_CHAIN",
+      "evidence_bindings": [
+        {
+          "source_id": "P01",
+          "role": "identity_or_page_observation",
+          "supported_claim": "账号身份对应，不是认证或视频内容"
+        },
+        {
+          "source_id": "P02",
+          "role": "identity_or_page_observation",
+          "supported_claim": "当次主页观测及父代理沿作品列表获取原发URL"
+        },
+        {
+          "source_id": "D01",
+          "role": "normative_definition_not_empirical",
+          "supported_claim": "本地保真/验收门槛；不证实风格或固定数值"
+        },
+        {
+          "source_id": "BA02",
+          "role": "same_display_name_different_account",
+          "supported_claim": "展示名同为「陈泽-」仍可能是另一账号，必须对照已核主页与抖音号"
+        },
+        {
+          "source_id": "V26",
+          "role": "repost_candidate_page",
+          "supported_claim": "该视频页不能因标题或展示名直接记为本人原发"
+        }
+      ],
+      "required_inputs": [
+        "source_page_or_asset_id",
+        "declared_content_layer",
+        "review_scope"
+      ],
+      "failure_conditions": [
+        "无法定位到本条声明所对应的来源/原场时，返回UNVERIFIED，不执行风格化剪辑。",
+        "剪辑依赖的原音、说话人、关键否定或语义边界未核清时，返回NEEDS_HUMAN_REVIEW。",
+        "规范检查不通过时返回明确失败项，不将其包装成完成或风格发现。"
+      ],
+      "postcondition": "输出可追溯审片/标注结果及状态；不得仅凭此规则直接发布或宣称视听完成。",
+      "sentence_tail_policy": "任何由此产生的片段必须保留完整句尾和结论所需承接；有词尾/尾音/否定/反驳依赖就不得切断。",
+      "duration_failure_policy": "先回溯更早完整句尾或重选完整单元；仍无法同时满足语义与请求上限则NO_FIT，不硬截、不超时冒充满足。",
+      "asr_review_policy": "自动转写和转载文稿仅为候选；人工对照原音审核后才允许用作准确字幕或引语；听不清保留unclear并停止依赖该词的选段。",
+      "numeric_edit_parameters": {},
+      "empirical_edit_effect_verified": false
+    },
+    {
+      "rule_id": "CZ-P01",
+      "trigger": "页面含合集/推荐视频",
+      "action": "仅把当前视频对应正文和元信息写入该样本，合集与推荐条目分别建记录。",
+      "avoid": "将合集播放量、推荐片名、其他分段台词混入当前样本",
+      "source_ids": [
+        "V02",
+        "V04",
+        "V06",
+        "V09",
+        "V11",
+        "D01"
+      ],
+      "confidence": "high",
+      "verification_status": "metadata_observed",
+      "exceptions": "当前选集确认为同一原场才可拼接，仍标断点",
+      "rule_kind": "universal_fidelity_and_provenance",
+      "enabled_for_automatic_editing": false,
+      "evidence_grades": [
+        {
+          "source_id": "V02",
+          "level": "E3_metadata_only"
+        },
+        {
+          "source_id": "V04",
+          "level": "E3_metadata_only"
+        },
+        {
+          "source_id": "V06",
+          "level": "E3_metadata_only"
+        },
+        {
+          "source_id": "V09",
+          "level": "E3_metadata_only"
+        },
+        {
+          "source_id": "V11",
+          "level": "E3_metadata_only"
+        },
+        {
+          "source_id": "D01",
+          "level": "N0_normative_not_empirical"
+        }
+      ],
+      "legacy_rule_kind": "provenance_guardrail",
+      "action_opcode": "ISOLATE_CURRENT_PAGE",
+      "evidence_bindings": [
+        {
+          "source_id": "V02",
+          "role": "context_only_not_edit_effect",
+          "supported_claim": "标题/简介/选集，不是视频实际内容"
+        },
+        {
+          "source_id": "V04",
+          "role": "context_only_not_edit_effect",
+          "supported_claim": "标题/简介/选集，不是视频实际内容"
+        },
+        {
+          "source_id": "V06",
+          "role": "context_only_not_edit_effect",
+          "supported_claim": "标题/简介/选集，不是视频实际内容"
+        },
+        {
+          "source_id": "V09",
+          "role": "context_only_not_edit_effect",
+          "supported_claim": "标题/简介/选集，不是视频实际内容"
+        },
+        {
+          "source_id": "V11",
+          "role": "context_only_not_edit_effect",
+          "supported_claim": "标题/简介/选集，不是视频实际内容"
+        },
+        {
+          "source_id": "D01",
+          "role": "normative_definition_not_empirical",
+          "supported_claim": "本地保真/验收门槛；不证实风格或固定数值"
+        }
+      ],
+      "required_inputs": [
+        "source_page_or_asset_id",
+        "declared_content_layer",
+        "review_scope"
+      ],
+      "failure_conditions": [
+        "无法定位到本条声明所对应的来源/原场时，返回UNVERIFIED，不执行风格化剪辑。",
+        "剪辑依赖的原音、说话人、关键否定或语义边界未核清时，返回NEEDS_HUMAN_REVIEW。",
+        "规范检查不通过时返回明确失败项，不将其包装成完成或风格发现。"
+      ],
+      "postcondition": "输出可追溯审片/标注结果及状态；不得仅凭此规则直接发布或宣称视听完成。",
+      "sentence_tail_policy": "任何由此产生的片段必须保留完整句尾和结论所需承接；有词尾/尾音/否定/反驳依赖就不得切断。",
+      "duration_failure_policy": "先回溯更早完整句尾或重选完整单元；仍无法同时满足语义与请求上限则NO_FIT，不硬截、不超时冒充满足。",
+      "asr_review_policy": "自动转写和转载文稿仅为候选；人工对照原音审核后才允许用作准确字幕或引语；听不清保留unclear并停止依赖该词的选段。",
+      "numeric_edit_parameters": {},
+      "empirical_edit_effect_verified": false
+    },
+    {
+      "rule_id": "CZ-P02",
+      "trigger": "二创/AI/看二创/reaction内容",
+      "action": "为每条陈述标注真人事实、节目发言、虚构作品或观看反应层级。",
+      "avoid": "把陈美泽爱情剧情写成真人经历；把反应镜头倒接成现场证据",
+      "source_ids": [
+        "S09",
+        "V12",
+        "V21",
+        "V27",
+        "D01"
+      ],
+      "confidence": "high_for_separation",
+      "verification_status": "text_evidence_only",
+      "exceptions": "取得授权也不改变虚构与现实层级",
+      "rule_kind": "universal_fidelity_and_provenance",
+      "enabled_for_automatic_editing": false,
+      "evidence_grades": [
+        {
+          "source_id": "S09",
+          "level": "E2_named_creator_interview"
+        },
+        {
+          "source_id": "V12",
+          "level": "E3_metadata_only"
+        },
+        {
+          "source_id": "V21",
+          "level": "E4_discovery_or_failed"
+        },
+        {
+          "source_id": "V27",
+          "level": "E4_discovery_or_failed"
+        },
+        {
+          "source_id": "D01",
+          "level": "N0_normative_not_empirical"
+        }
+      ],
+      "legacy_rule_kind": "provenance_guardrail",
+      "action_opcode": "LABEL_CONTENT_LAYERS",
+      "evidence_bindings": [
+        {
+          "source_id": "S09",
+          "role": "context_only_not_edit_effect",
+          "supported_claim": "受访二创作者自己的方法与意图，不是本人剪辑要求"
+        },
+        {
+          "source_id": "V12",
+          "role": "context_only_not_edit_effect",
+          "supported_claim": "标题/简介/选集，不是视频实际内容"
+        },
+        {
+          "source_id": "V21",
+          "role": "context_only_not_edit_effect",
+          "supported_claim": "线索，不承载内容事实"
+        },
+        {
+          "source_id": "V27",
+          "role": "context_only_not_edit_effect",
+          "supported_claim": "线索，不承载内容事实"
+        },
+        {
+          "source_id": "D01",
+          "role": "normative_definition_not_empirical",
+          "supported_claim": "本地保真/验收门槛；不证实风格或固定数值"
+        }
+      ],
+      "required_inputs": [
+        "source_page_or_asset_id",
+        "declared_content_layer",
+        "review_scope"
+      ],
+      "failure_conditions": [
+        "无法定位到本条声明所对应的来源/原场时，返回UNVERIFIED，不执行风格化剪辑。",
+        "剪辑依赖的原音、说话人、关键否定或语义边界未核清时，返回NEEDS_HUMAN_REVIEW。",
+        "规范检查不通过时返回明确失败项，不将其包装成完成或风格发现。"
+      ],
+      "postcondition": "输出可追溯审片/标注结果及状态；不得仅凭此规则直接发布或宣称视听完成。",
+      "sentence_tail_policy": "任何由此产生的片段必须保留完整句尾和结论所需承接；有词尾/尾音/否定/反驳依赖就不得切断。",
+      "duration_failure_policy": "先回溯更早完整句尾或重选完整单元；仍无法同时满足语义与请求上限则NO_FIT，不硬截、不超时冒充满足。",
+      "asr_review_policy": "自动转写和转载文稿仅为候选；人工对照原音审核后才允许用作准确字幕或引语；听不清保留unclear并停止依赖该词的选段。",
+      "numeric_edit_parameters": {},
+      "empirical_edit_effect_verified": false
+    },
+    {
+      "rule_id": "CZ-P03",
+      "trigger": "内容需发布/商业复用/下载",
+      "action": "为候选素材生成逐项授权范围核对结果，未确认项保留pending。",
+      "avoid": "把无水印、官方录屏自称、开放二创报道当通用商业许可",
+      "source_ids": [
+        "S09",
+        "V08",
+        "V09",
+        "S16",
+        "D01"
+      ],
+      "confidence": "high_for_caution",
+      "verification_status": "official_terms_checked_asset_rights_pending",
+      "exceptions": "只做研究阅读不等于取得分发许可",
+      "rule_kind": "universal_fidelity_and_provenance",
+      "enabled_for_automatic_editing": false,
+      "evidence_grades": [
+        {
+          "source_id": "S09",
+          "level": "E2_named_creator_interview"
+        },
+        {
+          "source_id": "V08",
+          "level": "E3_metadata_only"
+        },
+        {
+          "source_id": "V09",
+          "level": "E3_metadata_only"
+        },
+        {
+          "source_id": "S16",
+          "level": "E1_official_terms"
+        },
+        {
+          "source_id": "D01",
+          "level": "N0_normative_not_empirical"
+        }
+      ],
+      "legacy_rule_kind": "rights_guardrail",
+      "action_opcode": "CHECK_RIGHTS_SCOPE",
+      "evidence_bindings": [
+        {
+          "source_id": "S09",
+          "role": "context_only_not_edit_effect",
+          "supported_claim": "受访二创作者自己的方法与意图，不是本人剪辑要求"
+        },
+        {
+          "source_id": "V08",
+          "role": "context_only_not_edit_effect",
+          "supported_claim": "标题/简介/选集，不是视频实际内容"
+        },
+        {
+          "source_id": "V09",
+          "role": "context_only_not_edit_effect",
+          "supported_claim": "标题/简介/选集，不是视频实际内容"
+        },
+        {
+          "source_id": "S16",
+          "role": "context_only_not_edit_effect",
+          "supported_claim": "协议功能/权利限制，不保证具体视频下载能力"
+        },
+        {
+          "source_id": "D01",
+          "role": "normative_definition_not_empirical",
+          "supported_claim": "本地保真/验收门槛；不证实风格或固定数值"
+        }
+      ],
+      "required_inputs": [
+        "source_page_or_asset_id",
+        "declared_content_layer",
+        "review_scope"
+      ],
+      "failure_conditions": [
+        "无法定位到本条声明所对应的来源/原场时，返回UNVERIFIED，不执行风格化剪辑。",
+        "剪辑依赖的原音、说话人、关键否定或语义边界未核清时，返回NEEDS_HUMAN_REVIEW。",
+        "规范检查不通过时返回明确失败项，不将其包装成完成或风格发现。"
+      ],
+      "postcondition": "输出可追溯审片/标注结果及状态；不得仅凭此规则直接发布或宣称视听完成。",
+      "sentence_tail_policy": "任何由此产生的片段必须保留完整句尾和结论所需承接；有词尾/尾音/否定/反驳依赖就不得切断。",
+      "duration_failure_policy": "先回溯更早完整句尾或重选完整单元；仍无法同时满足语义与请求上限则NO_FIT，不硬截、不超时冒充满足。",
+      "asr_review_policy": "自动转写和转载文稿仅为候选；人工对照原音审核后才允许用作准确字幕或引语；听不清保留unclear并停止依赖该词的选段。",
+      "numeric_edit_parameters": {},
+      "empirical_edit_effect_verified": false
+    },
+    {
+      "rule_id": "CZ-C09",
+      "trigger": "快语速/多人抢话字幕",
+      "action": "由人工对照原音审核候选内人名、方言、否定词和说话人，疑词标unclear。",
+      "avoid": "根据粉丝弹幕补音频、把二创字幕当原话",
+      "source_ids": [
+        "S09",
+        "V04",
+        "D01"
+      ],
+      "confidence": "medium_for_reported_language_low_for_measurements",
+      "verification_status": "requires_audio_transcription",
+      "exceptions": "人物词表仅建议候选，不能无条件替换",
+      "rule_kind": "universal_fidelity_and_provenance",
+      "enabled_for_automatic_editing": false,
+      "evidence_grades": [
+        {
+          "source_id": "S09",
+          "level": "E2_named_creator_interview"
+        },
+        {
+          "source_id": "V04",
+          "level": "E3_metadata_only"
+        },
+        {
+          "source_id": "D01",
+          "level": "N0_normative_not_empirical"
+        }
+      ],
+      "legacy_rule_kind": "style_hypothesis",
+      "action_opcode": "HUMAN_REVIEW_ASR",
+      "evidence_bindings": [
+        {
+          "source_id": "S09",
+          "role": "context_only_not_edit_effect",
+          "supported_claim": "受访二创作者自己的方法与意图，不是本人剪辑要求"
+        },
+        {
+          "source_id": "V04",
+          "role": "context_only_not_edit_effect",
+          "supported_claim": "标题/简介/选集，不是视频实际内容"
+        },
+        {
+          "source_id": "D01",
+          "role": "normative_definition_not_empirical",
+          "supported_claim": "本地保真/验收门槛；不证实风格或固定数值"
+        }
+      ],
+      "required_inputs": [
+        "source_page_or_asset_id",
+        "declared_content_layer",
+        "review_scope",
+        "audible_playable_source",
+        "human_checked_speaker_transcript",
+        "original_timeline"
+      ],
+      "failure_conditions": [
+        "无法定位到本条声明所对应的来源/原场时，返回UNVERIFIED，不执行风格化剪辑。",
+        "剪辑依赖的原音、说话人、关键否定或语义边界未核清时，返回NEEDS_HUMAN_REVIEW。",
+        "规范检查不通过时返回明确失败项，不将其包装成完成或风格发现。"
+      ],
+      "postcondition": "输出可追溯审片/标注结果及状态；不得仅凭此规则直接发布或宣称视听完成。",
+      "sentence_tail_policy": "任何由此产生的片段必须保留完整句尾和结论所需承接；有词尾/尾音/否定/反驳依赖就不得切断。",
+      "duration_failure_policy": "先回溯更早完整句尾或重选完整单元；仍无法同时满足语义与请求上限则NO_FIT，不硬截、不超时冒充满足。",
+      "asr_review_policy": "自动转写和转载文稿仅为候选；人工对照原音审核后才允许用作准确字幕或引语；听不清保留unclear并停止依赖该词的选段。",
+      "numeric_edit_parameters": {},
+      "empirical_edit_effect_verified": false
+    },
+    {
+      "rule_id": "CZ-C10",
+      "trigger": "静音/停顿被选为删点",
+      "action": "对每个拟删除停顿标注是否承担犹豫、反讽、惊吓回落或回应功能。",
+      "avoid": "用固定阈值清掉全部停顿和笑声",
+      "source_ids": [
+        "S09",
+        "V02",
+        "V03",
+        "D01"
+      ],
+      "confidence": "low",
+      "verification_status": "editorial_experiment_not_observed_style",
+      "exceptions": "一般等待可删，但需听觉检查；没有主播固定毫秒阈值",
+      "rule_kind": "universal_fidelity_and_provenance",
+      "enabled_for_automatic_editing": false,
+      "evidence_grades": [
+        {
+          "source_id": "S09",
+          "level": "E2_named_creator_interview"
+        },
+        {
+          "source_id": "V02",
+          "level": "E3_metadata_only"
+        },
+        {
+          "source_id": "V03",
+          "level": "E3_metadata_only"
+        },
+        {
+          "source_id": "D01",
+          "level": "N0_normative_not_empirical"
+        }
+      ],
+      "legacy_rule_kind": "style_hypothesis",
+      "action_opcode": "CLASSIFY_PAUSE_FUNCTION",
+      "evidence_bindings": [
+        {
+          "source_id": "S09",
+          "role": "context_only_not_edit_effect",
+          "supported_claim": "受访二创作者自己的方法与意图，不是本人剪辑要求"
+        },
+        {
+          "source_id": "V02",
+          "role": "context_only_not_edit_effect",
+          "supported_claim": "标题/简介/选集，不是视频实际内容"
+        },
+        {
+          "source_id": "V03",
+          "role": "context_only_not_edit_effect",
+          "supported_claim": "标题/简介/选集，不是视频实际内容"
+        },
+        {
+          "source_id": "D01",
+          "role": "normative_definition_not_empirical",
+          "supported_claim": "本地保真/验收门槛；不证实风格或固定数值"
+        }
+      ],
+      "required_inputs": [
+        "source_page_or_asset_id",
+        "declared_content_layer",
+        "review_scope",
+        "audible_playable_source",
+        "human_checked_speaker_transcript",
+        "original_timeline"
+      ],
+      "failure_conditions": [
+        "无法定位到本条声明所对应的来源/原场时，返回UNVERIFIED，不执行风格化剪辑。",
+        "剪辑依赖的原音、说话人、关键否定或语义边界未核清时，返回NEEDS_HUMAN_REVIEW。",
+        "规范检查不通过时返回明确失败项，不将其包装成完成或风格发现。"
+      ],
+      "postcondition": "输出可追溯审片/标注结果及状态；不得仅凭此规则直接发布或宣称视听完成。",
+      "sentence_tail_policy": "任何由此产生的片段必须保留完整句尾和结论所需承接；有词尾/尾音/否定/反驳依赖就不得切断。",
+      "duration_failure_policy": "先回溯更早完整句尾或重选完整单元；仍无法同时满足语义与请求上限则NO_FIT，不硬截、不超时冒充满足。",
+      "asr_review_policy": "自动转写和转载文稿仅为候选；人工对照原音审核后才允许用作准确字幕或引语；听不清保留unclear并停止依赖该词的选段。",
+      "numeric_edit_parameters": {},
+      "empirical_edit_effect_verified": false
+    },
+    {
+      "rule_id": "CZ-C11",
+      "trigger": "字幕/音效/9:16重构",
+      "action": "对无新增效果基线检查人脸、题面或游戏状态及必要反应的可读性。",
+      "avoid": "预设大头全屏或BGM为陈泽标配；音效盖话或改情绪",
+      "source_ids": [
+        "V02",
+        "V03",
+        "V13",
+        "D01"
+      ],
+      "confidence": "low",
+      "verification_status": "experimental_general_editorial_principle",
+      "exceptions": "原片音效与新增音效分别标记；无画面证据不定布局",
+      "rule_kind": "universal_fidelity_and_provenance",
+      "enabled_for_automatic_editing": false,
+      "evidence_grades": [
+        {
+          "source_id": "V02",
+          "level": "E3_metadata_only"
+        },
+        {
+          "source_id": "V03",
+          "level": "E3_metadata_only"
+        },
+        {
+          "source_id": "V13",
+          "level": "E3_metadata_only"
+        },
+        {
+          "source_id": "D01",
+          "level": "N0_normative_not_empirical"
+        }
+      ],
+      "legacy_rule_kind": "style_hypothesis",
+      "action_opcode": "REVIEW_BASELINE_LAYOUT",
+      "evidence_bindings": [
+        {
+          "source_id": "V02",
+          "role": "context_only_not_edit_effect",
+          "supported_claim": "标题/简介/选集，不是视频实际内容"
+        },
+        {
+          "source_id": "V03",
+          "role": "context_only_not_edit_effect",
+          "supported_claim": "标题/简介/选集，不是视频实际内容"
+        },
+        {
+          "source_id": "V13",
+          "role": "context_only_not_edit_effect",
+          "supported_claim": "标题/简介/选集，不是视频实际内容"
+        },
+        {
+          "source_id": "D01",
+          "role": "normative_definition_not_empirical",
+          "supported_claim": "本地保真/验收门槛；不证实风格或固定数值"
+        }
+      ],
+      "required_inputs": [
+        "source_page_or_asset_id",
+        "declared_content_layer",
+        "review_scope",
+        "audible_playable_source",
+        "human_checked_speaker_transcript",
+        "original_timeline"
+      ],
+      "failure_conditions": [
+        "无法定位到本条声明所对应的来源/原场时，返回UNVERIFIED，不执行风格化剪辑。",
+        "剪辑依赖的原音、说话人、关键否定或语义边界未核清时，返回NEEDS_HUMAN_REVIEW。",
+        "规范检查不通过时返回明确失败项，不将其包装成完成或风格发现。"
+      ],
+      "postcondition": "输出可追溯审片/标注结果及状态；不得仅凭此规则直接发布或宣称视听完成。",
+      "sentence_tail_policy": "任何由此产生的片段必须保留完整句尾和结论所需承接；有词尾/尾音/否定/反驳依赖就不得切断。",
+      "duration_failure_policy": "先回溯更早完整句尾或重选完整单元；仍无法同时满足语义与请求上限则NO_FIT，不硬截、不超时冒充满足。",
+      "asr_review_policy": "自动转写和转载文稿仅为候选；人工对照原音审核后才允许用作准确字幕或引语；听不清保留unclear并停止依赖该词的选段。",
+      "numeric_edit_parameters": {},
+      "empirical_edit_effect_verified": false
+    },
+    {
+      "rule_id": "CZ-C12",
+      "trigger": "用户有硬时长上限",
+      "action": "在请求上限内选择同时满足句尾及完整语义的单元；找不到则返回NO_FIT。",
+      "avoid": "句尾吸附后再硬裁半句；把超时输出标为满足要求",
+      "source_ids": [
+        "D01"
+      ],
+      "confidence": "high_as_design_constraint_not_empirical_style",
+      "verification_status": "general_guardrail_not_learned_from_sources",
+      "exceptions": "不得为满足时长删关键否定/反驳；宁可不产该条",
+      "rule_kind": "universal_fidelity_and_provenance",
+      "enabled_for_automatic_editing": false,
+      "evidence_grades": [
+        {
+          "source_id": "D01",
+          "level": "N0_normative_not_empirical"
+        }
+      ],
+      "legacy_rule_kind": "editorial_guardrail",
+      "action_opcode": "SELECT_COMPLETE_UNIT_WITHIN_CAP",
+      "evidence_bindings": [
+        {
+          "source_id": "D01",
+          "role": "normative_definition_not_empirical",
+          "supported_claim": "本地保真/验收门槛；不证实风格或固定数值"
+        }
+      ],
+      "required_inputs": [
+        "source_page_or_asset_id",
+        "declared_content_layer",
+        "review_scope",
+        "audible_playable_source",
+        "human_checked_speaker_transcript",
+        "original_timeline",
+        "requested_max_duration",
+        "confirmed_sentence_and_event_boundaries"
+      ],
+      "failure_conditions": [
+        "无法定位到本条声明所对应的来源/原场时，返回UNVERIFIED，不执行风格化剪辑。",
+        "剪辑依赖的原音、说话人、关键否定或语义边界未核清时，返回NEEDS_HUMAN_REVIEW。",
+        "规范检查不通过时返回明确失败项，不将其包装成完成或风格发现。"
+      ],
+      "postcondition": "输出可追溯审片/标注结果及状态；不得仅凭此规则直接发布或宣称视听完成。",
+      "sentence_tail_policy": "任何由此产生的片段必须保留完整句尾和结论所需承接；有词尾/尾音/否定/反驳依赖就不得切断。",
+      "duration_failure_policy": "先回溯更早完整句尾或重选完整单元；仍无法同时满足语义与请求上限则NO_FIT，不硬截、不超时冒充满足。",
+      "asr_review_policy": "自动转写和转载文稿仅为候选；人工对照原音审核后才允许用作准确字幕或引语；听不清保留unclear并停止依赖该词的选段。",
+      "numeric_edit_parameters": {},
+      "empirical_edit_effect_verified": false
+    },
+    {
+      "rule_id": "CZ-Q01",
+      "trigger": "候选风格规则准备启用",
+      "action": "依本地验收规范核查规则支持样本、失败反例和独立场次盲测是否齐备。",
+      "avoid": "因为热度或多条同源转载就宣称有效",
+      "source_ids": [
+        "D01"
+      ],
+      "confidence": "normative_threshold_not_derived_from_media",
+      "verification_status": "validation_gate_not_yet_met",
+      "exceptions": "跨场次支持、反例和盲测数量是研究设计门槛，不由媒体播放量或主播事实推导。",
+      "rule_kind": "universal_fidelity_and_provenance",
+      "enabled_for_automatic_editing": false,
+      "evidence_grades": [
+        {
+          "source_id": "D01",
+          "level": "N0_normative_not_empirical"
+        }
+      ],
+      "legacy_rule_kind": "validation_guardrail",
+      "action_opcode": "EVALUATE_RULE_RELEASE_GATE",
+      "evidence_bindings": [
+        {
+          "source_id": "D01",
+          "role": "normative_definition_not_empirical",
+          "supported_claim": "本地保真/验收门槛；不证实风格或固定数值"
+        }
+      ],
+      "required_inputs": [
+        "source_page_or_asset_id",
+        "declared_content_layer",
+        "review_scope"
+      ],
+      "failure_conditions": [
+        "无法定位到本条声明所对应的来源/原场时，返回UNVERIFIED，不执行风格化剪辑。",
+        "剪辑依赖的原音、说话人、关键否定或语义边界未核清时，返回NEEDS_HUMAN_REVIEW。",
+        "规范检查不通过时返回明确失败项，不将其包装成完成或风格发现。"
+      ],
+      "postcondition": "输出可追溯审片/标注结果及状态；不得仅凭此规则直接发布或宣称视听完成。",
+      "sentence_tail_policy": "任何由此产生的片段必须保留完整句尾和结论所需承接；有词尾/尾音/否定/反驳依赖就不得切断。",
+      "duration_failure_policy": "先回溯更早完整句尾或重选完整单元；仍无法同时满足语义与请求上限则NO_FIT，不硬截、不超时冒充满足。",
+      "asr_review_policy": "自动转写和转载文稿仅为候选；人工对照原音审核后才允许用作准确字幕或引语；听不清保留unclear并停止依赖该词的选段。",
+      "numeric_edit_parameters": {},
+      "empirical_edit_effect_verified": false
+    },
+    {
+      "rule_id": "CZ-T04",
+      "trigger": "读到声称本人原话或思维模型的外部skill/AI总结",
+      "action": "将候选引语回溯到原访谈正文或原音，无法定位时标unverified并禁止作本人语录。",
+      "avoid": "把生成示范回答、搜索综合摘要、未获回复的采访请求伪装成本人采访",
+      "source_ids": [
+        "S14",
+        "D01"
+      ],
+      "confidence": "high_for_source_verification_standard",
+      "verification_status": "counterexample_confirmed_by_article_text",
+      "exceptions": "红星未获回复只适用此篇此日期，不能推出本人从未接受过采访",
+      "rule_kind": "universal_fidelity_and_provenance",
+      "enabled_for_automatic_editing": false,
+      "evidence_grades": [
+        {
+          "source_id": "S14",
+          "level": "E2_secondary_public_text"
+        },
+        {
+          "source_id": "D01",
+          "level": "N0_normative_not_empirical"
+        }
+      ],
+      "legacy_rule_kind": "text_grounded_hypothesis_not_audiovisual",
+      "action_opcode": "TRACE_QUOTE_ORIGIN",
+      "evidence_bindings": [
+        {
+          "source_id": "S14",
+          "role": "context_only_not_edit_effect",
+          "supported_claim": "按原文作者归因，不把报道当原场实证"
+        },
+        {
+          "source_id": "D01",
+          "role": "normative_definition_not_empirical",
+          "supported_claim": "本地保真/验收门槛；不证实风格或固定数值"
+        }
+      ],
+      "required_inputs": [
+        "source_page_or_asset_id",
+        "declared_content_layer",
+        "review_scope"
+      ],
+      "failure_conditions": [
+        "无法定位到本条声明所对应的来源/原场时，返回UNVERIFIED，不执行风格化剪辑。",
+        "剪辑依赖的原音、说话人、关键否定或语义边界未核清时，返回NEEDS_HUMAN_REVIEW。",
+        "规范检查不通过时返回明确失败项，不将其包装成完成或风格发现。"
+      ],
+      "postcondition": "输出可追溯审片/标注结果及状态；不得仅凭此规则直接发布或宣称视听完成。",
+      "sentence_tail_policy": "任何由此产生的片段必须保留完整句尾和结论所需承接；有词尾/尾音/否定/反驳依赖就不得切断。",
+      "duration_failure_policy": "先回溯更早完整句尾或重选完整单元；仍无法同时满足语义与请求上限则NO_FIT，不硬截、不超时冒充满足。",
+      "asr_review_policy": "自动转写和转载文稿仅为候选；人工对照原音审核后才允许用作准确字幕或引语；听不清保留unclear并停止依赖该词的选段。",
+      "numeric_edit_parameters": {},
+      "empirical_edit_effect_verified": false
+    },
+    {
+      "rule_id": "QC-TIME01",
+      "trigger": "任何候选声称FIT或带时长上限",
+      "action": "执行fit_qc.evaluate(start,end,limit)，验证有限区间与duration=end-start<=limit，并检查原片人工边界、上下文、句尾及ASR门槛。",
+      "avoid": "按标题/口头估计给FIT；将70秒标FIT60或41秒标FIT30；以超时就硬裁代替重选。",
+      "source_ids": [
+        "D01",
+        "AV05"
+      ],
+      "confidence": "high_for_arithmetic_not_empirical_style",
+      "verification_status": "executable_qc_unit_tests_not_style_validation",
+      "exceptions": "算术在上限内但时间码粗、语境/句尾/ASR未人工核，仍NEEDS_HUMAN_REVIEW；FIT也不等于版权或发布批准。",
+      "rule_kind": "universal_fidelity_and_provenance",
+      "enabled_for_automatic_editing": false,
+      "evidence_grades": [
+        {
+          "source_id": "D01",
+          "level": "N0_normative_not_empirical"
+        },
+        {
+          "source_id": "AV05",
+          "level": "E1b_audiovisual_model_coarse_not_human_verified"
+        }
+      ],
+      "legacy_rule_kind": "validation_guardrail",
+      "action_opcode": "VALIDATE_INTERVAL_FIT",
+      "evidence_bindings": [
+        {
+          "source_id": "D01",
+          "role": "normative_definition_not_empirical",
+          "supported_claim": "精确区间算术与语义/人工复核是本地质检规范"
+        },
+        {
+          "source_id": "AV05",
+          "role": "observed_model_error_counterexample",
+          "supported_claim": "两条FIT算术错误提供失败反例，不支持固定剪辑数值"
+        }
+      ],
+      "required_inputs": [
+        "start_seconds",
+        "end_seconds",
+        "limit_seconds",
+        "boundary_precision",
+        "context_verified",
+        "sentence_tail_verified",
+        "asr_human_verified"
+      ],
+      "failure_conditions": [
+        "非有限、负开始、end<=start或limit<=0返回INVALID_INTERVAL。",
+        "duration>limit返回REJECT_OVER_LIMIT；不自动截断，重选仍不合则NO_FIT。",
+        "缺人工原片边界/必要语境/句尾/ASR核对返回NEEDS_HUMAN_REVIEW。"
+      ],
+      "postcondition": "只有算术和人工语义门槛均通过才标候选FIT；publication_approved恒为false。",
+      "sentence_tail_policy": "任何由此产生的片段必须保留完整句尾和结论所需承接；有词尾/尾音/否定/反驳依赖就不得切断。",
+      "duration_failure_policy": "先回溯更早完整句尾或重选完整单元；仍无法同时满足语义与请求上限则NO_FIT，不硬截、不超时冒充满足。",
+      "asr_review_policy": "自动转写和转载文稿仅为候选；人工对照原音审核后才允许用作准确字幕或引语；听不清保留unclear并停止依赖该词的选段。",
+      "numeric_edit_parameters": {},
+      "empirical_edit_effect_verified": false,
+      "implementation": "fit_qc.py:evaluate"
+    },
+    {
+      "rule_id": "CZ-T06",
+      "trigger": "准备把自动转写中的谐音、人名、品牌或答案写入字幕或知识",
+      "action": "对照可读题面与原音；无法互证则标unverified或unclear，禁止当作已证实答案、歌名/品牌事实或本人原话。",
+      "avoid": "用转写补字；把谐音错误写成梗源；把ASR人名写成出镜者或合作关系。",
+      "source_ids": [
+        "AV09",
+        "D01"
+      ],
+      "confidence": "low_for_style_asr_keyframe_only",
+      "verification_status": "executable_text_policy_not_style_validation",
+      "exceptions": "ASR间隙不等于无声。图文冲突时以看不清为准，不强制消歧。",
+      "rule_kind": "universal_fidelity_and_provenance",
+      "enabled_for_automatic_editing": false,
+      "evidence_grades": [
+        {
+          "source_id": "AV09",
+          "level": "E1c_local_asr_keyframe_coarse_lower_confidence_than_video_model"
+        },
+        {
+          "source_id": "D01",
+          "level": "N0_normative_not_empirical"
+        }
+      ],
+      "legacy_rule_kind": "style_hypothesis",
+      "action_opcode": "REJECT_UNVERIFIED_ASR_ANSWER",
+      "evidence_bindings": [
+        {
+          "source_id": "AV09",
+          "role": "asr_error_and_mismatch_counterexample",
+          "supported_claim": "转写与题面多次错位，人名品牌未证实，提供失败反例而非答案表"
+        },
+        {
+          "source_id": "D01",
+          "role": "normative_definition_not_empirical",
+          "supported_claim": "未互证的自动转写不得升级为引语或事实"
+        }
+      ],
+      "required_inputs": [
+        "source_page_or_asset_id",
+        "declared_content_layer",
+        "readable_card_or_image",
+        "speech_candidate",
+        "peer_reaction_span",
+        "original_timeline"
+      ],
+      "failure_conditions": [
+        "题面、口述谐音或同伴反应任一不可核，返回context_required或NO_FIT。",
+        "仅有ASR、无可读题面互证时，禁止把猜测写入已证实答案。",
+        "规则被要求当已验风格自动应用时，返回NOT_VALIDATED。"
+      ],
+      "postcondition": "只输出待核依赖卡与NO_FIT/context_required；不得批准自动FIT或宣称视听完成。",
+      "sentence_tail_policy": "任何由此产生的片段必须保留完整句尾和结论所需承接；有词尾/尾音/否定/反驳依赖就不得切断。",
+      "duration_failure_policy": "先回溯更早完整句尾或重选完整单元；仍无法同时满足语义与请求上限则NO_FIT，不硬截、不超时冒充满足。",
+      "asr_review_policy": "自动转写仅为候选；谐音、人名、品牌未经可读题面与原音互证不得当答案或原话；听不清或图文冲突标unclear，不用转写补字。",
+      "numeric_edit_parameters": {},
+      "empirical_edit_effect_verified": false,
+      "style_status": "candidate_only_no_validated_person_specific_style"
+    }
+  ]
+}

@@ -137,7 +137,9 @@ class ExportServiceTests(unittest.TestCase):
             track.parent.mkdir(parents=True, exist_ok=True)
             track.write_text(json.dumps({"tracks": {"visual": [{"timestamp": 1, "subject_box": {}}]}}), encoding="utf-8")
             exporter.create_export(7)
-            self._wait(lambda: len(calls) >= 2)
+            # run_bundle 返回后线程还要写清单和状态。只等到调用被记下就拆临时目录，
+            # 会和这次写入撞上（Directory not empty）。
+            self._wait(lambda: len(calls) >= 2 and not exporter._running)
         self.assertEqual(calls[1]["subject_track"], track)
 
     def test_cancel_stops_a_running_export(self):

@@ -77,6 +77,11 @@ export interface Task {
     instruction?: string
     max_clips?: number
     layout?: string
+  chenze_style?: boolean
+  chenze?: ChenzeOptions
+  text_enhance?: TextEnhanceOptions
+    source_captions?: SourceCaptions
+    confirmed_cues?: Array<{ start: number; end: number; text: string }>
     format?: string
     fps?: number
     width?: number
@@ -98,6 +103,10 @@ export interface Task {
     budget?: number
     video_id?: number
     layout?: string
+    chenze?: ChenzeAutomation
+    text_enhance?: TextEnhanceStatus
+    caption_policy?: CaptionPolicy
+    asr?: AsrStatus
     shorts?: DouyinShort[]
     filename?: string
     format?: string
@@ -515,6 +524,106 @@ export interface DouyinShort {
   cover_url?: string
   kit_url?: string
   video_id?: number | null
+  review_status?: string
+  publication_approved?: boolean
+  fit_label?: string | null
+  quote_cues?: CaptionCue[]
+  asr_cues?: CaptionCue[]
+  text_effects?: string[]
+  title_text?: string
+  srt_url?: string
+}
+
+export type SourceCaptions = 'unknown' | 'burned_in' | 'none' | 'transcribe'
+
+export interface CaptionCue {
+  start: number
+  end: number
+  text: string
+  role?: string
+  origin?: 'asr' | 'user'
+  confirmed?: boolean
+  review_state?: 'unverified' | 'reviewed'
+  low_confidence?: boolean
+  review_reason?: string
+}
+
+export interface CaptionPolicy {
+  source_captions: SourceCaptions | 'legacy'
+  burns_transcript: boolean
+  note: string
+}
+
+export interface AsrStatus {
+  model: string
+  preset: string
+  language: string
+  ok: boolean
+  cache_hit?: boolean
+  note: string
+}
+
+export interface TextEnhanceOptions {
+  enabled?: boolean
+  captions?: boolean
+  title_text?: string
+  style?: 'outline' | 'plain' | 'yellow'
+  fade?: boolean
+  emphasis?: 'none' | 'fade' | 'pop'
+}
+
+export interface TextEnhanceStatus extends TextEnhanceOptions {
+  applied_effects?: string[]
+  review_status?: string
+  validated_chenze_style?: boolean
+  audio?: string
+  added_audio?: boolean
+  font?: string
+  typography_note?: string
+}
+
+export interface ChenzeOptions {
+  display_name?: string
+  douyin_id?: string
+  homepage_url?: string
+  column?: '' | '综艺' | '评审' | '游戏' | '通用保真'
+  max_seconds?: number
+  low_res?: boolean
+}
+
+export interface ChenzeReviewCandidate {
+  status: string
+  start: number
+  end: number
+  text?: string
+  reason?: string
+  column?: string
+  fit_label?: string | null
+  duration_seconds?: string
+  limit_seconds?: string
+  preview?: boolean
+  publication_approved?: boolean
+  automatic_trim?: boolean
+  rights_notes?: string[]
+}
+
+export interface ChenzeAutomation {
+  requested?: boolean
+  applied?: boolean
+  automation?: string | null
+  pack_id?: string
+  pack_version?: string
+  column?: string
+  column_source?: string
+  limit_seconds?: string
+  identity?: { is_self?: boolean; reason?: string; display_name?: string; douyin_id?: string }
+  applied_rule_ids?: string[]
+  skipped_disabled_rule_ids?: string[]
+  blocked_cross_column_rule_ids?: string[]
+  review_candidates?: ChenzeReviewCandidate[]
+  publication_approved?: boolean
+  validated_person_style?: boolean
+  authorization_cleared?: boolean
 }
 
 export function editTaskPath(task: { id: string; kind?: string }): string {
@@ -567,6 +676,10 @@ export async function startDouyinProduce(
   instruction = '',
   maxClips = 0,
   layout: DouyinLayout = 'interview',
+  chenzeStyle = false,
+  chenze?: ChenzeOptions,
+  textEnhance?: TextEnhanceOptions,
+  sourceCaptions: SourceCaptions = 'unknown',
 ): Promise<EditJob> {
   try {
     const { data } = await http.post<EditJob>('/edit/douyin', {
@@ -574,6 +687,29 @@ export async function startDouyinProduce(
       instruction,
       max_clips: maxClips,
       layout,
+      chenze_style: chenzeStyle,
+      source_captions: sourceCaptions,
+      ...(chenzeStyle && chenze ? { chenze } : {}),
+      ...(textEnhance ? { text_enhance: textEnhance } : {}),
+    }, { timeout: 0 })
+    return data
+  } catch (error) {
+    raiseApi(error)
+  }
+}
+
+export async function reburnDouyinShort(
+  jobId: string,
+  index: number,
+  cues: Array<{ start: number; end: number; text: string }>,
+  titleText?: string,
+  sourceCaptions?: SourceCaptions,
+): Promise<{ short: DouyinShort; text_enhance?: TextEnhanceStatus; caption_policy?: CaptionPolicy; source_captions?: string }> {
+  try {
+    const { data } = await http.post(`/edit/douyin/${encodeURIComponent(jobId)}/shorts/${index}/reburn`, {
+      cues,
+      title_text: titleText,
+      ...(sourceCaptions ? { source_captions: sourceCaptions } : {}),
     }, { timeout: 0 })
     return data
   } catch (error) {

@@ -8,7 +8,15 @@ from pydantic import BaseModel, Field
 
 from engine.schemas import Suggestion
 from app.jobs import create, get, submit
-from app.services.douyin_flow import download_name, pack_file, produce_douyin, send_to_library, short_file
+from app.services.douyin_flow import (
+    download_name,
+    pack_file,
+    produce_douyin,
+    reburn_short,
+    send_to_library,
+    short_file,
+)
+from app.services.text_enhance import disabled_settings
 from app.services.edit_flow import analyze_videos, build_highlight, export_clips, plan_suggestions
 from app.services.videos import fetch
 
@@ -71,11 +79,58 @@ class HighlightBody(BaseModel):
     use_llm: bool = True
 
 
+class ChenzeStyleBody(BaseModel):
+    display_name: str = ""
+    douyin_id: str = ""
+    homepage_url: str = ""
+    column: Literal["", "综艺", "评审", "游戏", "通用保真"] = ""
+    max_seconds: float | None = Field(default=None, ge=1, le=600)
+    low_res: bool = False
+
+
+class TextEnhanceBody(BaseModel):
+    enabled: bool = False
+    captions: bool = True
+    title_text: str = ""
+    style: Literal["outline", "plain", "yellow"] = "outline"
+    fade: bool = False
+    emphasis: Literal["none", "fade", "pop"] = "none"
+
+
 class DouyinProduceBody(BaseModel):
     video_id: int
     instruction: str = ""
     max_clips: int = Field(default=0, ge=0, le=10)
     layout: Literal["interview", "podcast"] = "interview"
+    chenze_style: bool = False
+    chenze: ChenzeStyleBody | None = None
+    text_enhance: TextEnhanceBody | None = None
+    source_captions: Literal["unknown", "burned_in", "none", "transcribe"] | None = None
+
+
+class CaptionCueBody(BaseModel):
+    start: float
+    end: float
+    text: str = ""
+
+
+class ReburnBody(BaseModel):
+    cues: list[CaptionCueBody] = Field(default_factory=list, max_length=80)
+    title_text: str | None = None
+    source_captions: Literal["unknown", "burned_in", "none", "transcribe"] | None = None
+
+
+def _chenze_payload(body: DouyinProduceBody) -> dict:
+    if body.chenze is None:
+        return {
+            "display_name": "",
+            "douyin_id": "",
+            "homepage_url": "",
+            "column": "",
+            "max_seconds": None,
+            "low_res": False,
+        }
+    return body.chenze.model_dump()
 
 
 class DouyinLibraryBody(BaseModel):
@@ -87,20 +142,36 @@ def douyin_produce(body: DouyinProduceBody):
     """从素材库一条原片生成多条竖屏短视频。不发布，只给预览、下载和入库。"""
     fetch(body.video_id)
     instruction = body.instruction.strip()[:400]
+    chenze = _chenze_payload(body)
+    text_enhance = body.text_enhance.model_dump() if body.text_enhance else disabled_settings()
+    stored = {
+        "video_id": body.video_id,
+        "instruction": instruction,
+        "max_clips": body.max_clips,
+        "layout": body.layout,
+        "chenze_style": body.chenze_style,
+        "chenze": chenze,
+        "text_enhance": text_enhance,
+    }
+    if body.source_captions:
+        stored["source_captions"] = body.source_captions
     job = create(
         "edit.douyin",
         "抖音成片",
-        {
-            "video_id": body.video_id,
-            "instruction": instruction,
-            "max_clips": body.max_clips,
-            "layout": body.layout,
-        },
+        stored,
     )
     return submit(
         job,
         lambda job_id: produce_douyin(
-            job_id, body.video_id, instruction, body.max_clips, layout=body.layout,
+            job_id,
+            body.video_id,
+            instruction,
+            body.max_clips,
+            layout=body.layout,
+            chenze_style=body.chenze_style,
+            chenze_options=chenze,
+            text_enhance=text_enhance,
+            source_captions=body.source_captions,
         ),
     )
 
@@ -129,6 +200,24 @@ def douyin_short_pack(job_id: str, index: int):
         path,
         media_type="application/zip",
         filename=download_name(job_id, index, kit=True),
+    )
+
+
+@router.get("/douyin/{job_id}/shorts/{index}/srt")
+def douyin_short_srt(job_id: str, index: int):
+    path = short_file(job_id, index, srt=True)
+    return FileResponse(path, media_type="application/x-subrip", filename=f"{int(index):02d}-captions.srt")
+
+
+@router.post("/douyin/{job_id}/shorts/{index}/reburn")
+def douyin_reburn(job_id: str, index: int, body: ReburnBody):
+    """按校对后的口播字幕重烧这一条。旁注仍是编辑说明，不是原话。"""
+    return reburn_short(
+        job_id,
+        index,
+        [item.model_dump() for item in body.cues],
+        title_text=body.title_text,
+        source_captions=body.source_captions,
     )
 
 
@@ -172,20 +261,46 @@ def douyin_retry(job_id: str):
     except (TypeError, ValueError):
         max_clips = 0
     layout = payload.get("layout") if payload.get("layout") in {"interview", "podcast"} else "interview"
+    chenze_style = bool(payload.get("chenze_style"))
+    chenze = payload.get("chenze") if isinstance(payload.get("chenze"), dict) else {}
+    text_enhance = payload.get("text_enhance") if isinstance(payload.get("text_enhance"), dict) else disabled_settings()
+    source_captions = payload.get("source_captions") if payload.get("source_captions") in {
+        "unknown", "burned_in", "none", "transcribe",
+    } else None
+    confirmed_cues = payload.get("confirmed_cues") if isinstance(payload.get("confirmed_cues"), list) else None
+    stored = {
+        "video_id": video_id,
+        "instruction": instruction,
+        "max_clips": max_clips,
+        "layout": layout,
+        "chenze_style": chenze_style,
+        "chenze": chenze,
+        "text_enhance": text_enhance,
+        "retry_of": previous["id"],
+    }
+    if source_captions:
+        stored["source_captions"] = source_captions
+    if confirmed_cues:
+        stored["confirmed_cues"] = confirmed_cues
     job = create(
         "edit.douyin",
         "抖音成片",
-        {
-            "video_id": video_id,
-            "instruction": instruction,
-            "max_clips": max_clips,
-            "layout": layout,
-            "retry_of": previous["id"],
-        },
+        stored,
     )
     return submit(
         job,
-        lambda new_id: produce_douyin(new_id, video_id, instruction, max_clips, layout=layout),
+        lambda new_id: produce_douyin(
+            new_id,
+            video_id,
+            instruction,
+            max_clips,
+            layout=layout,
+            chenze_style=chenze_style,
+            chenze_options=chenze,
+            text_enhance=text_enhance,
+            source_captions=source_captions,
+            confirmed_cues=confirmed_cues,
+        ),
     )
 
 

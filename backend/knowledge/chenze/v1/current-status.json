@@ -1,0 +1,86 @@
+{
+  "version": "0.8-game-B-asr-keyframe-v1-human-pending",
+  "updated_at": "2026-11-18T19:06:02.686242+08:00",
+  "source_records": 74,
+  "rules": 28,
+  "automatic_style_enabled": false,
+  "validated_person_specific_style_rules": 0,
+  "media": {
+    "M01": "trailer_downloaded_integrity_verified",
+    "M02": "full_episode_downloaded_integrity_verified_proxy_split_complete",
+    "M03": "videohub_id7_public_repost_file_proxy_continuous_original_local_path_unknown",
+    "M04": "videohub_id8_public_repost_file_proxy_continuous_original_local_path_unknown"
+  },
+  "av": {
+    "AV01": "trailer_model_coarse",
+    "AV02": "episode_0_450_model_coarse",
+    "AV03": "episode_1350_2668_model_coarse",
+    "AV04": "episode_450_900_model_coarse",
+    "AV05": "episode_900_1350_model_coarse",
+    "AV06": "review_repost_0_450_model_coarse",
+    "AV08": "review_repost_450_900_model_coarse",
+    "AV07": "review_repost_900_end_model_coarse",
+    "AV09": "game_repost_asr_keyframe_coarse_not_video_model"
+  },
+  "episode_complete_review": false,
+  "pending": [
+    {
+      "task": "CV01比赛结果矛盾及字幕人名",
+      "status": "human_original_review_pending"
+    },
+    {
+      "task": "精确句尾/上下文及候选FIT",
+      "status": "human_original_review_pending"
+    },
+    {
+      "task": "评审A人工核题图/原音/身份风险、CV02、跨段与重播",
+      "status": "pending"
+    },
+    {
+      "task": "游戏B人工核题面/谐音/改规则/弹幕依存与账号持续区分",
+      "status": "pending"
+    },
+    {
+      "task": "CV01比赛结果矛盾及字幕人名",
+      "status": "human_original_review_pending"
+    },
+    {
+      "task": "CV02菜名矛盾",
+      "status": "human_original_review_pending"
+    },
+    {
+      "task": "精确句尾/上下文及候选FIT",
+      "status": "human_original_review_pending"
+    },
+    {
+      "task": "第一集上、培训篇、第二集及本人原发直播",
+      "status": "not_audiovisually_reviewed"
+    }
+  ],
+  "human_audio_aligned_transcripts": 0,
+  "qa_checks_passed": 71,
+  "notes": [
+    "本代理没有看片",
+    "游戏B是本地faster-whisper small+15秒抽帧，置信度低于模型视听",
+    "同名展示名不是已核本人账号",
+    "U1–U12全部NO_FIT或context_required，无FIT批准",
+    "四层隔离保持；跨类型不套密度",
+    "全部自动剪辑开关关闭；第一版仅供人工审片参考，未宣称研究完成"
+  ],
+  "episode_complete_segmented_model_observation": true,
+  "episode_human_frame_validation": false,
+  "fit_qc_unit_tests_passed": 8,
+  "live_A_complete_segmented_model_observation": true,
+  "live_A_human_frame_validation": false,
+  "original_livestream_complete_review": false,
+  "game_B_complete_asr_keyframe_pass": true,
+  "game_B_human_frame_validation": false,
+  "knowledge_page": {
+    "title": "陈泽剪辑知识库（第一版）",
+    "canvas_id": "91f86554-b022-4022-b80f-d78e21ac96f3",
+    "url": "https://cursor.com/canvas/store-d4dc6346-4b39-43eb-8ba9-ec20a9d42809/91f86554-b022-4022-b80f-d78e21ac96f3",
+    "as_of": "2026-11-18 Asia/Shanghai",
+    "automatic_editing_enabled": false
+  },
+  "export_zip": "chenze-knowledge-v1.zip"
+}

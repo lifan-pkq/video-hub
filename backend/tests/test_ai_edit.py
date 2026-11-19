@@ -1,4 +1,5 @@
 import json
+import os
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -276,7 +277,8 @@ class AsrQualityTests(unittest.TestCase):
                     tr._cache_path(video, "tiny", tiny_settings),
                     tr._cache_path(video, "small", tr.decode_settings("small")),
                 )
-                with patch.object(tr, "ASR_URL", ""), \
+                with patch.dict(os.environ, {"VIDEO_HUB_ASR_ENGINE": "whisper"}, clear=False), \
+                        patch.object(tr, "ASR_URL", ""), \
                         patch.object(tr, "WHISPER_MODEL", "small"), \
                         patch.object(tr, "_transcribe_local", return_value=[{"start": 0, "end": 1, "text": "标准草稿"}]) as local:
                     result = tr.transcribe(video, log=lambda *_: None)
@@ -307,7 +309,8 @@ class AsrQualityTests(unittest.TestCase):
             fake.WhisperModel.side_effect = OSError("model missing")
             sys.modules["faster_whisper"] = fake
             try:
-                with patch.object(tr, "ASR_URL", ""), patch.object(tr, "WHISPER_MODEL", "small"):
+                with patch.dict(os.environ, {"VIDEO_HUB_ASR_ENGINE": "whisper"}, clear=False), \
+                        patch.object(tr, "ASR_URL", ""), patch.object(tr, "WHISPER_MODEL", "small"):
                     with self.assertRaises(AIServiceError) as caught:
                         tr.transcribe(video, log=lambda *_: None)
                 self.assertIn("small", str(caught.exception))
@@ -321,6 +324,40 @@ class AsrQualityTests(unittest.TestCase):
                     sys.modules.pop("faster_whisper", None)
                 else:
                     sys.modules["faster_whisper"] = previous_module
+
+    def test_sensevoice_segments_keep_every_character(self):
+        from app.services.sensevoice import segments_from_tokens
+
+        tokens = ["外", "面", "精", "彩", "，", "好", "圆", "的", "嘞"]
+        times = [0.0, 0.2, 0.4, 0.6, 0.8, 1.4, 1.6, 1.8, 2.0]
+        cues = segments_from_tokens(tokens, times, 3.0)
+        self.assertEqual("".join(cue["text"] for cue in cues), "".join(tokens))
+        self.assertEqual(cues[0]["text"], "外面精彩，")
+        self.assertEqual(cues[1]["text"], "好圆的嘞")
+        self.assertTrue(all(cue["review_state"] == "unverified" for cue in cues))
+
+    def test_missing_sensevoice_does_not_call_whisper(self):
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+
+        from app.services.ai_edit import AIServiceError
+        from app.services import transcription as tr
+
+        with tempfile.TemporaryDirectory() as tmp:
+            video = Path(tmp) / "clip.mp4"
+            video.write_bytes(b"not-a-video")
+            with patch.dict(os.environ, {
+                "VIDEO_HUB_ASR_ENGINE": "sensevoice",
+                "VIDEO_HUB_SENSEVOICE_DIR": tmp,
+            }, clear=False), patch.object(tr, "ASR_URL", ""), \
+                    patch.object(tr, "_transcribe_local") as whisper:
+                with self.assertRaises(AIServiceError) as caught:
+                    tr.transcribe(video, log=lambda *_: None)
+            whisper.assert_not_called()
+            self.assertIn("SenseVoice", str(caught.exception))
+            self.assertIn("没有改用 Whisper", str(caught.exception))
+            self.assertFalse(tr.public_asr_status(tr.last_asr_run())["ok"])
 
 
 class TranscriptionCancelTests(unittest.TestCase):

@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import shutil
 import subprocess
 import tempfile
@@ -95,6 +96,11 @@ def public_asr_status(run: dict | None) -> dict:
         )
     elif preset == "remote":
         note = "这次走的是远端转写服务，不是本机标准模型。草稿需要核对。"
+    elif model.startswith("sensevoice"):
+        note = (
+            "这次用的是 SenseVoice int8，不是 Whisper。"
+            "解码分数不能用来判断字对不对。没经人工核对的文字都是未核对草稿。"
+        )
     else:
         note = f"这次用的是模型 {model}。没有把它记成标准精度。"
     return {
@@ -430,6 +436,11 @@ def _cacheable(segments: list[dict], duration: float) -> bool:
     return True
 
 
+def asr_engine() -> str:
+    """默认 SenseVoice。设 VIDEO_HUB_ASR_ENGINE=whisper 才走原来的 faster-whisper。"""
+    return os.environ.get("VIDEO_HUB_ASR_ENGINE", "sensevoice").strip().lower() or "sensevoice"
+
+
 def _read_cache(cache: Path, size: int, model_name: str, settings: dict):
     if not cache.exists():
         return None
@@ -452,13 +463,63 @@ def transcribe(video_path: Path, log=print, *, job_id: str | None = None, should
         return _transcribe_unlocked(video_path, log, job_id=job_id, should_cancel=should_cancel)
 
 
+def _transcribe_sensevoice(video_path: Path, log=print, *, job_id: str | None = None, should_cancel=None) -> list[dict]:
+    from app.services.sensevoice import _recognizer, transcribe_array
+
+    _recognizer()
+    duration = float(probe_video(video_path).get("duration") or 0)
+    if duration > _CHUNK_SECONDS and shutil.which("ffmpeg"):
+        import tempfile
+
+        TMP_DIR.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="sensevoice-", dir=TMP_DIR) as tmp:
+            tmpdir = Path(tmp)
+            audio_path = tmpdir / "audio.mp3"
+            _extract_audio(video_path, audio_path, job_id=job_id, should_cancel=should_cancel)
+            heard = float(probe_video(audio_path).get("duration") or duration or 0)
+            total = max(1, int(math.ceil(heard / _CHUNK_SECONDS)))
+            out: list[dict] = []
+            for index in range(total):
+                _stop_if_cancelled(should_cancel)
+                start = index * _CHUNK_SECONDS
+                length = min(_CHUNK_SECONDS, max(0.1, heard - start))
+                seg_path = tmpdir / f"seg{index + 1}.mp3"
+                _cut_audio_segment(
+                    audio_path, start, length, seg_path, job_id=job_id, should_cancel=should_cancel,
+                )
+                audio = _decode_audio_array(seg_path)
+                try:
+                    out.extend(transcribe_array(audio, length, start))
+                finally:
+                    del audio
+                    seg_path.unlink(missing_ok=True)
+            out.sort(key=lambda item: item["start"])
+            log(f"SenseVoice 转写完成：{len(out)} 句")
+            return out
+    audio = _decode_audio_array(video_path)
+    try:
+        out = transcribe_array(audio, duration, 0.0)
+    finally:
+        del audio
+    log(f"SenseVoice 转写完成：{len(out)} 句")
+    return out
+
+
 def _transcribe_unlocked(video_path: Path, log=print, *, job_id: str | None = None, should_cancel=None) -> list[dict]:
+    engine = asr_engine()
     if ASR_URL:
         model_name = "remote"
         settings = {"language": "zh"}
-    else:
+    elif engine == "whisper":
         model_name = WHISPER_MODEL
         settings = decode_settings(model_name)
+    elif engine == "sensevoice":
+        model_name = "sensevoice-int8"
+        settings = {"engine": "sensevoice", "model": "sense-voice-zh-en-ja-ko-yue-2024-07-17-int8", "language": "zh"}
+    else:
+        raise AIServiceError(
+            f"未知转写引擎「{engine}」。没有改用别的引擎，这次不能当成转写成功。"
+        )
     size = video_path.stat().st_size
     cache = _cache_path(video_path, model_name, settings)
     cached = _read_cache(cache, size, model_name, settings)
@@ -473,9 +534,13 @@ def _transcribe_unlocked(video_path: Path, log=print, *, job_id: str | None = No
                 if isinstance(item, dict):
                     item.setdefault("origin", "asr")
                     item.setdefault("confirmed", False)
-        else:
+        elif engine == "whisper":
             out = _transcribe_local(
                 video_path, log=log, job_id=job_id, should_cancel=should_cancel, settings=settings,
+            )
+        else:
+            out = _transcribe_sensevoice(
+                video_path, log=log, job_id=job_id, should_cancel=should_cancel,
             )
     except Exception:
         _remember_run({"model": model_name, "ok": False, "cache_hit": False})

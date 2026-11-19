@@ -75,7 +75,9 @@ VIDEO_HUB_AUTH_MODE=off VIDEO_HUB_RUN_E2E=1 VIDEO_HUB_WHISPER_MODEL=tiny PYTHONP
 | `VIDEO_HUB_VISION_API_KEY` | 文本 Key | 视觉 Key |
 | `VIDEO_HUB_VISION_MODEL` | 无 | 视觉模型名；未配置时视觉检查标 unknown |
 | `VIDEO_HUB_ASR_URL` | 无 | 可选的远端转写地址。留空则本机 faster-whisper 按需分段转写，不启动 8600 |
-| `VIDEO_HUB_WHISPER_MODEL` | `small` | faster-whisper 模型名或本地目录。服务器上已有模型时可指到该目录 |
+| `VIDEO_HUB_ASR_ENGINE` | `sensevoice` | 本机转写。`whisper` 才用下面的 faster-whisper。SenseVoice 加载失败不会改用 Whisper |
+| `VIDEO_HUB_SENSEVOICE_DIR` | `data/models/sense-voice-zh-en-ja-ko-yue-2024-07-17` | 放 `model.int8.onnx` 和 `tokens.txt`。缺文件时从 sherpa-onnx 的公开发布包只抽出 int8 |
+| `VIDEO_HUB_WHISPER_MODEL` | `small` | 仅当引擎是 whisper。模型名或本地目录。服务器上已有模型时可指到该目录 |
 | `VIDEO_HUB_DOUYIN_MAX_CLIPS` | `10` | 一键成片最多条数，1–10。长原片大约每 70 秒一条，短片更少 |
 | `VIDEO_HUB_DOUYIN_MIN_SECONDS` | `12` | 单条最短秒数 |
 | `VIDEO_HUB_DOUYIN_MAX_SECONDS` | `60` | 单条最长秒数 |

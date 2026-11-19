@@ -411,7 +411,7 @@ def reburn_short(job_id: str, index: int, cues: list, title_text: str | None = N
         if len(cleaned) > 40:
             raise EngineError("旁注请控制在 40 字以内", code="title", status=400)
         enhance["title_text"] = cleaned
-    enhance["captions"] = True
+    enhance["captions"] = bool(cues)
     try:
         video_id = int(result.get("video_id") or (job.get("input") or {}).get("video_id") or 0)
     except (TypeError, ValueError):
@@ -454,6 +454,7 @@ def reburn_short(job_id: str, index: int, cues: list, title_text: str | None = N
         write_srt(rendered["quote_cues"], folder / "captions.srt")
     elif (folder / "captions.srt").is_file():
         (folder / "captions.srt").unlink()
+    write_cover(folder / "video.mp4", folder / "cover.jpg", job_id=job_id)
     short["quote_cues"] = list(rendered.get("quote_cues") or [])
     short["title_text"] = str(rendered.get("title_text") or "")
     short["text_effects"] = list(rendered.get("text_effects") or [])

@@ -190,6 +190,18 @@ class TextRenderTests(unittest.TestCase):
             )
             self.assertIn("captions", on["text_effects"])
             self.assertIn("title", on["text_effects"])
+            self.assertTrue(on["captions_burned"])
+            title_only = render_short(
+                source, root / "title-only.mp4",
+                captions=[],
+                enhance={
+                    "enabled": True, "captions": False, "title_text": "只加旁注",
+                    "style": "outline", "fade": False, "emphasis": "none",
+                },
+                **common,
+            )
+            self.assertEqual(title_only["text_effects"], ["title"])
+            self.assertFalse(title_only["captions_burned"])
             self.assertIn("fade", on["text_effects"])
             self.assertTrue(on["captions_burned"])
             self.assertEqual(on["quote_cues"][0]["role"], "quote")

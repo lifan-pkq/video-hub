@@ -240,11 +240,11 @@ def render_short(
                         status=500,
                     )
             partial.replace(dest)
-            burned = with_subs
+            burned = with_subs if not enhance_on else with_subs and bool(prepared_cues)
             applied = []
-            if enhance_on and burned and prepared_cues:
+            if enhance_on and with_subs and prepared_cues:
                 applied.append("captions")
-            if enhance_on and burned and title_text:
+            if enhance_on and with_subs and title_text:
                 applied.append("title")
             if enhance_on and fade:
                 applied.append("fade")

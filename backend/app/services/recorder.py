@@ -2,12 +2,13 @@
 
 - 抖音：优先通过 DouyinLiveRecorder 接口取流，直播间页面解析兜底
 - B 站：公开 API 取流地址；其他平台/直接流地址：yt-dlp 解析或直通
-- 录制用 ffmpeg -c copy（零转码直接写 mp4），stdin 写 q 优雅停止（保证 moov 完整）
-- 录制完成自动入库视频库（探测时长/分辨率 + 生成封面）
+- 录制中仍用 ffmpeg -c copy 每 10 分钟写一段（中断也保留已完成分段）
+- 停止或直播正常结束时，把分段无损拼接成一条 mp4，再作为一条视频入库
 - 状态持久化在 recordings 表；服务重启后由 main.py 把 recording 标记为 failed
 """
 import json
 import re
+import shutil
 import subprocess
 import threading
 import time
@@ -289,7 +290,8 @@ def _recording_paths(rec: dict) -> list[Path]:
         return []
     pattern = filename.replace("%03d", "*")
     paths = [*RECORDINGS_DIR.glob(pattern), *VIDEOS_DIR.glob(pattern)]
-    return sorted({path for path in paths if path.is_file()})
+    # 按文件名而不是全路径排序，避免 recordings/ 与 videos/ 交叉时把分段顺序打乱
+    return sorted({path for path in paths if path.is_file()}, key=lambda path: path.name)
 
 
 def _segment_size(rec: dict) -> int:
@@ -334,6 +336,9 @@ def _monitor(rec_id: int, proc: subprocess.Popen, log_f):
                              error=f"ffmpeg 退出码 {proc.returncode}: {err}",
                              finished_at=time.strftime("%Y-%m-%d %H:%M:%S"))
     except Exception as e:
+        latest = get_recording(rec_id)
+        if latest and latest.get("status") == "failed":
+            return
         size = _file_size(rec["filename"]) if rec else 0
         update_recording(rec_id, status="failed", size=size,
                          error=f"录制收尾失败: {e}",
@@ -370,8 +375,142 @@ def _remux_to_faststart(src: Path, dst: Path) -> bool:
         return False
 
 
+def _usable_segment_paths(paths: list[Path]) -> list[Path]:
+    usable = []
+    for path in paths:
+        try:
+            if path.is_file() and path.stat().st_size > 0:
+                usable.append(path)
+        except OSError:
+            continue
+    return usable
+
+
+def _merged_filename(filename: str) -> str:
+    """live_%03d.mp4 -> live.mp4。结果不再匹配分段 glob，避免和原始分段混在一起。"""
+    path = Path(filename)
+    marker = "_%03d"
+    suffix = path.suffix or ".mp4"
+    if path.stem.endswith(marker):
+        return path.stem[: -len(marker)] + suffix
+    return f"{path.stem}_merged{suffix}"
+
+
+def _unique_library_path(name: str) -> Path:
+    VIDEOS_DIR.mkdir(parents=True, exist_ok=True)
+    candidate = VIDEOS_DIR / name
+    if not candidate.exists():
+        return candidate
+    return VIDEOS_DIR / f"{candidate.stem}_{uuid.uuid4().hex[:8]}{candidate.suffix}"
+
+
+def _write_concat_list(paths: list[Path], list_path: Path) -> None:
+    lines = []
+    for path in paths:
+        escaped = str(path.resolve()).replace("'", r"'\''")
+        lines.append(f"file '{escaped}'")
+    list_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _concat_ffmpeg_cmd(list_path: Path, dst: Path) -> list[str]:
+    """concat 解复用 + 流拷贝。不重编码。"""
+    return [
+        "ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(list_path),
+        "-c", "copy", "-movflags", "+faststart", str(dst),
+    ]
+
+
+def _concat_segments(paths: list[Path], dst: Path) -> None:
+    """把已落盘的分段无损拼成一条 mp4。失败时不删除原始分段。"""
+    if shutil.which("ffmpeg") is None:
+        raise RuntimeError("分段合并失败：服务器未安装 ffmpeg")
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    list_path = dst.with_name(f".{dst.stem}.ffconcat.txt")
+    try:
+        _write_concat_list(paths, list_path)
+        try:
+            result = subprocess.run(
+                _concat_ffmpeg_cmd(list_path, dst),
+                capture_output=True, timeout=3600,
+            )
+        except subprocess.TimeoutExpired as exc:
+            dst.unlink(missing_ok=True)
+            raise RuntimeError("分段合并超时") from exc
+        if result.returncode != 0 or not dst.is_file() or dst.stat().st_size <= 0:
+            detail = (result.stderr or b"").decode("utf-8", "replace").strip().splitlines()
+            tail = detail[-1][:200] if detail else "ffmpeg 没有写出文件"
+            dst.unlink(missing_ok=True)
+            raise RuntimeError(f"分段合并失败：{tail}")
+    finally:
+        list_path.unlink(missing_ok=True)
+
+
+def _part_metadata(paths: list[Path]) -> list[dict]:
+    parts = []
+    for index, src in enumerate(paths, 1):
+        info = _probe_with_retry(src)
+        parts.append({
+            "index": index,
+            "duration": info.get("duration"),
+            "size": src.stat().st_size,
+        })
+    return parts
+
+
+def _duration_of(parts: list[dict]) -> float:
+    return sum(float(part.get("duration") or 0) for part in parts)
+
+
+def _place_single_segment(src: Path) -> Path:
+    """不足一段时仍入库这一条，不走拼接。"""
+    VIDEOS_DIR.mkdir(parents=True, exist_ok=True)
+    dst = VIDEOS_DIR / src.name
+    if src.resolve() == dst.resolve():
+        return dst
+    if not _remux_to_faststart(src, dst):
+        src.replace(dst)
+    else:
+        src.unlink(missing_ok=True)
+    return dst
+
+
+def _discard_sources(sources: list[Path], dst: Path) -> None:
+    for src in sources:
+        try:
+            if src.resolve() == dst.resolve():
+                continue
+        except OSError:
+            continue
+        src.unlink(missing_ok=True)
+
+
+def _ingest_library_video(rec_id: int, rec: dict, dst: Path, parts: list[dict], info: dict) -> None:
+    """一条标题、一张封面、一次质量分、一次素材理解。"""
+    from app.services.quality import update_quality
+    from app.services.understanding import start_analysis
+
+    size = dst.stat().st_size
+    cover_path = COVERS_DIR / f"{dst.stem}.jpg"
+    cover = cover_path.name if make_cover(dst, cover_path) else None
+    video = add_video(
+        title=rec["title"], filename=dst.name, size=size,
+        duration=info.get("duration"), width=info.get("width"),
+        height=info.get("height"), cover=cover,
+        source_platform=f"live_{rec['platform']}", source_url=rec["url"],
+    )
+    update_quality(video["id"], dst)
+    start_analysis(video["id"])
+    duration = float(info.get("duration") or 0) or _duration_of(parts)
+    update_recording(
+        rec_id, status="completed", size=size, duration=duration,
+        video_id=video["id"], filename=dst.name,
+        segments_json=json.dumps(parts, ensure_ascii=False),
+        finished_at=time.strftime("%Y-%m-%d %H:%M:%S"),
+    )
+
+
 def _finish_success(rec_id: int, rec: dict) -> bool:
-    """每个录制分段独立入库、评分和生成素材卡，全局只收尾一次。"""
+    """分段无损合并成一条再入库。全局只收尾一次，不为每个分段启动理解。"""
     with _lock:
         if rec_id in _finalized:
             return False
@@ -379,51 +518,38 @@ def _finish_success(rec_id: int, rec: dict) -> bool:
         ev = threading.Event()
         _finalize_events[rec_id] = ev
     try:
-        from app.services.quality import update_quality
-        from app.services.understanding import start_analysis
-
-        paths = _recording_paths(rec)
-        if not paths:
-            raise RuntimeError("录制结束但没有有效媒体分段")
-        segments = []
-        total_size = 0
-        total_duration = 0.0
-        for index, src in enumerate(paths, 1):
-            dst = VIDEOS_DIR / src.name
-            if src != dst:
-                if not _remux_to_faststart(src, dst):
-                    src.replace(dst)
-                else:
-                    src.unlink(missing_ok=True)
-            info = _probe_with_retry(dst)
-            size = dst.stat().st_size
-            cover_path = COVERS_DIR / f"{dst.stem}.jpg"
-            cover = cover_path.name if make_cover(dst, cover_path) else None
-            title = rec["title"] + (f" · 第 {index:02d} 段" if len(paths) > 1 else "")
-            video = add_video(
-                title=title, filename=dst.name, size=size,
-                duration=info.get("duration"), width=info.get("width"),
-                height=info.get("height"), cover=cover,
-                source_platform=f"live_{rec['platform']}", source_url=rec["url"],
-            )
-            quality = update_quality(video["id"], dst)
-            start_analysis(video["id"])
-            total_size += size
-            total_duration += float(info.get("duration") or 0)
-            segments.append({
-                "index": index,
-                "video_id": video["id"],
-                "duration": info.get("duration"),
-                "size": size,
-                "quality_score": quality["score"],
-                "summary_status": "running",
-            })
-        update_recording(
-            rec_id, status="completed", size=total_size, duration=total_duration,
-            video_id=segments[0]["video_id"], segments_json=json.dumps(segments, ensure_ascii=False),
-            finished_at=time.strftime("%Y-%m-%d %H:%M:%S"),
-        )
-        return True
+        ingested = False
+        try:
+            sources = _recording_paths(rec or {})
+            paths = _usable_segment_paths(sources)
+            if not paths:
+                raise RuntimeError("录制结束但没有有效媒体分段")
+            parts = _part_metadata(paths)
+            if len(paths) == 1:
+                dst = _place_single_segment(paths[0])
+                info = _probe_with_retry(dst)
+            else:
+                dst = _unique_library_path(_merged_filename(str(rec.get("filename") or paths[-1].name)))
+                _concat_segments(paths, dst)
+                info = _probe_with_retry(dst)
+                expected = _duration_of(parts)
+                actual = float(info.get("duration") or 0)
+                if expected > 1 and actual < expected * 0.8:
+                    dst.unlink(missing_ok=True)
+                    raise RuntimeError(
+                        f"分段合并后时长异常（{actual:.1f}s / 预期约 {expected:.1f}s），已保留原始分段"
+                    )
+            _ingest_library_video(rec_id, rec, dst, parts, info)
+            ingested = True
+            _discard_sources(sources, dst)
+            return True
+        except Exception as exc:
+            if not ingested:
+                update_recording(
+                    rec_id, status="failed", error=f"录制收尾失败: {exc}",
+                    finished_at=time.strftime("%Y-%m-%d %H:%M:%S"),
+                )
+            raise
     finally:
         ev.set()
         with _lock:
@@ -451,14 +577,25 @@ def stop_recording(rec_id: int) -> bool:
             proc.kill()
     size = _file_size(rec["filename"])
     if size > 0:
-        # 手动停止也保留已录内容并入库；若监控线程已在收尾，等它拿准确结果
+        # 手动停止也保留已录内容：先把分段合并成一条再入库。
+        # 监控线程若已在收尾，等到拼接结束，避免过早把完成态写丢。
         update_recording(rec_id, status="stopped", size=size)
         rec = get_recording(rec_id)
-        if not _finish_success(rec_id, rec):
+        if not rec:
+            return True
+        try:
+            finished = _finish_success(rec_id, rec)
+        except Exception:
+            # _finish_success 已把失败写进记录，这里只结束停止请求
+            return True
+        if not finished:
             with _lock:
                 ev = _finalize_events.get(rec_id)
             if ev:
-                ev.wait(timeout=20)
+                ev.wait(timeout=3700)
+            latest = get_recording(rec_id)
+            if latest and latest.get("status") == "failed":
+                return True
         update_recording(rec_id, status="stopped")
     else:
         update_recording(rec_id, status="stopped", size=0,

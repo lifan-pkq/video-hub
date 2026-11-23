@@ -32,8 +32,7 @@ def _enrich(rec: dict) -> dict:
     except (TypeError, ValueError):
         rec["segments"] = []
     if rec["status"] == "recording":
-        path = recorder.recording_file_path(rec)
-        rec["size"] = path.stat().st_size if path else 0
+        rec["size"] = recorder._file_size(rec.get("filename"))
         started_at = rec.get("started_at")
         rec["starting"] = not bool(started_at)
         try:
@@ -136,6 +135,8 @@ def remove(rec_id: int, delete_file: bool = False):
         raise HTTPException(404, "录制任务不存在")
     if rec["status"] == "recording":
         recorder.stop_recording(rec_id)
+        # 停止后文件名会从分段模板改成合并后的那一条，用新记录才能删到库里的文件
+        rec = get_recording(rec_id) or rec
     if delete_file:
         for path in recorder._recording_paths(rec):
             try:

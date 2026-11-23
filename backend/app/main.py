@@ -19,7 +19,7 @@ from app.jobs import fail_interrupted_jobs
 from app.services.understanding import fail_interrupted_analyses
 from app.routers import (
     ai, download, drama, edit, events, exports, inspirations, jobs, maintenance, motion, profiles,
-    recordings, stats, system, understanding, videos,
+    recordings, speech_script, stats, system, understanding, videos,
 )
 from app.services import drama_store, maintenance as maintenance_service, narrato_import
 from app.services.events import event_hub
@@ -73,6 +73,7 @@ app.include_router(edit.router)
 app.include_router(jobs.router)
 app.include_router(download.router)
 app.include_router(recordings.router)
+app.include_router(speech_script.router)
 app.include_router(stats.router)
 app.include_router(events.router)
 app.include_router(system.router)
@@ -106,14 +107,13 @@ def health():
     from engine.llm import configured
     from engine.settings import asr_url, vision_configured
 
-    asr = "remote" if asr_url() else "unconfigured"
-    try:
-        import importlib.util
+    if asr_url():
+        asr = "remote"
+    else:
+        from app.services.transcription import asr_engine
 
-        if not asr_url() and importlib.util.find_spec("faster_whisper") is not None:
-            asr = "whisper"
-    except Exception:
-        pass
+        engine = asr_engine()
+        asr = engine if engine in {"sensevoice", "whisper"} else "unconfigured"
     from app.config import DATA_DIR
     from app.services.media import free_mb
 

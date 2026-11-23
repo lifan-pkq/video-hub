@@ -83,6 +83,7 @@ def produce_douyin(
     text_enhance: dict | None = None,
     source_captions=None,
     confirmed_cues: list | None = None,
+    max_seconds: float | None = None,
 ) -> None:
     video = fetch(int(video_id))
     source = resolve_media(video)
@@ -126,6 +127,7 @@ def produce_douyin(
             float(meta["duration"]),
             instruction=instruction.strip()[:400],
             max_clips=max_clips,
+            max_seconds=max_seconds,
             chenze_style=bool(chenze_style),
             chenze_options=chenze_options or {},
             video=video,

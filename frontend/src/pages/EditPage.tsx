@@ -47,6 +47,7 @@ export default function EditPage() {
   const [selectedVideoId, setSelectedVideoId] = useState(0)
   const [query, setQuery] = useState('')
   const [instruction, setInstruction] = useState('')
+  const [maxSeconds, setMaxSeconds] = useState('')
   const [layout, setLayout] = useState<DouyinLayout>('interview')
   const [chenzeStyle, setChenzeStyle] = useState(false)
   const [chenzeName, setChenzeName] = useState('')
@@ -119,6 +120,19 @@ export default function EditPage() {
             fade: textFade,
           }
         : { enabled: false }
+      const rawLimit = maxSeconds.trim()
+      let limitSeconds: number | undefined
+      if (rawLimit) {
+        if (!/^\d+$/.test(rawLimit)) {
+          toast.error('单条目标时长请填 5 到 90 的整数秒')
+          return
+        }
+        limitSeconds = Number(rawLimit)
+        if (limitSeconds < 5 || limitSeconds > 90) {
+          toast.error('单条目标时长请填 5 到 90 的整数秒')
+          return
+        }
+      }
       const job = await startDouyinProduce(
         selectedVideoId,
         instruction.trim(),
@@ -128,6 +142,7 @@ export default function EditPage() {
         chenze,
         enhance,
         sourceCaptions,
+        limitSeconds,
       )
       toast.success('已开始生成抖音短视频')
       navigate(editTaskPath(job))
@@ -238,9 +253,20 @@ export default function EditPage() {
             value={instruction}
             maxLength={400}
             onChange={(event) => setInstruction(event.target.value)}
-            placeholder="想留什么，可选。例如只要观点冲突和金句"
+            placeholder="想留什么，可选。例如只生成1条，时长不超过15秒"
             aria-label="想留什么样的片段"
           />
+          <label className="studio-limit">
+            <span>单条目标时长（秒）</span>
+            <input
+              value={maxSeconds}
+              inputMode="numeric"
+              maxLength={2}
+              onChange={(event) => setMaxSeconds(event.target.value.replace(/[^\d]/g, '').slice(0, 2))}
+              placeholder="不填则用系统上限"
+              aria-label="单条目标时长"
+            />
+          </label>
           <div className="studio-layouts" role="radiogroup" aria-label="竖屏版式">
             {LAYOUTS.map((item) => (
               <button

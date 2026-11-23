@@ -30,15 +30,80 @@ def clip_budget(duration: float, cap: int | None = None) -> int:
     return max(1, min(limit, int(duration // 70) or 1))
 
 
-def effective_bounds(duration: float, min_seconds: float | None = None, max_seconds: float | None = None) -> tuple[float, float]:
+def effective_bounds(
+    duration: float,
+    min_seconds: float | None = None,
+    max_seconds: float | None = None,
+    *,
+    strict_max: bool = False,
+) -> tuple[float, float]:
     settings = douyin_settings()
     min_len = float(settings["min_seconds"] if min_seconds is None else min_seconds)
     max_len = float(settings["max_seconds"] if max_seconds is None else max_seconds)
+    if strict_max and max_len < min_len:
+        min_len = max_len
     if duration < min_len:
         min_len = max(5.0, float(duration))
     if max_len < min_len:
-        max_len = min_len
+        if strict_max:
+            min_len = max_len
+        else:
+            max_len = min_len
     return min_len, max_len
+
+
+def requested_limits(instruction: str) -> tuple[float | None, int | None]:
+    """读出「不超过 N 秒」和「只生成 N 条」。没写就返回 None，不改默认选段。"""
+    text = instruction or ""
+    seconds: list[float] = []
+    for match in re.finditer(
+        r"(?:不超过|不多于|至多|最多|短于|小于)\s*(\d+(?:\.\d+)?)\s*秒",
+        text,
+    ):
+        seconds.append(float(match.group(1)))
+    for match in re.finditer(r"(\d+(?:\.\d+)?)\s*秒\s*(?:以内|以下|之内)", text):
+        seconds.append(float(match.group(1)))
+    max_seconds = min(seconds) if seconds else None
+    if re.search(r"只(?:生成)?一条|只要一条|仅一条", text):
+        return max_seconds, 1
+    counts = [int(item) for item in re.findall(r"(?:只生成|只要|仅生成|仅要)\s*(\d+)\s*条", text)]
+    count = min(counts) if counts else None
+    if count is not None:
+        count = max(1, min(10, count))
+    return max_seconds, count
+
+
+def _sentence_start(start: float, segments: list[dict]) -> float:
+    """严格时长从句首起算。起点落在句中时退回这句的开头，不从半句开始。"""
+    containing = None
+    upcoming = None
+    for item in segments:
+        seg_start = _finite(item.get("start"))
+        seg_end = _finite(item.get("end"))
+        if seg_start is None:
+            continue
+        if seg_start <= start + 0.05 and (seg_end is None or seg_end > start):
+            containing = seg_start
+        elif seg_start > start and upcoming is None:
+            upcoming = seg_start
+    if containing is not None:
+        return containing
+    if upcoming is not None:
+        return upcoming
+    return start
+
+
+def sentence_end_within(start: float, segments: list[dict], max_len: float, *, minimum: float = 3.0) -> float | None:
+    """只接受落在句尾、并且不超过上限的结束点。没有这样的句尾就返回 None，不在句中切开。"""
+    legal = []
+    for item in segments:
+        end = _finite(item.get("end"))
+        if end is None or end <= start + 0.4 or end - start > max_len + 1e-6:
+            continue
+        if end - start + 1e-6 < minimum:
+            continue
+        legal.append(end)
+    return max(legal) if legal else None
 
 
 def _finite(value) -> float | None:
@@ -82,8 +147,22 @@ def fit_clip(
     duration: float,
     min_len: float,
     max_len: float,
-) -> tuple[float, float]:
-    """把模型给的区间吸到邻近句首句尾，并收进目标时长。"""
+    *,
+    strict_max: bool = False,
+) -> tuple[float, float] | None:
+    """把模型给的区间吸到邻近句首句尾，并收进目标时长。
+
+    strict_max 时，放不进上限的句子整段放弃，不在句中截断。
+    """
+    if strict_max:
+        start = _sentence_start(start, segments)
+        snapped = sentence_end_within(start, segments, max_len, minimum=min(3.0, max_len))
+        if snapped is None:
+            return None
+        snapped = min(duration, snapped)
+        if snapped - start < 3 and max_len >= 3:
+            return None
+        return round(max(0.0, start), 2), round(snapped, 2)
     starts = [float(item["start"]) for item in segments if _finite(item.get("start")) is not None]
     ends = [float(item["end"]) for item in segments if _finite(item.get("end")) is not None]
     snapped_start = _nearest(starts, start, 1.4)
@@ -226,12 +305,13 @@ def clean_douyin_clips(
     max_clips: int,
     min_seconds: float | None = None,
     max_seconds: float | None = None,
+    strict_max: bool = False,
 ) -> list[dict]:
     """校验模型选段：截断、吸句、去重叠，并补上字幕和发布文案。"""
     duration = float(duration)
     if not math.isfinite(duration) or duration <= 0:
         return []
-    min_len, max_len = effective_bounds(duration, min_seconds, max_seconds)
+    min_len, max_len = effective_bounds(duration, min_seconds, max_seconds, strict_max=strict_max)
     prepared = []
     for item in items:
         if not isinstance(item, dict):
@@ -244,9 +324,14 @@ def clean_douyin_clips(
         end = max(0.0, min(duration, end))
         if end - start < 0.8:
             continue
-        start, end = fit_clip(start, end, segments, duration, min_len, max_len)
+        fitted = fit_clip(start, end, segments, duration, min_len, max_len, strict_max=strict_max)
+        if fitted is None:
+            continue
+        start, end = fitted
         length = end - start
-        if length < max(5.0, min_len) - 0.35 or length > max_len + 0.75:
+        floor = 3.0 if strict_max else max(5.0, min_len) - 0.35
+        ceiling = max_len + (0.0 if strict_max else 0.75)
+        if length < floor or length > ceiling:
             continue
         spoken = text_in_range(segments, start, end)
         if len(re.sub(r"\s+", "", spoken)) < 4:
@@ -452,11 +537,53 @@ def fallback_highlights(
     *,
     min_seconds: float | None = None,
     max_seconds: float | None = None,
+    strict_max: bool = False,
 ) -> list[dict]:
     """模型没有给出可用选段时，按口播密度铺一组不重叠的窗口。"""
-    min_len, max_len = effective_bounds(duration, min_seconds, max_seconds)
+    min_len, max_len = effective_bounds(duration, min_seconds, max_seconds, strict_max=strict_max)
     if not segments or duration < 5:
         return []
+    if strict_max:
+        drafts = []
+        for segment in segments:
+            start = _finite(segment.get("start"))
+            if start is None:
+                continue
+            end = sentence_end_within(start, segments, max_len, minimum=min(3.0, max_len))
+            if end is None:
+                continue
+            spoken = text_in_range(segments, start, end)
+            chars = len(re.sub(r"\s+", "", spoken))
+            if chars < 4:
+                continue
+            density = chars / max(1.0, end - start)
+            drafts.append({
+                "start": start,
+                "end": end,
+                "title": re.sub(r"\s+", "", spoken)[:22],
+                "description": spoken[:120],
+                "hashtags": [],
+                "score": max(1, min(5, int(round(density * 2)))),
+                "hook": "",
+                "reason": "按句尾收在时长内",
+            })
+        if not drafts and duration <= max_len + 0.05:
+            spoken = text_in_range(segments, 0, duration)
+            if len(re.sub(r"\s+", "", spoken)) >= 4:
+                drafts.append({
+                    "start": 0.0,
+                    "end": duration,
+                    "title": re.sub(r"\s+", "", spoken)[:22],
+                    "description": spoken[:120],
+                    "hashtags": [],
+                    "score": 3,
+                    "hook": "",
+                    "reason": "原片本身不超过时长",
+                })
+        return clean_douyin_clips(
+            drafts, duration, segments,
+            max_clips=count, min_seconds=min_len, max_seconds=max_len, strict_max=True,
+        )
     target = min(max_len, max(min_len, 36.0))
     step = max(10.0, target * 0.62)
     drafts = []
@@ -521,7 +648,19 @@ def plan_douyin_shorts(
         raise AIResponseError("原片短于 5 秒，不够做成一条抖音短视频")
     if not segments:
         raise AIResponseError("没有识别到口播，无法挑选抖音高光")
-    minimum, maximum = effective_bounds(duration, min_seconds, max_seconds)
+    asked_max, asked_count = requested_limits(instruction)
+    if asked_max is not None and max_seconds is not None:
+        asked_max = min(float(asked_max), float(max_seconds))
+    elif max_seconds is not None:
+        asked_max = float(max_seconds)
+    if asked_max is not None and (asked_max < 5 or asked_max > 90):
+        raise AIResponseError(f"要求的单条时长 {asked_max:g} 秒超出可执行范围（5–90 秒），没有生成成片。")
+    strict_max = asked_max is not None
+    if asked_count:
+        max_clips = asked_count if max_clips <= 0 else min(int(max_clips), asked_count)
+    minimum, maximum = effective_bounds(
+        duration, min_seconds, asked_max, strict_max=strict_max,
+    )
     budget = clip_budget(duration, max_clips or None)
     ask = request_ai or _request_ai
     chunks = chunk_segments(segments, char_budget=4500, context_chars=180) or [{
@@ -563,7 +702,7 @@ def plan_douyin_shorts(
         raise service_errors[0]
     cleaned = clean_douyin_clips(
         raw, duration, segments,
-        max_clips=budget, min_seconds=minimum, max_seconds=maximum,
+        max_clips=budget, min_seconds=minimum, max_seconds=maximum, strict_max=strict_max,
     )
     source = "llm"
     warnings: list[str] = []
@@ -571,7 +710,8 @@ def plan_douyin_shorts(
         warnings.append(f"有 {len(service_errors)} 段模型调用失败，已保留成功的选段。")
     if not cleaned:
         cleaned = fallback_highlights(
-            segments, duration, budget, min_seconds=minimum, max_seconds=maximum,
+            segments, duration, budget,
+            min_seconds=minimum, max_seconds=maximum, strict_max=strict_max,
         )
         source = "heuristic"
         if response_errors or not raw:
@@ -579,6 +719,10 @@ def plan_douyin_shorts(
         else:
             warnings.append("模型选段都落在句子外面或互相重叠，已按口播密度重选。")
     if not cleaned:
+        if strict_max:
+            raise AIResponseError(
+                f"无法在 {maximum:g} 秒内选出完整口播。没有把整段原片当成成片，也没有在句中截断。"
+            )
         raise AIResponseError("没有找到适合抖音的口播片段")
     return {
         "source": source,

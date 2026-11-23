@@ -28,6 +28,7 @@ const AIDramaPage = lazy(() => import('./pages/AIDramaPage'))
 const AIDramaResultPage = lazy(() => import('./pages/AIDramaResultPage'))
 const ProfilesPage = lazy(() => import('./pages/ProfilesPage'))
 const NotFoundPage = lazy(() => import('./pages/NotFoundPage'))
+const NarratePage = lazy(() => import('./pages/NarratePage'))
 
 function PageLoader() {
   return <div className="page-loader" role="status"><span className="skeleton" /><span className="skeleton" /><span className="skeleton" /></div>
@@ -121,8 +122,8 @@ function AppContent() {
                 <Route path="/edit/douyin/:jobId" element={<DouyinProducePage />} />
                 <Route path="/edit/new" element={<EditResultPage />} />
                 <Route path="/edit/:taskId" element={<EditResultPage />} />
-                <Route path="/narrate" element={<Navigate to="/edit" replace />} />
-                <Route path="/narrato" element={<Navigate to="/edit" replace />} />
+                <Route path="/narrate" element={<NarratePage />} />
+                <Route path="/narrato" element={<Navigate to="/narrate" replace />} />
                 <Route path="/ai-media" element={<AIMediaPage />} />
                 <Route path="/ai-drama" element={<AIDramaPage />} />
                 <Route path="/ai-drama/:projectId" element={<AIDramaResultPage />} />

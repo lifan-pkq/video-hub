@@ -106,6 +106,7 @@ class DouyinProduceBody(BaseModel):
     chenze: ChenzeStyleBody | None = None
     text_enhance: TextEnhanceBody | None = None
     source_captions: Literal["unknown", "burned_in", "none", "transcribe"] | None = None
+    max_seconds: float | None = Field(default=None, ge=5, le=90)
 
 
 class CaptionCueBody(BaseModel):
@@ -155,6 +156,8 @@ def douyin_produce(body: DouyinProduceBody):
     }
     if body.source_captions:
         stored["source_captions"] = body.source_captions
+    if body.max_seconds is not None:
+        stored["max_seconds"] = body.max_seconds
     job = create(
         "edit.douyin",
         "抖音成片",
@@ -172,6 +175,7 @@ def douyin_produce(body: DouyinProduceBody):
             chenze_options=chenze,
             text_enhance=text_enhance,
             source_captions=body.source_captions,
+            max_seconds=body.max_seconds,
         ),
     )
 
@@ -280,6 +284,12 @@ def douyin_retry(job_id: str):
     }
     if source_captions:
         stored["source_captions"] = source_captions
+    try:
+        retry_limit = float(payload["max_seconds"]) if payload.get("max_seconds") not in (None, "") else None
+    except (TypeError, ValueError):
+        retry_limit = None
+    if retry_limit is not None:
+        stored["max_seconds"] = retry_limit
     if confirmed_cues:
         stored["confirmed_cues"] = confirmed_cues
     job = create(
@@ -300,6 +310,7 @@ def douyin_retry(job_id: str):
             text_enhance=text_enhance,
             source_captions=source_captions,
             confirmed_cues=confirmed_cues,
+            max_seconds=retry_limit,
         ),
     )
 

@@ -680,6 +680,7 @@ export async function startDouyinProduce(
   chenze?: ChenzeOptions,
   textEnhance?: TextEnhanceOptions,
   sourceCaptions: SourceCaptions = 'unknown',
+  maxSeconds?: number,
 ): Promise<EditJob> {
   try {
     const { data } = await http.post<EditJob>('/edit/douyin', {
@@ -689,6 +690,7 @@ export async function startDouyinProduce(
       layout,
       chenze_style: chenzeStyle,
       source_captions: sourceCaptions,
+      ...(maxSeconds ? { max_seconds: maxSeconds } : {}),
       ...(chenzeStyle && chenze ? { chenze } : {}),
       ...(textEnhance ? { text_enhance: textEnhance } : {}),
     }, { timeout: 0 })
@@ -1194,4 +1196,62 @@ export async function generateDramaStoryboard(id: string): Promise<{ started: nu
 
 export async function generateShotStoryboard(id: string, shotId: string): Promise<void> {
   await http.post(`/drama/projects/${id}/shots/${shotId}/storyboard`, {}, { timeout: 30000 })
+}
+
+export interface NarrationBeat {
+  id: string
+  text: string
+  start: number
+  end: number
+  pause_after: number
+  audio: 'original'
+  review_state: 'unverified' | 'reviewed'
+  split_note?: string
+}
+
+export interface NarrationTask {
+  id: string
+  video_id: number
+  title: string
+  status: string
+  progress: number
+  message: string
+  result?: {
+    beats?: NarrationBeat[]
+    covered_seconds?: number
+    stopped?: string
+    audio?: string
+    reviewed?: boolean
+    rendered?: boolean
+  }
+}
+
+export async function createNarration(videoId: number, targetSeconds: number): Promise<NarrationTask> {
+  try {
+    const { data } = await http.post<NarrationTask>('/narrate/tasks', {
+      video_id: videoId,
+      target_seconds: targetSeconds,
+    }, { timeout: 300000 })
+    return data
+  } catch (error) {
+    raiseApi(error)
+  }
+}
+
+export async function saveNarrationScript(taskId: string, beats: NarrationBeat[]): Promise<NarrationTask> {
+  try {
+    const { data } = await http.post<NarrationTask>(`/narrate/tasks/${taskId}/script`, { beats }, { timeout: 30000 })
+    return data
+  } catch (error) {
+    raiseApi(error)
+  }
+}
+
+export async function renderNarration(taskId: string): Promise<NarrationTask> {
+  try {
+    const { data } = await http.post<NarrationTask>(`/narrate/tasks/${taskId}/render`, {}, { timeout: 300000 })
+    return data
+  } catch (error) {
+    raiseApi(error)
+  }
 }

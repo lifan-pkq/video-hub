@@ -9,10 +9,10 @@ from pathlib import Path
 
 import yt_dlp
 
-from app.config import COVERS_DIR, DOWNLOAD_TIMEOUT, TMP_DIR, VIDEOS_DIR, ensure_dirs
+from app.config import COVERS_DIR, DOWNLOAD_TIMEOUT, MAX_UPLOAD_MB, TMP_DIR, VIDEOS_DIR, ensure_dirs
 from app.db import add_video, update_video
 from app.services.cookies import make_ytdlp_cookiefile
-from app.services.douyin_fallback import download_douyin, is_douyin_url, parse_douyin
+from app.services.douyin_fallback import FallbackCancelled, download_douyin, is_douyin_url, parse_douyin
 from app.services.media import ensure_h264, make_cover, probe_video
 from app.services.quality import assess_source
 from app.services.understanding import start_analysis
@@ -184,11 +184,29 @@ def _ytdlp_download(task, url: str, use_cookie: bool = True) -> tuple[Path, dict
     return downloaded, info
 
 
+def _download_cancelled(task) -> bool:
+    if getattr(task, "cancelled", False):
+        return True
+    event = _download_cancel_events.get(getattr(task, "id", None))
+    return event is not None and event.is_set()
+
+
 def _douyin_fallback_download(task, url: str) -> tuple[Path, dict]:
     task.log("使用 iesdouyin 分享页备用下载（无需 Cookie）…")
     out = _task_tmp_dir(task) / "douyin_fallback.mp4"
-    info = download_douyin(url, out)
-    if getattr(task, "cancelled", False):
+    try:
+        info = download_douyin(
+            url,
+            out,
+            should_cancel=lambda: _download_cancelled(task),
+            max_bytes=MAX_UPLOAD_MB * 1024 * 1024,
+            deadline_s=float(DOWNLOAD_TIMEOUT),
+        )
+    except FallbackCancelled as exc:
+        out.unlink(missing_ok=True)
+        raise DownloadCancelled("下载已取消") from exc
+    if _download_cancelled(task):
+        out.unlink(missing_ok=True)
         raise DownloadCancelled("下载已取消")
     # 用 aweme id 作为文件名，与 yt-dlp 下游命名习惯一致
     vid = re.sub(r"[^A-Za-z0-9_-]", "_", str(info.get("id") or "douyin"))[:64]

@@ -175,6 +175,10 @@ def _extract_audio(video_path: Path, audio_path: Path, *, job_id: str | None = N
         raise AIServiceError("抽取音频失败：没有写出音频")
 
 
+class AudioPastEnd(Exception):
+    """切点已经越过音频末尾。不是完整转写，也不能当成超时或解码失败。"""
+
+
 def _cut_audio_segment(
     audio_path: Path,
     start: float,
@@ -195,7 +199,16 @@ def _cut_audio_segment(
         fail=f"切分音频失败（{start:.0f}s 段）",
     )
     if not out_path.exists() or out_path.stat().st_size == 0:
+        if start > 0:
+            raise AudioPastEnd(f"切点 {start:.0f}s 已越过音频末尾")
         raise AIServiceError(f"切分音频失败（{start:.0f}s 段）：没有写出音频")
+    probed = probe_video(out_path).get("duration")
+    try:
+        seconds = float(probed or 0)
+    except (TypeError, ValueError):
+        seconds = 0
+    if seconds <= 0.05 and start > 0 and out_path.stat().st_size < 1024:
+        raise AudioPastEnd(f"切点 {start:.0f}s 已越过音频末尾")
 
 
 def _transcribe_shared(video_path: Path, log=print, *, job_id: str | None = None, should_cancel=None) -> list[dict]:
@@ -280,15 +293,21 @@ def _decode_audio_array(video_path: Path):
     """
     import numpy as np
 
-    result = subprocess.run(
-        ["ffmpeg", "-nostdin", "-v", "error", "-i", str(video_path),
-         "-f", "s16le", "-ac", "1", "-acodec", "pcm_s16le", "-ar", "16000", "-"],
-        capture_output=True,
-    )
+    try:
+        result = subprocess.run(
+            ["ffmpeg", "-nostdin", "-v", "error", "-i", str(video_path), "-vn",
+             "-f", "s16le", "-ac", "1", "-acodec", "pcm_s16le", "-ar", "16000", "-"],
+            capture_output=True,
+            timeout=180,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise AIServiceError("ffmpeg 解码音频超时（180s）") from exc
     if result.returncode != 0:
         raise AIServiceError(
             "ffmpeg 解码音频失败：" + result.stderr.decode(errors="ignore")[:300]
         )
+    if len(result.stdout) > 16_000_000:
+        raise AIServiceError("解码音频超过单段内存上限。长视频会先分段，不能整段进内存。")
     return np.frombuffer(result.stdout, np.int16).astype(np.float32) / 32768.0
 
 
@@ -357,19 +376,29 @@ def _transcribe_local_chunked(
         tmpdir = Path(tmp)
         audio_path = tmpdir / "audio.mp3"
         _extract_audio(video_path, audio_path, job_id=job_id, should_cancel=should_cancel)
-        heard = float(probe_video(audio_path).get("duration") or duration or 0)
+        heard = float(probe_video(audio_path).get("duration") or 0)
         if heard <= 0:
-            heard = duration
-        total = max(1, int(math.ceil(heard / _CHUNK_SECONDS)))
+            heard = float(duration or 0)
+        unknown = heard <= 0
+        total = 48 if unknown else max(1, int(math.ceil(heard / _CHUNK_SECONDS)))
         log(f"本地转写按 {_CHUNK_SECONDS}s 分段，共 {total} 段，避免整段音频进内存")
         out: list[dict] = []
         info = None
+        reached_end = False
         for index in range(total):
             _stop_if_cancelled(should_cancel)
             start = index * _CHUNK_SECONDS
-            length = min(_CHUNK_SECONDS, max(0.1, heard - start))
+            length = _CHUNK_SECONDS if unknown else min(_CHUNK_SECONDS, max(0.1, heard - start))
             seg_path = tmpdir / f"seg{index + 1}.mp3"
-            _cut_audio_segment(audio_path, start, length, seg_path, job_id=job_id, should_cancel=should_cancel)
+            try:
+                _cut_audio_segment(audio_path, start, length, seg_path, job_id=job_id, should_cancel=should_cancel)
+            except AudioPastEnd as exc:
+                if index == 0 or not unknown:
+                    raise AIServiceError(
+                        "分段转写没有得到可播放音频，不能把缺少的后半段当成已经转完。"
+                    ) from exc
+                reached_end = True
+                break
             audio = _decode_audio_array(seg_path)
             try:
                 part, info = _run_whisper(model, audio, start, settings or decode_settings(WHISPER_MODEL))
@@ -377,10 +406,14 @@ def _transcribe_local_chunked(
                 del audio
                 seg_path.unlink(missing_ok=True)
             out.extend(part)
+            done = start + length if unknown else min(heard, start + length)
+            total_label = "未知" if unknown else f"{heard:.0f}"
             log(
                 f"本地转写进度：第 {index + 1}/{total} 段完成（{len(part)} 句），"
-                f"已转写 {min(heard, start + length):.0f}s/{heard:.0f}s"
+                f"已转写 {done:.0f}s/{total_label}s"
             )
+        if unknown and not reached_end:
+            raise AIServiceError("读不到音频时长，分段仍未到结尾。不能把前半段当成完整转写。")
         out.sort(key=lambda item: item["start"])
         if info is not None:
             log(f"转写完成：{len(out)} 句（模型 {WHISPER_MODEL}，检测语言 {info.language}）")
@@ -406,7 +439,7 @@ def _transcribe_local(
         log(f"转写完成：{len(out)} 句（模型 {WHISPER_MODEL}，检测语言 {info.language}，时长 {info.duration:.0f}s）")
         return out
     duration = float(probe_video(video_path).get("duration") or 0)
-    if duration > _CHUNK_SECONDS:
+    if duration <= 0 or duration > _CHUNK_SECONDS:
         return _transcribe_local_chunked(
             video_path, model, duration, log, job_id=job_id, should_cancel=should_cancel, settings=settings,
         )
@@ -468,7 +501,7 @@ def _transcribe_sensevoice(video_path: Path, log=print, *, job_id: str | None = 
 
     _recognizer()
     duration = float(probe_video(video_path).get("duration") or 0)
-    if duration > _CHUNK_SECONDS and shutil.which("ffmpeg"):
+    if (duration <= 0 or duration > _CHUNK_SECONDS) and shutil.which("ffmpeg"):
         import tempfile
 
         TMP_DIR.mkdir(parents=True, exist_ok=True)
@@ -476,23 +509,37 @@ def _transcribe_sensevoice(video_path: Path, log=print, *, job_id: str | None = 
             tmpdir = Path(tmp)
             audio_path = tmpdir / "audio.mp3"
             _extract_audio(video_path, audio_path, job_id=job_id, should_cancel=should_cancel)
-            heard = float(probe_video(audio_path).get("duration") or duration or 0)
-            total = max(1, int(math.ceil(heard / _CHUNK_SECONDS)))
+            heard = float(probe_video(audio_path).get("duration") or 0)
+            if heard <= 0:
+                heard = float(duration or 0)
+            unknown = heard <= 0
+            total = 48 if unknown else max(1, int(math.ceil(max(heard, 0.1) / _CHUNK_SECONDS)))
             out: list[dict] = []
+            reached_end = False
             for index in range(total):
                 _stop_if_cancelled(should_cancel)
                 start = index * _CHUNK_SECONDS
-                length = min(_CHUNK_SECONDS, max(0.1, heard - start))
+                length = _CHUNK_SECONDS if unknown else min(_CHUNK_SECONDS, max(0.1, heard - start))
                 seg_path = tmpdir / f"seg{index + 1}.mp3"
-                _cut_audio_segment(
-                    audio_path, start, length, seg_path, job_id=job_id, should_cancel=should_cancel,
-                )
+                try:
+                    _cut_audio_segment(
+                        audio_path, start, length, seg_path, job_id=job_id, should_cancel=should_cancel,
+                    )
+                except AudioPastEnd as exc:
+                    if index == 0 or not unknown:
+                        raise AIServiceError(
+                            "分段转写没有得到可播放音频，不能把缺少的后半段当成已经转完。"
+                        ) from exc
+                    reached_end = True
+                    break
                 audio = _decode_audio_array(seg_path)
                 try:
                     out.extend(transcribe_array(audio, length, start))
                 finally:
                     del audio
                     seg_path.unlink(missing_ok=True)
+            if unknown and not reached_end:
+                raise AIServiceError("读不到音频时长，分段仍未到结尾。不能把前半段当成完整转写。")
             out.sort(key=lambda item: item["start"])
             log(f"SenseVoice 转写完成：{len(out)} 句")
             return out

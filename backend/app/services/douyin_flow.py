@@ -71,6 +71,22 @@ def load_subject_boxes(video_id: int) -> list[dict]:
     return boxes_from_understanding(data if isinstance(data, dict) else None)
 
 
+def _clip_limit_view(plan: dict) -> dict:
+    """给预览页的上限说明。cap 是用户这次给出的上限；window 是旧请求的系统窗口。"""
+    mode = str(plan.get("limit_mode") or "window")
+    if mode not in {"cap", "window"}:
+        mode = "window"
+    try:
+        seconds = round(float(plan.get("max_seconds")), 1)
+    except (TypeError, ValueError):
+        seconds = None
+    if mode == "cap":
+        note = "这是单条上限，不是精确时长。成片收到完整句尾，通常更短。放不进时会失败，不会静默保留整段。"
+    else:
+        note = "这次没有单独设置上限，仍按原来的系统窗口挑选。新的剪辑页默认会带上 30 秒上限。"
+    return {"mode": mode, "seconds": seconds, "note": note}
+
+
 def produce_douyin(
     job_id: str,
     video_id: int,
@@ -160,6 +176,7 @@ def produce_douyin(
                 "budget": plan["budget"],
                 "duration": round(float(meta["duration"]), 2),
                 "sentences": len(segments),
+                "clip_limit": _clip_limit_view(plan),
                 "warnings": list(plan.get("warnings") or []),
                 "layout": layout,
                 "pack_url": "",
@@ -196,6 +213,7 @@ def produce_douyin(
                 "budget": plan["budget"],
                 "duration": round(float(meta["duration"]), 2),
                 "sentences": len(segments),
+                "clip_limit": _clip_limit_view(plan),
                 "warnings": [*(plan.get("warnings") or []), *failures],
                 "layout": layout,
                 "pack_url": pack_url,
@@ -323,6 +341,7 @@ def produce_douyin(
             "budget": plan["budget"],
             "duration": round(float(meta["duration"]), 2),
             "sentences": len(segments),
+            "clip_limit": _clip_limit_view(plan),
             "warnings": warnings,
             "layout": layout,
             "pack_url": pack_url,

@@ -97,6 +97,22 @@ const CAPTION_NOTES: Record<SourceCaptions, string> = {
   transcribe: '保存后会把核对过的口播字幕烧进画面。',
 }
 
+function selectionNote(job: EditJob, active: DouyinShort): string {
+  const limit = job.result?.clip_limit
+  const actual = active.duration || active.end - active.start
+  const lines = []
+  if (limit?.mode === 'cap' && limit.seconds) {
+    lines.push(`上限 ${limit.seconds} 秒，这条实际 ${clock(actual)}。上限不是精确时长。`)
+  } else if (limit?.note) {
+    lines.push(limit.note)
+  }
+  const why = (active.reason || active.hook || '').trim()
+  if (job.result?.source === 'llm' && why) lines.push(`模型原文，未经核对：${why}`)
+  else if (why) lines.push(`选段说明：${why}`)
+  else lines.push('没有留下可核对的选段理由。')
+  return lines.join('')
+}
+
 function chosenCaptionMode(job: EditJob): SourceCaptions | 'legacy' {
   const value = job.result?.caption_policy?.source_captions || job.input?.source_captions
   if (value === 'unknown' || value === 'burned_in' || value === 'none' || value === 'transcribe' || value === 'legacy') {
@@ -455,7 +471,7 @@ export default function DouyinProducePage() {
         <p className="studio-fine">已经做好的可以先看。其余还在渲染。</p>
       )}
 
-      {shorts.length > 0 && active && (
+      {job && shorts.length > 0 && active && (
         <div className="studio-screen">
           <div className="studio-gallery" role="listbox" aria-label="成片">
             {shorts.map((short) => {
@@ -505,6 +521,7 @@ export default function DouyinProducePage() {
               )}
               {(active.hashtags || []).length > 0 && <p className="studio-tags">{active.hashtags.join(' ')}</p>}
               {active.description && <p className="studio-desc">{active.description}</p>}
+              <p className="studio-fine">{selectionNote(job, active)}</p>
               <p className="studio-fine">
                 {clock(active.duration || active.end - active.start)}
                 {typeof active.score === 'number' && active.score > 0 ? ` · 评分 ${active.score}` : ''}

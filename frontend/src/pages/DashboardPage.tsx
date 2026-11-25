@@ -16,16 +16,29 @@ import { Button, EmptyState, PageHeader, Panel, StatCard } from '../ui'
 import RequestState from '../ui/RequestState'
 import StatusBadge from '../components/StatusBadge'
 
-function healthRows(health: HealthReport): Array<{ label: string; ok: boolean; detail: string }> {
-  const asrLabel = health.asr === 'remote' ? '使用外部转写接口' : health.asr === 'whisper' ? '本机按需转写，长音频分段' : '未安装 faster-whisper，智能剪辑无法转写'
+function healthRows(health: HealthReport): Array<{ label: string; state: string; detail: string }> {
+  if (health.capabilities?.length) {
+    return health.capabilities.map((item) => ({
+      label: item.label,
+      state: item.state,
+      detail: item.next ? `${item.summary} ${item.next}` : item.summary,
+    }))
+  }
+  const asrDetail = health.asr === 'remote'
+    ? '已选择外部转写。这只是配置，不代表服务已连通。'
+    : health.asr === 'whisper'
+      ? '已选择 Whisper。包是否能导入、模型是否已下载，这里看不出来。'
+      : health.asr === 'sensevoice'
+        ? '已选择 SenseVoice。引擎名不等于模型已加载或识别可用。'
+        : '语音识别状态未知。'
   return [
-    { label: 'ffmpeg', ok: !!health.ffmpeg, detail: health.ffmpeg ? '剪辑和导出可用' : '未安装，剪辑与导出无法出片' },
-    { label: '文本模型', ok: !!health.llm, detail: health.llm ? '抖音选段和标题可用' : '未配置 VIDEO_HUB_AI_*，选段会用本地规则' },
-    { label: '画面模型', ok: !!health.vision, detail: health.vision ? '抽帧说明可用' : '未配置视觉模型，抽帧仍会保留' },
-    { label: '语音识别', ok: health.asr === 'remote' || health.asr === 'whisper', detail: asrLabel },
+    { label: 'ffmpeg', state: health.ffmpeg ? 'ready' : 'unconfigured', detail: health.ffmpeg ? '本机有 ffmpeg。不保证每条成片成功。' : '未安装，剪辑与导出无法出片。' },
+    { label: '文本模型', state: health.llm ? 'configured' : 'unconfigured', detail: health.llm ? '已配置。没有探测连通。' : '未配置。选段会用本地规则，不会调用付费接口。' },
+    { label: '画面模型', state: health.vision ? 'configured' : 'unconfigured', detail: health.vision ? '已配置。没有探测连通。' : '未配置。抽帧仍会保留。' },
+    { label: '语音识别', state: health.asr ? 'unknown' : 'unconfigured', detail: asrDetail },
     {
       label: '磁盘剩余',
-      ok: (health.disk_free_mb ?? 1024) >= 512,
+      state: health.disk_free_mb == null ? 'unknown' : health.disk_free_mb < 512 ? 'limited' : 'ready',
       detail: health.disk_free_mb == null
         ? '还没读到剩余空间'
         : health.disk_free_mb < 512
@@ -107,7 +120,7 @@ export default function DashboardPage() {
             <ul className="space-y-2">
               {healthRows(health).map((row) => (
                 <li key={row.label} className="flex items-start gap-2 rounded-lg bg-fill px-3 py-2">
-                  <span className={row.ok ? 'status-dot mt-1' : 'status-dot is-off mt-1'} />
+                  <span className={`status-dot mt-1 ${row.state === 'ready' ? '' : row.state === 'configured' ? 'is-mid' : 'is-off'}`} />
                   <span className="min-w-0">
                     <strong className="block text-[13px] text-ink-1">{row.label}</strong>
                     <span className="text-[11px] text-ink-4">{row.detail}</span>

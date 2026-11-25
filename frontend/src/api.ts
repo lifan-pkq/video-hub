@@ -107,6 +107,7 @@ export interface Task {
     text_enhance?: TextEnhanceStatus
     caption_policy?: CaptionPolicy
     asr?: AsrStatus
+    clip_limit?: { mode: 'cap' | 'window'; seconds: number | null; note: string }
     shorts?: DouyinShort[]
     filename?: string
     format?: string
@@ -235,6 +236,16 @@ export async function fetchSystemStatus(): Promise<SystemStatus> {
   return data
 }
 
+export type CapabilityState = 'ready' | 'configured' | 'unconfigured' | 'unknown' | 'limited'
+
+export interface CapabilityStatus {
+  id: string
+  state: CapabilityState
+  label: string
+  summary: string
+  next: string
+}
+
 export interface HealthReport {
   status: string
   ffmpeg: boolean
@@ -242,6 +253,7 @@ export interface HealthReport {
   vision: boolean
   asr: string
   disk_free_mb?: number
+  capabilities?: CapabilityStatus[]
 }
 
 export async function fetchHealth(): Promise<HealthReport> {

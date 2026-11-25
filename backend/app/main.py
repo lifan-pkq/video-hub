@@ -115,6 +115,7 @@ def health():
         engine = asr_engine()
         asr = engine if engine in {"sensevoice", "whisper"} else "unconfigured"
     from app.config import DATA_DIR
+    from app.services.capability_status import build_capabilities
     from app.services.media import free_mb
 
     return {
@@ -124,4 +125,5 @@ def health():
         "vision": vision_configured(),
         "asr": asr,
         "disk_free_mb": free_mb(DATA_DIR),
+        "capabilities": build_capabilities(),
     }

@@ -729,6 +729,7 @@ def plan_douyin_shorts(
         "budget": budget,
         "min_seconds": round(minimum, 1),
         "max_seconds": round(maximum, 1),
+        "limit_mode": "cap" if strict_max else "window",
         "warnings": warnings,
         "clips": cleaned,
     }

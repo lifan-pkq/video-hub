@@ -100,6 +100,23 @@ class AcousticTailTests(unittest.TestCase):
                 request_ai=lambda *_args: (_ for _ in ()).throw(AIServiceError("文本模型没有配置")),
             )
 
+    def test_weak_tail_below_a_loud_threshold_stays_inside_the_cut(self):
+        path = Path(self.id().replace(".", "_") + ".wav")
+        self.addCleanup(path.unlink, missing_ok=True)
+        # 响段后面接 0.2 秒弱尾音（RMS 约 30，低于原先的固定门限 40），再是静音和下一句。
+        duration = _write(path, [(0.50, 8000), (0.20, 42), (0.80, 0), (0.30, 8000)])
+        segments = [
+            {"start": 0.0, "end": 0.40, "text": "弱尾音这一句"},
+            {"start": 1.50, "end": 1.75, "text": "后面另一句"},
+        ]
+        refined = apply_acoustic_tails(path, segments, duration)
+        end = refined[0]["end"]
+        self.assertGreater(end, 0.70)
+        self.assertLess(end, 1.20)
+        self.assertLess(end, refined[1]["start"])
+        self.assertGreater(_rms_after(path, 0.50, 0.68), 18)
+        self.assertLess(_rms_after(path, end, 1.40), 18)
+
     def test_old_plan_without_audio_still_uses_the_given_timestamp(self):
         segments = [
             {"start": 0.0, "end": 4.0, "text": "这是一句可以单独听懂的口播"},

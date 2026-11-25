@@ -11,8 +11,10 @@ from pathlib import Path
 
 _RATE = 16000
 _FRAME = 320  # 20ms
-_HANGOVER = 0.12
-_VOICED = 40.0
+# 人声落下之后再留一段静音，避免把低于固定门限的弱尾音切掉。
+# 这段静音不能跨过下一句的起点，也不能靠它把成片补到文件末尾。
+_QUIET_CONTEXT = 0.25
+_LOUD_CAP = 40.0
 
 
 def apply_acoustic_tails(media: Path, segments: list[dict], duration: float) -> list[dict]:
@@ -50,9 +52,10 @@ def _acoustic_end(pcm: array.array, offset: float, asr_end: float, hard_stop: fl
     frames = _frames(pcm, offset)
     if not frames:
         return min(asr_end, hard_stop)
-    # 固定门限，避免整段都是人声时把门限抬到听不见尾音。
-    # 实测这条样例的字音在 100 以上，静音底约 10，40 能分开衰减和空白。
-    threshold = _VOICED
+    levels = sorted(level for _, level in frames)
+    floor = levels[max(0, len(levels) // 10)]
+    # 门限跟着这段里的静音底走，并封顶，避免整段都是人声时把门限抬高。
+    threshold = min(_LOUD_CAP, max(18.0, floor * 2.5))
     last = None
     silent_for = 0.0
     next_voice = None
@@ -72,8 +75,8 @@ def _acoustic_end(pcm: array.array, offset: float, asr_end: float, hard_stop: fl
             silent_for += 0.02
     if last is None:
         return min(asr_end, hard_stop)
-    # 只保留刚落下的衰减。静音断开之后再出现的声音属于下一句，不补到文件末尾。
-    end = last + _HANGOVER
+    # 把切点放进后面的静音，而不是停在门限刚落到的那一帧。下一句一开始就停。
+    end = last + _QUIET_CONTEXT
     if next_voice is not None:
         end = min(end, next_voice)
     return min(hard_stop, end)

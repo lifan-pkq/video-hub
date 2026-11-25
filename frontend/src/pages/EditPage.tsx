@@ -4,6 +4,7 @@ import {
   cancelJob,
   editTaskPath,
   errorMessage,
+  fetchHealth,
   fetchTasks,
   fetchVideos,
   formatRelative,
@@ -12,6 +13,7 @@ import {
   type DouyinLayout,
   type SourceCaptions,
   type TextEnhanceOptions,
+  type CapabilityStatus,
   type TaskSummary,
   type Video,
 } from '../api'
@@ -30,6 +32,8 @@ const CAPTION_SOURCES: Array<{ id: SourceCaptions; title: string; detail: string
   { id: 'transcribe', title: '烧录转写字幕', detail: '把草稿烧进画面' },
 ]
 
+const DEFAULT_CLIP_CAP_SECONDS = '30'
+
 const CHENZE_COLUMNS: Array<{ id: '' | '综艺' | '评审' | '游戏' | '通用保真'; title: string }> = [
   { id: '', title: '自动识别栏目' },
   { id: '综艺', title: '综艺' },
@@ -47,7 +51,8 @@ export default function EditPage() {
   const [selectedVideoId, setSelectedVideoId] = useState(0)
   const [query, setQuery] = useState('')
   const [instruction, setInstruction] = useState('')
-  const [maxSeconds, setMaxSeconds] = useState('')
+  const [maxSeconds, setMaxSeconds] = useState(DEFAULT_CLIP_CAP_SECONDS)
+  const [capabilityNotes, setCapabilityNotes] = useState<CapabilityStatus[]>([])
   const [layout, setLayout] = useState<DouyinLayout>('interview')
   const [chenzeStyle, setChenzeStyle] = useState(false)
   const [chenzeName, setChenzeName] = useState('')
@@ -65,9 +70,14 @@ export default function EditPage() {
 
   const load = useCallback(async () => {
     try {
-      const [taskList, videoList] = await Promise.all([fetchTasks(), fetchVideos()])
+      const [taskList, videoList, health] = await Promise.all([
+        fetchTasks(),
+        fetchVideos(),
+        fetchHealth().catch(() => null),
+      ])
       setTasks(taskList.filter((task) => task.kind === 'edit.douyin'))
       setVideos(videoList)
+      setCapabilityNotes((health?.capabilities || []).filter((item) => item.id === 'llm' || item.id === 'asr'))
       setLoadError('')
     } catch (error) {
       setLoadError(errorMessage(error))
@@ -121,17 +131,14 @@ export default function EditPage() {
           }
         : { enabled: false }
       const rawLimit = maxSeconds.trim()
-      let limitSeconds: number | undefined
-      if (rawLimit) {
-        if (!/^\d+$/.test(rawLimit)) {
-          toast.error('单条目标时长请填 5 到 90 的整数秒')
-          return
-        }
-        limitSeconds = Number(rawLimit)
-        if (limitSeconds < 5 || limitSeconds > 90) {
-          toast.error('单条目标时长请填 5 到 90 的整数秒')
-          return
-        }
+      if (!/^\d+$/.test(rawLimit)) {
+        toast.error('单条最长请填 5 到 90 的整数秒。这是上限，默认 30。')
+        return
+      }
+      const limitSeconds = Number(rawLimit)
+      if (limitSeconds < 5 || limitSeconds > 90) {
+        toast.error('单条最长请填 5 到 90 的整数秒。这是上限，默认 30。')
+        return
       }
       const job = await startDouyinProduce(
         selectedVideoId,
@@ -257,16 +264,20 @@ export default function EditPage() {
             aria-label="想留什么样的片段"
           />
           <label className="studio-limit">
-            <span>单条目标时长（秒）</span>
+            <span>单条最长（秒）</span>
             <input
               value={maxSeconds}
               inputMode="numeric"
               maxLength={2}
               onChange={(event) => setMaxSeconds(event.target.value.replace(/[^\d]/g, '').slice(0, 2))}
-              placeholder="不填则用系统上限"
-              aria-label="单条目标时长"
+              placeholder="30"
+              aria-label="单条最长秒数"
             />
           </label>
+          <p className="studio-fine">这是上限，不是精确时长。成片会收到完整句尾，通常更短。放不进就失败，不会静默保留整段。旧接口不传这个字段时，仍用原来的系统窗口。</p>
+          {capabilityNotes.map((item) => (
+            <p key={item.id} className="studio-fine">{item.summary} {item.next}</p>
+          ))}
           <div className="studio-layouts" role="radiogroup" aria-label="竖屏版式">
             {LAYOUTS.map((item) => (
               <button

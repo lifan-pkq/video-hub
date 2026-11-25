@@ -397,6 +397,7 @@ def run_chenze_pipeline(
         "budget": budget,
         "min_seconds": 0,
         "max_seconds": limit_value,
+        "limit_mode": "cap" if limit_source == "request" else "window",
         "warnings": warnings,
         "clips": clips,
         "chenze": {

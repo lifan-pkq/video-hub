@@ -15,6 +15,7 @@ from app.services.chenze_pipeline import plan_intelligent_edit
 from app.services.douyin_plan import (
     boxes_from_understanding,
     build_subject_track,
+    requested_limits,
 )
 from app.services.douyin_render import (
     build_clip_zip,
@@ -37,6 +38,7 @@ from app.services.text_enhance import (
     public_status,
     write_srt,
 )
+from app.services.acoustic_tail import apply_acoustic_tails
 from app.services.videos import data_dir, fetch, ingest, resolve_media
 
 
@@ -69,6 +71,22 @@ def load_subject_boxes(video_id: int) -> list[dict]:
         except Exception:
             data = None
     return boxes_from_understanding(data if isinstance(data, dict) else None)
+
+
+def _clip_limit_view(plan: dict) -> dict:
+    """给预览页的上限说明。cap 是用户这次给出的上限；window 是旧请求的系统窗口。"""
+    mode = str(plan.get("limit_mode") or "window")
+    if mode not in {"cap", "window"}:
+        mode = "window"
+    try:
+        seconds = round(float(plan.get("max_seconds")), 1)
+    except (TypeError, ValueError):
+        seconds = None
+    if mode == "cap":
+        note = "这是单条上限，不是精确时长。成片收到完整句尾，通常更短。放不进时会失败，不会静默保留整段。"
+    else:
+        note = "这次没有单独设置上限，仍按原来的系统窗口挑选。新的剪辑页默认会带上 30 秒上限。"
+    return {"mode": mode, "seconds": seconds, "note": note}
 
 
 def produce_douyin(
@@ -120,6 +138,21 @@ def produce_douyin(
             action="确认原片有人声。纯音乐或静音没法抽成抖音口播。",
             status=422,
         )
+    asked_cap, _asked_count = requested_limits(instruction)
+    if max_seconds is not None or asked_cap is not None:
+        before = [round(float(item.get("end") or 0), 2) for item in segments]
+        try:
+            segments = apply_acoustic_tails(source, segments, float(meta["duration"] or 0))
+        except AIServiceError as exc:
+            raise EngineError(
+                str(exc),
+                code="audio_tail",
+                action="确认 ffmpeg 能读出原片音轨。有时长上限时不能把没说完的句尾交出去。",
+                status=502,
+            ) from exc
+        after = [round(float(item.get("end") or 0), 2) for item in segments]
+        if after != before:
+            update(job_id, log="句尾已收到声音落下的位置。文件末尾的空白不算还在说话，也不会因此带进下一句。")
     report(job_id, 42, "plan", "按陈泽剪辑方式整理候选" if chenze_style else "挑选适合抖音的高光")
     try:
         plan = plan_intelligent_edit(
@@ -160,6 +193,7 @@ def produce_douyin(
                 "budget": plan["budget"],
                 "duration": round(float(meta["duration"]), 2),
                 "sentences": len(segments),
+                "clip_limit": _clip_limit_view(plan),
                 "warnings": list(plan.get("warnings") or []),
                 "layout": layout,
                 "pack_url": "",
@@ -196,6 +230,7 @@ def produce_douyin(
                 "budget": plan["budget"],
                 "duration": round(float(meta["duration"]), 2),
                 "sentences": len(segments),
+                "clip_limit": _clip_limit_view(plan),
                 "warnings": [*(plan.get("warnings") or []), *failures],
                 "layout": layout,
                 "pack_url": pack_url,
@@ -323,6 +358,7 @@ def produce_douyin(
             "budget": plan["budget"],
             "duration": round(float(meta["duration"]), 2),
             "sentences": len(segments),
+            "clip_limit": _clip_limit_view(plan),
             "warnings": warnings,
             "layout": layout,
             "pack_url": pack_url,

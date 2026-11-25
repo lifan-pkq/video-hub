@@ -15,6 +15,7 @@ from app.services.chenze_pipeline import plan_intelligent_edit
 from app.services.douyin_plan import (
     boxes_from_understanding,
     build_subject_track,
+    requested_limits,
 )
 from app.services.douyin_render import (
     build_clip_zip,
@@ -37,6 +38,7 @@ from app.services.text_enhance import (
     public_status,
     write_srt,
 )
+from app.services.acoustic_tail import apply_acoustic_tails
 from app.services.videos import data_dir, fetch, ingest, resolve_media
 
 
@@ -136,6 +138,21 @@ def produce_douyin(
             action="确认原片有人声。纯音乐或静音没法抽成抖音口播。",
             status=422,
         )
+    asked_cap, _asked_count = requested_limits(instruction)
+    if max_seconds is not None or asked_cap is not None:
+        before = [round(float(item.get("end") or 0), 2) for item in segments]
+        try:
+            segments = apply_acoustic_tails(source, segments, float(meta["duration"] or 0))
+        except AIServiceError as exc:
+            raise EngineError(
+                str(exc),
+                code="audio_tail",
+                action="确认 ffmpeg 能读出原片音轨。有时长上限时不能把没说完的句尾交出去。",
+                status=502,
+            ) from exc
+        after = [round(float(item.get("end") or 0), 2) for item in segments]
+        if after != before:
+            update(job_id, log="句尾已收到声音落下的位置。文件末尾的空白不算还在说话，也不会因此带进下一句。")
     report(job_id, 42, "plan", "按陈泽剪辑方式整理候选" if chenze_style else "挑选适合抖音的高光")
     try:
         plan = plan_intelligent_edit(

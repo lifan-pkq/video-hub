@@ -297,6 +297,18 @@ def _overlap(left: dict, right: dict) -> float:
     return max(0.0, min(left["end"], right["end"]) - max(left["start"], right["start"]))
 
 
+def _end_basis(segments: list[dict], end: float) -> str:
+    """切点若来自声学句尾，记下是停在静音里还是停在下一句之前。"""
+    for item in segments:
+        seg_end = _finite(item.get("end"))
+        basis = str(item.get("end_basis") or "")
+        if seg_end is None or basis not in {"quiet", "boundary", "timestamp"}:
+            continue
+        if abs(seg_end - end) <= 0.03:
+            return basis
+    return ""
+
+
 def clean_douyin_clips(
     items: list,
     duration: float,
@@ -348,6 +360,7 @@ def clean_douyin_clips(
             "score": score,
             "hook": str(item.get("hook") or "")[:80],
             "reason": str(item.get("reason") or "")[:200],
+            "end_basis": _end_basis(segments, end) if strict_max else "",
             **copy,
             "captions": build_captions(segments, start, end),
         })

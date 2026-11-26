@@ -3,10 +3,12 @@ import { Link } from 'react-router-dom'
 import {
   createNarration,
   errorMessage,
+  fetchHealth,
   fetchVideos,
   formatDuration,
   renderNarration,
   saveNarrationScript,
+  type CapabilityStatus,
   type NarrationBeat,
   type Video,
 } from '../api'
@@ -25,13 +27,15 @@ export default function NarratePage() {
   const [rendered, setRendered] = useState(false)
   const [busy, setBusy] = useState('')
   const [note, setNote] = useState('')
+  const [asrNote, setAsrNote] = useState<CapabilityStatus | null>(null)
 
   const load = useCallback(() => {
     setLoading(true)
-    void fetchVideos()
-      .then((list) => {
+    void Promise.all([fetchVideos(), fetchHealth().catch(() => null)])
+      .then(([list, health]) => {
         setVideos(list)
         setVideoId((current) => current ?? list[0]?.id ?? null)
+        setAsrNote(health?.capabilities?.find((item) => item.id === 'asr') || null)
         setLoadError(null)
       })
       .catch((error) => setLoadError(errorMessage(error)))
@@ -113,6 +117,7 @@ export default function NarratePage() {
       )}
       {videos.length > 0 && (
         <section className="studio-board" aria-label="解说设置">
+          {asrNote && <p className="studio-fine">{asrNote.summary} {asrNote.next}</p>}
           <label className="studio-limit">
             <span>原片</span>
             <select value={videoId ?? ''} onChange={(event) => setVideoId(Number(event.target.value))} aria-label="选择原片">

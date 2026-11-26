@@ -188,7 +188,18 @@ export default function MaintenancePage() {
               </div>
               <div className="rounded-xl bg-fill px-3 py-3 text-[12px] text-ink-3">
                 <div className="text-ink-4">创作能力</div>
-                <div className="mt-1 text-ink-1">{health ? (health.capabilities?.length ? health.capabilities.map((item) => `${item.label} ${item.state}`).join(' · ') : `ffmpeg ${health.ffmpeg ? '本机有' : '缺失'} · 文本模型 ${health.llm ? '已配置未探测' : '未配置'} · ASR ${health.asr}`) : '健康检查未返回'}</div>
+                {health?.capabilities?.length ? (
+                  <ul className="mt-2 space-y-2">
+                    {health.capabilities.map((item) => (
+                      <li key={item.id}>
+                        <span className="text-ink-1">{item.label} · {item.state}</span>
+                        <span className="mt-0.5 block text-[11px] leading-5 text-ink-4">{item.summary}{item.next ? ` ${item.next}` : ''}</span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <div className="mt-1 text-ink-1">{health ? `ffmpeg ${health.ffmpeg ? '本机有' : '缺失'} · 文本模型 ${health.llm ? '已配置未探测' : '未配置'} · ASR ${health.asr}` : '健康检查未返回'}</div>
+                )}
               </div>
             </div>
             {!!system?.services.length && (

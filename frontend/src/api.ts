@@ -539,6 +539,7 @@ export interface DouyinShort {
   review_status?: string
   publication_approved?: boolean
   fit_label?: string | null
+  end_basis?: '' | 'quiet' | 'boundary' | 'timestamp' | string
   quote_cues?: CaptionCue[]
   asr_cues?: CaptionCue[]
   text_effects?: string[]

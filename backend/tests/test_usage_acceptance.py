@@ -203,6 +203,29 @@ class SyntheticRenderAcceptanceTests(unittest.TestCase):
                 produce_douyin(job["id"], 1, max_seconds=30)
         self.assertEqual(caught.exception.code, "cancelled")
 
+    def test_manual_review_does_not_replace_the_automatic_words(self):
+        done = self._produce(max_seconds=30, source_captions="unknown")
+        short = done["result"]["shorts"][0]
+        original = short["asr_cues"][0]["text"]
+        from app.services.douyin_flow import reburn_short
+
+        with patch("app.services.douyin_flow.fetch", return_value={"id": 1, "title": "合成音"}), \
+                patch("app.services.douyin_flow.resolve_media", return_value=self.source):
+            body = reburn_short(
+                done["id"],
+                1,
+                [{
+                    "start": short["asr_cues"][0]["start"],
+                    "end": short["asr_cues"][0]["end"],
+                    "text": "人工改过，不是识别结果",
+                }],
+                source_captions="unknown",
+            )
+        self.assertFalse(body["caption_policy"]["burns_transcript"])
+        self.assertEqual(body["short"]["quote_cues"][0]["text"], "人工改过，不是识别结果")
+        self.assertNotEqual(original, "人工改过，不是识别结果")
+        self.assertTrue(original)
+
     def test_retry_keeps_the_requested_cap(self):
         from fastapi.testclient import TestClient
         from app.main import app

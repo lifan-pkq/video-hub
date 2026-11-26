@@ -41,17 +41,18 @@ def apply_acoustic_tails(media: Path, segments: list[dict], duration: float) -> 
             pcm, offset = _decode(media, left, max(0.05, hard_stop - left))
         else:
             pcm, offset = windows[0]
-        end = _acoustic_end(pcm, offset, asr_end, hard_stop)
+        end, basis = _acoustic_end(pcm, offset, asr_end, hard_stop)
         copied = dict(segment)
         copied["end"] = round(end, 2)
+        copied["end_basis"] = basis
         updated.append(copied)
     return updated
 
 
-def _acoustic_end(pcm: array.array, offset: float, asr_end: float, hard_stop: float) -> float:
+def _acoustic_end(pcm: array.array, offset: float, asr_end: float, hard_stop: float) -> tuple[float, str]:
     frames = _frames(pcm, offset)
     if not frames:
-        return min(asr_end, hard_stop)
+        return min(asr_end, hard_stop), "timestamp"
     levels = sorted(level for _, level in frames)
     floor = levels[max(0, len(levels) // 10)]
     # 门限跟着这段里的静音底走，并封顶，避免整段都是人声时把门限抬高。
@@ -74,12 +75,18 @@ def _acoustic_end(pcm: array.array, offset: float, asr_end: float, hard_stop: fl
         elif last is not None:
             silent_for += 0.02
     if last is None:
-        return min(asr_end, hard_stop)
+        return min(asr_end, hard_stop), "timestamp"
     # 把切点放进后面的静音，而不是停在门限刚落到的那一帧。下一句一开始就停。
     end = last + _QUIET_CONTEXT
-    if next_voice is not None:
-        end = min(end, next_voice)
-    return min(hard_stop, end)
+    basis = "quiet"
+    if next_voice is not None and end > next_voice:
+        end = next_voice
+        basis = "boundary"
+    if end > hard_stop:
+        end = hard_stop
+        if hard_stop <= last + 0.04:
+            basis = "boundary"
+    return end, basis
 
 
 def _frames(pcm: array.array, offset: float) -> list[tuple[float, float]]:

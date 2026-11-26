@@ -110,6 +110,12 @@ function selectionNote(job: EditJob, active: DouyinShort): string {
   if (job.result?.source === 'llm' && why) lines.push(`模型原文，未经核对：${why}`)
   else if (why) lines.push(`选段说明：${why}`)
   else lines.push('没有留下可核对的选段理由。')
+  if (active.end_basis === 'quiet') lines.push('切点在这句之后的静音里，没有带进下一句。')
+  else if (active.end_basis === 'boundary') lines.push('下一句紧接着开始，切点停在它前面。')
+  else if (active.end_basis === 'timestamp') lines.push('没有测到更晚的人声，切点停在识别时间。')
+  if (active.end_basis || (active.asr_cues || []).length) {
+    lines.push('下面的字是识别结果，没有听审，不能当成原话。')
+  }
   return lines.join('')
 }
 
@@ -522,6 +528,13 @@ export default function DouyinProducePage() {
               {(active.hashtags || []).length > 0 && <p className="studio-tags">{active.hashtags.join(' ')}</p>}
               {active.description && <p className="studio-desc">{active.description}</p>}
               <p className="studio-fine">{selectionNote(job, active)}</p>
+              {(active.asr_cues || []).length > 0 && (
+                <ol className="studio-fine" aria-label="未核对的口播时间">
+                  {(active.asr_cues || []).map((cue, index) => (
+                    <li key={`${cue.start}-${index}`}>{clock(cue.start)}–{clock(cue.end)} {cue.text}</li>
+                  ))}
+                </ol>
+              )}
               <p className="studio-fine">
                 {clock(active.duration || active.end - active.start)}
                 {typeof active.score === 'number' && active.score > 0 ? ` · 评分 ${active.score}` : ''}

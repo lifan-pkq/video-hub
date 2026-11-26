@@ -404,6 +404,7 @@ def _public_short(
         "review_status": clip.get("review_status") or "",
         "publication_approved": bool(clip.get("publication_approved")),
         "fit_label": clip.get("fit_label"),
+        "end_basis": str(clip.get("end_basis") or ""),
         "quote_cues": list(rendered.get("quote_cues") or []),
         "text_effects": list(rendered.get("text_effects") or []),
         "title_text": str(rendered.get("title_text") or ""),

@@ -60,6 +60,7 @@ class AcousticTailTests(unittest.TestCase):
         self.assertGreater(end, 1.0)
         self.assertLess(end, 1.45)
         self.assertLess(end, refined[1]["start"])
+        self.assertEqual(refined[0]["end_basis"], "quiet")
         self.assertLess(_rms_after(path, end, 2.1), 40)
         self.assertGreater(_rms_after(path, 0.9, 1.05), 40)
 
@@ -74,6 +75,7 @@ class AcousticTailTests(unittest.TestCase):
         refined = apply_acoustic_tails(path, segments, duration)
         self.assertLessEqual(refined[0]["end"], 1.0)
         self.assertGreaterEqual(refined[0]["end"], 0.7)
+        self.assertEqual(refined[0]["end_basis"], "boundary")
         self.assertGreater(refined[1]["end"], 1.8)
         self.assertLessEqual(refined[1]["end"], duration)
 

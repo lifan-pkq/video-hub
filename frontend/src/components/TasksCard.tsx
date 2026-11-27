@@ -7,7 +7,7 @@ import StatusBadge from './StatusBadge'
 import TaskLogs from './TaskLogs'
 
 export const TYPE_META: Record<TaskSummary['type'], { label: string; color: TagColor; icon: (size: number) => ReactNode }> = {
-  download: { label: '视频下载', color: 'blue', icon: (s) => <DownloadSimple size={s} /> },
+  download: { label: '链接下载', color: 'blue', icon: (s) => <DownloadSimple size={s} /> },
   edit: { label: '智能剪辑', color: 'orange', icon: (s) => <Scissors size={s} /> },
   narrate: { label: '历史解说', color: 'accent', icon: (s) => <MagicWand size={s} /> },
   ai: { label: 'AI 生成', color: 'blue', icon: (s) => <Sparkle size={s} /> },

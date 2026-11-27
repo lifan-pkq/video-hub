@@ -42,7 +42,7 @@ export default function ImportWizardPage() {
   const submitLinks = async () => {
     const links = text.split('\n').map((line) => line.trim()).filter(Boolean)
     if (!links.length) {
-      setProblem({ message: '还没有可导入的链接。', action: '每行粘贴一条以 http 开头的视频链接。' })
+      setProblem({ message: '还没有可导入的链接。', action: '每行粘贴一条以 http 开头的视频或图文链接。' })
       return
     }
     setSubmitting(true)
@@ -93,7 +93,7 @@ export default function ImportWizardPage() {
           <button type="button" className="vh-card p-5 text-left hover:border-accent" onClick={() => choose('link')}>
             <DownloadSimple size={22} className="text-accent" />
             <strong className="mt-3 block text-[15px] text-ink-1">从链接导入</strong>
-            <p className="mt-1 text-[12px] leading-5 text-ink-3">每行一条链接即可下载，抖音无需 Cookie。失败时会告诉你怎么处理。</p>
+            <p className="mt-1 text-[12px] leading-5 text-ink-3">每行一条链接即可下载。视频进视频素材库；抖音图文会把原图存进图片素材库，无需 Cookie。</p>
           </button>
         </div>
       )}
@@ -104,7 +104,7 @@ export default function ImportWizardPage() {
       )}
       {step === 1 && source === 'link' && (
         <Panel title="从链接导入" extra={<Button size="sm" variant="ghost" onClick={reset}>重选来源</Button>}>
-          <TextArea value={text} onChange={setText} rows={6} placeholder="每行一个视频链接" />
+          <TextArea value={text} onChange={setText} rows={6} placeholder="每行一个视频或图文链接" />
           <div className="mt-3 flex gap-2">
             <Button variant="primary" icon={<DownloadSimple size={15} />} loading={submitting} onClick={() => void submitLinks()}>提交下载</Button>
             <Link to="/download"><Button variant="ghost">去下载页解析画质</Button></Link>
@@ -116,7 +116,7 @@ export default function ImportWizardPage() {
           {uploaded ? (
             <p className="text-[13px] text-ink-2">「{uploaded.title}」已进入视频素材库，可以直接剪辑。</p>
           ) : (
-            <p className="text-[13px] text-ink-2">已排队 {taskCount} 个下载。可以离开本页，失败原因会写在任务上。</p>
+            <p className="text-[13px] text-ink-2">已排队 {taskCount} 个下载。视频会进视频素材库，图文原图会进图片素材库。可以离开本页，失败原因会写在任务上。</p>
           )}
           <div className="mt-4 flex flex-wrap gap-2">
             {uploaded && <Link to="/edit" state={{ videoIds: [uploaded.id] }}><Button variant="primary">去智能剪辑</Button></Link>}

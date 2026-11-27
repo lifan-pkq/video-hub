@@ -1,5 +1,7 @@
 """抖音专用备用下载：iesdouyin 分享页 + www.douyin.com detail API（无需 Cookie）。
 
+图文作品保存 images / image_post_info 里的原图，不因缺少 play_addr 拒绝。
+
 参考 https://github.com/HuanNan520/dyfetch 、Mai0313/discordbot、CharlesPikachu/videodl。
 yt-dlp 主站路径需要新鲜 Cookie 时走这条链路。
 
@@ -192,6 +194,95 @@ def _pick_play_url(url_list: list, video: dict | None = None) -> str | None:
     return None
 
 
+def _http_urls(values) -> list[str]:
+    if not isinstance(values, list):
+        return []
+    return [url for url in values if isinstance(url, str) and url.startswith("http")]
+
+
+def _unique_urls(urls: list[str]) -> list[str]:
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for url in urls:
+        if url in seen:
+            continue
+        seen.add(url)
+        ordered.append(url)
+    return ordered
+
+
+def _named_urls(image: dict, *keys: str) -> list[str]:
+    urls: list[str] = []
+    for key in keys:
+        urls.extend(_http_urls(image.get(key)))
+    return urls
+
+
+def _slide_urls(image: dict) -> list[str]:
+    """无水印原图优先。download_url_list 常带「抖音号」水印，只在没有干净地址时兜底。"""
+    preferred: list[str] = []
+    preferred.extend(_named_urls(image, "watermark_free_download_url_list", "watermarkFreeDownloadUrlList"))
+    display = image.get("display_image") or image.get("displayImage")
+    if isinstance(display, dict):
+        preferred.extend(_named_urls(display, "watermark_free_download_url_list", "watermarkFreeDownloadUrlList"))
+        preferred.extend(_named_urls(display, "url_list", "urlList"))
+    for label in ("label_origin", "label_large", "labelOrigin", "labelLarge"):
+        nested = image.get(label)
+        if isinstance(nested, dict):
+            preferred.extend(_named_urls(nested, "url_list", "urlList"))
+    preferred.extend(_named_urls(image, "url_list", "urlList"))
+    fallback = _named_urls(image, "download_url_list", "downloadUrlList")
+    return _unique_urls(preferred + fallback)
+
+
+def _slides_from_list(images) -> list[dict]:
+    if not isinstance(images, list):
+        return []
+    slides: list[dict] = []
+    for image in images:
+        if not isinstance(image, dict):
+            continue
+        urls = _slide_urls(image)
+        if not urls:
+            continue
+        display = image.get("display_image") if isinstance(image.get("display_image"), dict) else {}
+        slides.append({
+            "urls": urls,
+            "width": image.get("width") or display.get("width"),
+            "height": image.get("height") or display.get("height"),
+        })
+    return slides
+
+
+def original_images(item: dict) -> list[dict]:
+    """按展示顺序抽出图文原图。视频封面不在 images 里，不会被当成图集。"""
+    if not isinstance(item, dict):
+        return []
+    slides = _slides_from_list(item.get("images"))
+    if slides:
+        return slides
+    post = item.get("image_post_info") if isinstance(item.get("image_post_info"), dict) else {}
+    if not post and isinstance(item.get("imagePostInfo"), dict):
+        post = item["imagePostInfo"]
+    slides = _slides_from_list(post.get("images") or post.get("image_list") or post.get("imageList"))
+    if slides:
+        return slides
+    return _slides_from_list(item.get("image_infos"))
+
+
+def _has_image_payload(item: dict) -> bool:
+    images = item.get("images")
+    if isinstance(images, list) and images:
+        return True
+    post = item.get("image_post_info") if isinstance(item.get("image_post_info"), dict) else {}
+    if not post and isinstance(item.get("imagePostInfo"), dict):
+        post = item["imagePostInfo"]
+    if post.get("images") or post.get("image_list") or post.get("imageList"):
+        return True
+    infos = item.get("image_infos") or item.get("imageInfos")
+    return isinstance(infos, list) and bool(infos)
+
+
 def _cover_from_item(item: dict) -> str | None:
     video = item.get("video") or {}
     for key in ("origin_cover", "cover", "dynamic_cover"):
@@ -212,18 +303,26 @@ def _info_from_item(item: dict, aweme_id: str, webpage_url: str) -> dict:
     width = play_addr.get("width") or video.get("width")
     height = play_addr.get("height") or video.get("height")
     duration = douyin_duration_seconds(video.get("duration") or item.get("duration") or 0)
-    title = (item.get("desc") or "").strip() or f"抖音视频_{aweme_id}"
-    return {
+    slides = original_images(item)
+    # 图文常带一条背景音乐占位视频。有原图时以静图为准，不把占位片当成作品本身。
+    image_post = bool(slides) or _has_image_payload(item)
+    if image_post:
+        webpage_url = f"https://www.douyin.com/note/{item.get('aweme_id') or aweme_id}"
+    title = (item.get("desc") or "").strip() or (
+        f"抖音图集_{aweme_id}" if image_post else f"抖音视频_{aweme_id}"
+    )
+    info = {
         "id": str(item.get("aweme_id") or aweme_id),
         "title": title,
         "uploader": (author.get("nickname") or author.get("unique_id") or "").strip() or None,
-        "thumbnail": _cover_from_item(item),
-        "duration": duration,
+        "thumbnail": (slides[0]["urls"][0] if slides else None) or _cover_from_item(item),
+        "duration": None if image_post else duration,
         "webpage_url": webpage_url,
         "extractor_key": "douyin",
         "width": width,
         "height": height,
-        "_play_url": play_url,
+        "_play_url": None if image_post else play_url,
+        "_image_slides": slides,
         "formats": (
             [{
                 "url": play_url,
@@ -233,9 +332,13 @@ def _info_from_item(item: dict, aweme_id: str, webpage_url: str) -> dict:
                 "height": height,
                 "format_note": "iesdouyin-share",
             }]
-            if play_url else []
+            if play_url and not image_post else []
         ),
     }
+    if image_post:
+        info["media_kind"] = "images"
+        info["image_count"] = len(slides)
+    return info
 
 
 def _from_share_page(aweme_id: str, sess: requests.Session) -> dict | None:
@@ -264,12 +367,9 @@ def _from_share_page(aweme_id: str, sess: requests.Session) -> dict | None:
             if not item:
                 continue
             info = _info_from_item(item, aweme_id, f"https://www.douyin.com/video/{aweme_id}")
-            if not info.get("_play_url"):
-                images = item.get("images") or []
-                if images:
-                    raise RuntimeError("该抖音链接是图文作品，当前备用下载器仅支持视频")
-                continue
-            return info
+            if info.get("media_kind") == "images" or info.get("_play_url"):
+                return info
+            continue
         if attempt + 1 < MAX_SHARE_ATTEMPTS:
             time.sleep(0.4 * (attempt + 1))
     if last_err:
@@ -304,6 +404,8 @@ def _from_detail_api(aweme_id: str, sess: requests.Session) -> dict:
             f"抖音 detail API 无 aweme_detail（status_code={payload.get('status_code')}）"
         )
     info = _info_from_item(detail, aweme_id, f"https://www.douyin.com/video/{aweme_id}")
+    if info.get("media_kind") == "images":
+        return info
     if not info.get("_play_url"):
         raise RuntimeError("抖音 detail API 未返回可下载的 play_addr")
     return info
@@ -324,6 +426,46 @@ def parse_douyin(url: str) -> dict:
     return info
 
 
+def _download_image_post(
+    info: dict,
+    out_path: Path,
+    *,
+    should_cancel,
+    max_bytes: int,
+    deadline_s: float,
+) -> dict:
+    """下载图文原图。不写 mp4，也不使用 Cookie。"""
+    from app.services.image_gallery import GalleryCancelled, download_slides
+
+    slides = info.get("_image_slides") or []
+    if not slides:
+        raise RuntimeError("该抖音链接是图文作品，但没有可下载的原图地址")
+    if should_cancel and should_cancel():
+        raise FallbackCancelled("下载已取消")
+    dest = Path(out_path).parent / "slides"
+    free = shutil.disk_usage(Path(out_path).parent).free
+    if free < _MIN_FREE_BYTES:
+        raise RuntimeError(f"磁盘剩余 {free // (1024 * 1024)}MB，低于 512MB，已停止备用下载")
+    sess = _session()
+    try:
+        files = download_slides(
+            slides,
+            dest,
+            session=sess,
+            referer=REFERER,
+            should_cancel=should_cancel,
+            max_bytes=max_bytes,
+            deadline_s=deadline_s,
+        )
+    except GalleryCancelled as exc:
+        raise FallbackCancelled("下载已取消") from exc
+    public = {key: value for key, value in info.items() if not str(key).startswith("_")}
+    public["media_kind"] = "images"
+    public["image_count"] = len(files)
+    public["image_files"] = files
+    return public
+
+
 def download_douyin(
     url: str,
     out_path: Path,
@@ -332,7 +474,7 @@ def download_douyin(
     max_bytes: int | None = None,
     deadline_s: float | None = None,
 ) -> dict:
-    """解析并下载无水印 mp4。每个数据块检查取消、总时限和大小上限。"""
+    """解析并下载无水印 mp4；图文作品则下载原图。每个数据块检查取消、总时限和大小上限。"""
     if max_bytes is None or deadline_s is None:
         from app.config import DOWNLOAD_TIMEOUT, MAX_UPLOAD_MB
 
@@ -343,6 +485,14 @@ def download_douyin(
     if should_cancel and should_cancel():
         raise FallbackCancelled("下载已取消")
     info = parse_douyin(url)
+    if info.get("media_kind") == "images":
+        return _download_image_post(
+            info,
+            out_path,
+            should_cancel=should_cancel,
+            max_bytes=max_bytes,
+            deadline_s=float(deadline_s),
+        )
     play_url = info.get("_play_url")
     if not play_url:
         raise RuntimeError("未能解析抖音无水印播放地址")

@@ -40,6 +40,8 @@ def _init_schema(conn: sqlite3.Connection):
             analysis_status TEXT DEFAULT 'pending',
             analysis_error TEXT DEFAULT '',
             analysis_json TEXT,
+            chenze_style INTEGER DEFAULT 0,
+            chenze_json TEXT,
             created_at TEXT NOT NULL
         );
         CREATE TABLE IF NOT EXISTS narrato_imports (
@@ -60,6 +62,8 @@ def _init_schema(conn: sqlite3.Connection):
             segments_json TEXT,
             quality TEXT DEFAULT 'best',
             fps INTEGER DEFAULT 0,
+            chenze_style INTEGER DEFAULT 0,
+            chenze_json TEXT,
             created_at TEXT NOT NULL,
             started_at TEXT,
             finished_at TEXT
@@ -157,6 +161,10 @@ def _init_schema(conn: sqlite3.Connection):
         conn.execute("ALTER TABLE recordings ADD COLUMN started_at TEXT")
     if "segments_json" not in cols:
         conn.execute("ALTER TABLE recordings ADD COLUMN segments_json TEXT")
+    if "chenze_style" not in cols:
+        conn.execute("ALTER TABLE recordings ADD COLUMN chenze_style INTEGER DEFAULT 0")
+    if "chenze_json" not in cols:
+        conn.execute("ALTER TABLE recordings ADD COLUMN chenze_json TEXT")
     video_cols = [r[1] for r in conn.execute("PRAGMA table_info(videos)").fetchall()]
     for name, definition in (
         ("quality_score", "REAL"),
@@ -164,11 +172,26 @@ def _init_schema(conn: sqlite3.Connection):
         ("analysis_status", "TEXT DEFAULT 'pending'"),
         ("analysis_error", "TEXT DEFAULT ''"),
         ("analysis_json", "TEXT"),
+        ("chenze_style", "INTEGER DEFAULT 0"),
+        ("chenze_json", "TEXT"),
     ):
         if name not in video_cols:
             conn.execute(f"ALTER TABLE videos ADD COLUMN {name} {definition}")
     conn.execute("INSERT OR IGNORE INTO maintenance_settings (id) VALUES (1)")
     conn.commit()
+
+
+def _attach_chenze(item: dict) -> dict:
+    raw = item.get("chenze_json")
+    parsed = None
+    if raw:
+        try:
+            parsed = json.loads(raw)
+        except (TypeError, ValueError):
+            parsed = None
+    item["chenze_style"] = bool(item.get("chenze_style"))
+    item["chenze"] = parsed if isinstance(parsed, dict) else None
+    return item
 
 
 def _video_row(row: sqlite3.Row | None) -> dict | None:
@@ -182,7 +205,7 @@ def _video_row(row: sqlite3.Row | None) -> dict | None:
                 item[key] = json.loads(raw)
             except (TypeError, ValueError):
                 item[key] = None
-    return item
+    return _attach_chenze(item)
 
 
 def add_video(**fields) -> dict:
@@ -449,7 +472,7 @@ def list_videos_for_library() -> list[dict]:
             """
             SELECT id, title, filename, size, duration, width, height, cover,
                    source_platform, source_url, quality_score, analysis_status,
-                   analysis_error, created_at,
+                   analysis_error, created_at, chenze_style, chenze_json,
                    json_extract(analysis_json, '$.summary') AS summary,
                    json_extract(analysis_json, '$.people') AS people,
                    json_extract(analysis_json, '$.scenes') AS scenes,
@@ -466,7 +489,7 @@ def list_videos_for_library() -> list[dict]:
         tags = _json_list(item.pop("emotion_tags", None))
         item["analysis"] = {"summary": summary, "people": people, "scenes": scenes, "emotion_tags": tags} if summary or people or scenes or tags else None
         item["quality"] = None
-        items.append(item)
+        items.append(_attach_chenze(item))
     return items
 
 
@@ -490,13 +513,16 @@ def delete_video(video_id: int):
 # ---------- 直播录制 ----------
 
 def add_recording(url: str, platform: str, title: str, filename: str,
-                  quality: str = "best", fps: int = 0) -> int:
+                  quality: str = "best", fps: int = 0,
+                  chenze_style: int = 0, chenze_json: str | None = None) -> int:
     with _lock:
         conn = _get_conn()
         cur = conn.execute(
-            "INSERT INTO recordings (url, platform, title, filename, status, quality, fps, created_at)"
-            " VALUES (?,?,?,?,?,?,?,?)",
+            "INSERT INTO recordings (url, platform, title, filename, status, quality, fps,"
+            " chenze_style, chenze_json, created_at)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?)",
             (url, platform, title, filename, "recording", quality, fps,
+             1 if chenze_style else 0, chenze_json,
              datetime.now().isoformat(timespec="seconds")),
         )
         conn.commit()
@@ -525,6 +551,14 @@ def list_recordings(limit: int = 100) -> list[dict]:
             "SELECT * FROM recordings ORDER BY id DESC LIMIT ?", (limit,)
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+def list_recordings_by_status(status: str) -> list[dict]:
+    with _lock:
+        rows = _get_conn().execute(
+            "SELECT * FROM recordings WHERE status=? ORDER BY id", (status,)
+        ).fetchall()
+        return [dict(row) for row in rows]
 
 
 def delete_recording(rec_id: int):

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import {
   cancelJob,
@@ -67,6 +67,7 @@ export default function EditPage() {
   const [textMotion, setTextMotion] = useState<TextEnhanceOptions['emphasis']>('none')
   const [textFade, setTextFade] = useState(false)
   const [starting, setStarting] = useState(false)
+  const appliedChenzeFor = useRef(0)
 
   const load = useCallback(async () => {
     try {
@@ -97,6 +98,19 @@ export default function EditPage() {
   }, [location.state])
 
   const selected = videos.find((video) => video.id === selectedVideoId) || null
+
+  useEffect(() => {
+    if (!selected || appliedChenzeFor.current === selected.id) return
+    appliedChenzeFor.current = selected.id
+    const options = selected.chenze
+    setChenzeStyle(Boolean(selected.chenze_style))
+    setChenzeName(options?.display_name || '')
+    setChenzeId(options?.douyin_id || '')
+    setChenzeHome(options?.homepage_url || '')
+    const column = options?.column
+    setChenzeColumn(column === '综艺' || column === '评审' || column === '游戏' || column === '通用保真' ? column : '')
+    setChenzeLimit(options?.max_seconds ? String(options.max_seconds) : '')
+  }, [selected])
   const needle = query.trim().toLowerCase()
   const visible = useMemo(
     () => videos.filter((video) => !needle || video.title.toLowerCase().includes(needle)),

@@ -2,9 +2,10 @@
 
 - 抖音：优先通过 DouyinLiveRecorder 接口取流，直播间页面解析兜底
 - B 站：公开 API 取流地址；其他平台/直接流地址：yt-dlp 解析或直通
-- 录制用 ffmpeg -c copy（零转码直接写 mp4），stdin 写 q 优雅停止（保证 moov 完整）
-- 录制完成自动入库视频库（探测时长/分辨率 + 生成封面）
-- 状态持久化在 recordings 表；服务重启后由 main.py 把 recording 标记为 failed
+- 整场写成一条可恢复的 fMP4（每个关键帧一个 fragment，并立刻刷到磁盘）
+- 不按 10 分钟切成多条素材。优雅停止或进程退出后 remux 成普通 faststart MP4，再入库为一条视频
+- stdin 写 q 优雅停止，超时再强杀；手动停止仍保留已经写出的媒体
+- 状态持久化在 recordings 表；服务重启后尽量把已写出的捕获收成一条视频
 """
 import json
 import re
@@ -17,7 +18,7 @@ from pathlib import Path
 
 from app.config import COVERS_DIR, RECORDINGS_DIR, TMP_DIR, VIDEOS_DIR
 from app.db import (add_recording, add_video, get_recording,
-                    update_recording)
+                    list_recordings_by_status, update_recording)
 from app.services.media import make_cover, probe_video
 
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -25,6 +26,9 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
 
 # 画质档位：best 原画 / high 高清 / medium 标清 / low 流畅
 QUALITY_LEVELS = ("best", "high", "medium", "low")
+# 捕获容器：moov 在文件头，大约每秒或每个关键帧落一个 fragment，并且每次写出都刷盘。
+# 进程被杀掉时，已经刷到磁盘的 fragment 仍能被 ffmpeg 读出来再 remux。
+CAPTURE_MOVFLAGS = "+frag_keyframe+empty_moov+default_base_moof+separate_moof"
 # 抖音 flv_pull_url / hls_pull_url_map 的键优先级
 DOUYIN_QUALITY_KEYS = {
     "best": ["FULL_HD1", "HD1", "SD1", "SD2"],
@@ -237,20 +241,27 @@ def _build_ffmpeg_cmd(stream_url: str, platform: str, out_path: Path, fps: int =
         opts += ["-headers", f"User-Agent: {mobile_ua}\r\nReferer: https://live.douyin.com/\r\n"]
     if platform == "bilibili":
         opts += ["-headers", f"User-Agent: {UA}\r\nReferer: https://live.bilibili.com/\r\n"]
-    # fps=0 原样录制：流拷贝零转码；只有限帧率（fps>0）才重编码去锐化/响度滤镜
-    # （loudnorm 是有状态滤镜，跨 segment 是否一致未经验证，不进默认路径）
+    # fps=0 原样录制：流拷贝零转码；只有限帧率（fps>0）才重编码。
+    # 陈泽开关不进这条命令，捕获和风格选项彼此独立。
     codec = ["-c", "copy"] if fps <= 0 else [
         "-vf", f"fps={fps}",
         "-c:v", "libx264", "-preset", "veryfast", "-crf", "21", "-c:a", "aac",
     ]
     return [
         "ffmpeg", "-y", *opts, "-i", stream_url, *codec,
-        "-f", "segment", "-segment_time", "600", "-segment_format", "mp4",
-        "-segment_format_options", "movflags=+faststart", str(out_path),
+        "-avoid_negative_ts", "make_zero",
+        "-avioflags", "direct",
+        "-flush_packets", "1",
+        "-f", "mp4",
+        "-movflags", CAPTURE_MOVFLAGS,
+        "-frag_duration", "1000000",
+        "-min_frag_duration", "0",
+        str(out_path),
     ]
 
 
-def start_recording(url: str, title: str = "", quality: str = "best", fps: int = 0) -> dict:
+def start_recording(url: str, title: str = "", quality: str = "best", fps: int = 0,
+                    chenze_style: bool = False, chenze_options: dict | None = None) -> dict:
     """创建录制任务并拉起 ffmpeg。失败会抛异常（路由层转 400）。"""
     url = extract_url(url)
     platform = detect_platform(url)
@@ -260,10 +271,14 @@ def start_recording(url: str, title: str = "", quality: str = "best", fps: int =
 
     if not title:
         title = f"直播录制 {time.strftime('%m-%d %H:%M')}"
-    filename = f"{_safe_name(title)}_{time.strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex}_%03d.mp4"
+    filename = f"{_safe_name(title)}_{time.strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex}.mp4"
     out_path = RECORDINGS_DIR / filename
+    chenze_json = json.dumps(chenze_options or {}, ensure_ascii=False) if chenze_style else None
 
-    rec_id = add_recording(url, platform, title, filename, quality, fps)
+    rec_id = add_recording(
+        url, platform, title, filename, quality, fps,
+        chenze_style=1 if chenze_style else 0, chenze_json=chenze_json,
+    )
     log_path = TMP_DIR / f"record_{rec_id}.log"
     cmd = _build_ffmpeg_cmd(stream_url, platform, out_path, fps)
     log_f = open(log_path, "wb")
@@ -326,8 +341,15 @@ def _monitor(rec_id: int, proc: subprocess.Popen, log_f):
             return  # 已被 stop_recording 处理
 
         size = _file_size(rec["filename"])
-        if proc.returncode == 0 and size > 0:
-            _finish_success(rec_id, rec)
+        if size > 0:
+            ingested = _finish_success(rec_id, rec)
+            if ingested and proc.returncode not in (0, None):
+                current = get_recording(rec_id) or {}
+                if current.get("video_id") and current.get("status") != "stopped":
+                    update_recording(
+                        rec_id,
+                        error="直播流中断，已把已写出的内容收成一条视频入库",
+                    )
         else:
             err = _last_error_line(rec_id)
             update_recording(rec_id, status="failed", size=size,
@@ -357,21 +379,95 @@ def _probe_with_retry(path: Path, tries: int = 5, interval: float = 1.0) -> dict
     return {}
 
 
+def _media_usable(path: Path) -> bool:
+    info = probe_video(path)
+    duration = info.get("duration") or 0
+    if duration and float(duration) > 0:
+        return True
+    return bool(info.get("width") or info.get("codec"))
+
+
 def _remux_to_faststart(src: Path, dst: Path) -> bool:
-    """把 fMP4 录制文件 remux 成普通 faststart mp4（入库后拖动进度更稳）。失败返回 False。"""
+    """把可恢复的 fMP4 收成普通 faststart MP4。最后一段不完整时仍尽量读出已写完的 fragment。"""
+    attempts = [
+        ["ffmpeg", "-y", "-fflags", "+genpts+discardcorrupt", "-i", str(src),
+         "-c", "copy", "-movflags", "+faststart", str(dst)],
+        ["ffmpeg", "-y", "-fflags", "+genpts+discardcorrupt+igndts", "-err_detect", "ignore_err",
+         "-i", str(src), "-c", "copy", "-movflags", "+faststart", str(dst)],
+    ]
+    for command in attempts:
+        try:
+            result = subprocess.run(command, capture_output=True, timeout=600)
+        except Exception:
+            result = None
+        if result and result.returncode == 0 and dst.exists() and dst.stat().st_size > 0 and _media_usable(dst):
+            return True
+        dst.unlink(missing_ok=True)
+    return False
+
+
+def _concat_to_faststart(paths: list[Path], dst: Path) -> bool:
+    list_file = dst.with_suffix(".concat.txt")
     try:
-        r = subprocess.run(
-            ["ffmpeg", "-y", "-i", str(src), "-c", "copy",
-             "-movflags", "+faststart", str(dst)],
+        lines = []
+        for path in paths:
+            escaped = str(path).replace("'", "'\\''")
+            lines.append(f"file '{escaped}'")
+        list_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        result = subprocess.run(
+            ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(list_file),
+             "-c", "copy", "-movflags", "+faststart", str(dst)],
             capture_output=True, timeout=600,
         )
-        return r.returncode == 0 and dst.exists() and dst.stat().st_size > 0
+        return result.returncode == 0 and dst.exists() and dst.stat().st_size > 0 and _media_usable(dst)
     except Exception:
         return False
+    finally:
+        list_file.unlink(missing_ok=True)
+
+
+def _assemble_single_mp4(paths: list[Path], dst: Path) -> bool:
+    """无论捕获是一个文件还是旧的多段文件，都收成一条可播放的 MP4。失败时不删除原始捕获。"""
+    if not paths:
+        return False
+    if len(paths) == 1:
+        source = paths[0]
+        if source.resolve() == dst.resolve():
+            return _media_usable(dst)
+        return _remux_to_faststart(source, dst)
+    remuxed: list[Path] = []
+    try:
+        for index, path in enumerate(paths):
+            temp = dst.with_name(f"{dst.stem}.part{index}.mp4")
+            if _remux_to_faststart(path, temp):
+                remuxed.append(temp)
+        if not remuxed:
+            return False
+        if len(remuxed) == 1:
+            remuxed[0].replace(dst)
+            remuxed.clear()
+            return _media_usable(dst)
+        if _concat_to_faststart(remuxed, dst):
+            return True
+        remuxed[0].replace(dst)
+        remuxed.clear()
+        return _media_usable(dst)
+    finally:
+        for temp in remuxed:
+            if temp.exists() and temp.resolve() != dst.resolve():
+                temp.unlink(missing_ok=True)
+
+
+def _library_filename(rec: dict) -> str:
+    name = Path(str(rec.get("filename") or "live.mp4")).name
+    name = name.replace("%03d", "full")
+    if not name.lower().endswith(".mp4"):
+        name += ".mp4"
+    return name
 
 
 def _finish_success(rec_id: int, rec: dict) -> bool:
-    """每个录制分段独立入库、评分和生成素材卡，全局只收尾一次。"""
+    """整场只入库一条视频，并开始质量分和内容分析。全局只收尾一次。"""
     with _lock:
         if rec_id in _finalized:
             return False
@@ -384,45 +480,48 @@ def _finish_success(rec_id: int, rec: dict) -> bool:
 
         paths = _recording_paths(rec)
         if not paths:
-            raise RuntimeError("录制结束但没有有效媒体分段")
-        segments = []
-        total_size = 0
-        total_duration = 0.0
-        for index, src in enumerate(paths, 1):
-            dst = VIDEOS_DIR / src.name
-            if src != dst:
-                if not _remux_to_faststart(src, dst):
-                    src.replace(dst)
-                else:
-                    src.unlink(missing_ok=True)
-            info = _probe_with_retry(dst)
-            size = dst.stat().st_size
-            cover_path = COVERS_DIR / f"{dst.stem}.jpg"
-            cover = cover_path.name if make_cover(dst, cover_path) else None
-            title = rec["title"] + (f" · 第 {index:02d} 段" if len(paths) > 1 else "")
-            video = add_video(
-                title=title, filename=dst.name, size=size,
-                duration=info.get("duration"), width=info.get("width"),
-                height=info.get("height"), cover=cover,
-                source_platform=f"live_{rec['platform']}", source_url=rec["url"],
-            )
-            quality = update_quality(video["id"], dst)
+            raise RuntimeError("录制结束但没有可恢复的媒体")
+        dst = VIDEOS_DIR / _library_filename(rec)
+        if not _assemble_single_mp4(paths, dst):
+            raise RuntimeError("无法把录制收成可播放的 MP4，原始捕获已保留")
+        info = _probe_with_retry(dst)
+        if not info.get("duration") and not _media_usable(dst):
+            dst.unlink(missing_ok=True)
+            raise RuntimeError("收成的 MP4 没有可用媒体，原始捕获已保留")
+        size = dst.stat().st_size
+        cover_path = COVERS_DIR / f"{dst.stem}.jpg"
+        cover = cover_path.name if make_cover(dst, cover_path) else None
+        chenze_style = 1 if rec.get("chenze_style") else 0
+        video = add_video(
+            title=rec["title"], filename=dst.name, size=size,
+            duration=info.get("duration"), width=info.get("width"),
+            height=info.get("height"), cover=cover,
+            source_platform=f"live_{rec['platform']}", source_url=rec["url"],
+            chenze_style=chenze_style, chenze_json=rec.get("chenze_json"),
+        )
+        quality = update_quality(video["id"], dst)
+        try:
             start_analysis(video["id"])
-            total_size += size
-            total_duration += float(info.get("duration") or 0)
-            segments.append({
-                "index": index,
-                "video_id": video["id"],
-                "duration": info.get("duration"),
-                "size": size,
-                "quality_score": quality["score"],
-                "summary_status": "running",
-            })
+        except Exception:
+            # 文档和模型都不应让已经入库的这一条视频回滚。
+            pass
+        segment = {
+            "index": 1,
+            "video_id": video["id"],
+            "duration": info.get("duration"),
+            "size": size,
+            "quality_score": quality["score"],
+            "summary_status": "running",
+            "document_status": "running",
+        }
         update_recording(
-            rec_id, status="completed", size=total_size, duration=total_duration,
-            video_id=segments[0]["video_id"], segments_json=json.dumps(segments, ensure_ascii=False),
+            rec_id, status="completed", size=size, duration=float(info.get("duration") or 0),
+            video_id=video["id"], segments_json=json.dumps([segment], ensure_ascii=False),
             finished_at=time.strftime("%Y-%m-%d %H:%M:%S"),
         )
+        for src in paths:
+            if src.resolve() != dst.resolve():
+                src.unlink(missing_ok=True)
         return True
     finally:
         ev.set()
@@ -454,16 +553,62 @@ def stop_recording(rec_id: int) -> bool:
         # 手动停止也保留已录内容并入库；若监控线程已在收尾，等它拿准确结果
         update_recording(rec_id, status="stopped", size=size)
         rec = get_recording(rec_id)
-        if not _finish_success(rec_id, rec):
+        try:
+            finished = _finish_success(rec_id, rec)
+        except Exception as exc:
+            update_recording(
+                rec_id, status="failed", size=size,
+                error=f"录制收尾失败，原始捕获已保留: {exc}",
+                finished_at=time.strftime("%Y-%m-%d %H:%M:%S"),
+            )
+            return True
+        if not finished:
             with _lock:
                 ev = _finalize_events.get(rec_id)
             if ev:
                 ev.wait(timeout=20)
-        update_recording(rec_id, status="stopped")
+        latest = get_recording(rec_id) or {}
+        if latest.get("video_id"):
+            update_recording(rec_id, status="stopped")
+        elif latest.get("status") != "failed":
+            update_recording(rec_id, status="stopped")
     else:
         update_recording(rec_id, status="stopped", size=0,
                          finished_at=time.strftime("%Y-%m-%d %H:%M:%S"))
     return True
+
+
+def recover_interrupted_recordings() -> int:
+    """服务进程退出后，把已经写出的捕获收成一条视频。没有媒体的才标失败。"""
+    recovered = 0
+    for rec in list_recordings_by_status("recording"):
+        rec_id = int(rec["id"])
+        size = _file_size(rec.get("filename"))
+        if size <= 0:
+            update_recording(
+                rec_id, status="failed", size=0, error="服务重启，录制中断",
+                finished_at=time.strftime("%Y-%m-%d %H:%M:%S"),
+            )
+            continue
+        try:
+            if _finish_success(rec_id, rec):
+                update_recording(rec_id, error="服务进程退出，已把已录内容入库为一条视频")
+                recovered += 1
+                continue
+        except Exception as exc:
+            update_recording(
+                rec_id, status="failed", size=size,
+                error=f"服务进程退出，原始捕获已保留: {exc}",
+                finished_at=time.strftime("%Y-%m-%d %H:%M:%S"),
+            )
+            continue
+        latest = get_recording(rec_id) or {}
+        if not latest.get("video_id") and latest.get("status") == "recording":
+            update_recording(
+                rec_id, status="failed", size=size, error="服务重启，录制中断",
+                finished_at=time.strftime("%Y-%m-%d %H:%M:%S"),
+            )
+    return recovered
 
 
 def _file_size(filename: str | None) -> int:

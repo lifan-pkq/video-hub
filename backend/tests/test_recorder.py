@@ -42,7 +42,12 @@ class DouyinRecordingTests(unittest.TestCase):
 
         joined = " ".join(command)
         self.assertIn("-c copy", joined)
-        self.assertIn("-f segment", joined)
+        self.assertIn("-f mp4", joined)
+        self.assertNotIn("-f segment", joined)
+        self.assertNotIn("-segment_time", joined)
+        self.assertIn("frag_keyframe", joined)
+        self.assertIn("empty_moov", joined)
+        self.assertIn("direct", joined)
         for token in ("unsharp", "loudnorm", "libx264", "-vf"):
             self.assertNotIn(token, joined)
 
@@ -55,6 +60,8 @@ class DouyinRecordingTests(unittest.TestCase):
         self.assertIn("fps=30", joined)
         self.assertIn("libx264", joined)
         self.assertNotIn("-c copy", joined)
+        self.assertNotIn("-f segment", joined)
+        self.assertNotIn("-segment_time", joined)
         self.assertNotIn("unsharp", joined)
         self.assertNotIn("loudnorm", joined)
 

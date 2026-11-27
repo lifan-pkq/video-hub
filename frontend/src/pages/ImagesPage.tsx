@@ -139,6 +139,7 @@ export default function ImagesPage() {
         onClose={() => setPreview(null)}
         title={preview?.title || '图片素材'}
         width={900}
+        fitViewport
         footer={preview ? (
           <div className="flex flex-wrap justify-end gap-2">
             <Link to={`/ai-media?image=${preview.id}`}><Button variant="primary" icon={<Sparkle size={14} />}>用作参考</Button></Link>
@@ -149,8 +150,14 @@ export default function ImagesPage() {
       >
         {preview && (
           <div>
-            <img src={preview.url} alt={preview.title || '图片素材'} className="max-h-[72vh] w-full rounded-lg object-contain" />
-            {preview.prompt ? <p className="mt-3 text-[12px] leading-5 text-ink-3">{preview.prompt}</p> : null}
+            {/* 预留标题、说明、内边距和底栏。竖图不再用 72vh，否则笔记本窗口里按钮会被顶出屏幕。 */}
+            <img
+              src={preview.url}
+              alt={preview.title || '图片素材'}
+              className="mx-auto h-auto w-full rounded-lg object-contain"
+              style={{ maxHeight: 'calc(100dvh - 17rem)' }}
+            />
+            {preview.prompt ? <p className="mt-3 max-h-16 overflow-y-auto text-[12px] leading-5 text-ink-3">{preview.prompt}</p> : null}
           </div>
         )}
       </Modal>

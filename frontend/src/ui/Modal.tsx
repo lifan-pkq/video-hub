@@ -12,6 +12,11 @@ interface Props {
   width?: number
   /** 点遮罩关闭，默认 true */
   maskClosable?: boolean
+  /**
+   * 把头、内容和底栏限制在视口内。底栏不再被顶出屏幕。
+   * 内容区在仍然放不下时自己滚动，页面不用往下翻才能看见按钮。
+   */
+  fitViewport?: boolean
 }
 
 const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
@@ -22,7 +27,7 @@ const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), selec
  * 形成包含块，把 fixed 弹窗囚禁在页面容器里，滚动后位置错乱。
  * Esc 关闭、焦点圈定与恢复、遮罩、进出场动画。
  */
-export default function Modal({ open, onClose, title, children, footer, width = 480, maskClosable = true }: Props) {
+export default function Modal({ open, onClose, title, children, footer, width = 480, maskClosable = true, fitViewport = false }: Props) {
   const dialogRef = useRef<HTMLDivElement>(null)
   const onCloseRef = useRef(onClose)
   const titleId = useId()
@@ -76,38 +81,40 @@ export default function Modal({ open, onClose, title, children, footer, width = 
   if (!open) return null
 
   return createPortal(
-    <div className="fixed inset-0 z-[100] overflow-y-auto">
+    <div className={'fixed inset-0 z-[100] ' + (fitViewport ? 'overflow-hidden' : 'overflow-y-auto')}>
       <div
         className="fade-in fixed inset-0"
         style={{ backgroundColor: 'var(--mask)' }}
         onClick={maskClosable ? onClose : undefined}
       />
-      <div className="flex min-h-full items-start justify-center p-4 pt-[12vh]">
+      <div className={fitViewport
+        ? 'flex h-full items-center justify-center p-4'
+        : 'flex min-h-full items-start justify-center p-4 pt-[12vh]'}>
         <div
           ref={dialogRef}
           role="dialog"
           aria-modal="true"
           aria-labelledby={title != null ? titleId : undefined}
           tabIndex={-1}
-          className="modal-in relative w-full rounded-2xl border border-line bg-card shadow-pop"
+          className={'modal-in relative w-full rounded-2xl border border-line bg-card shadow-pop ' + (fitViewport ? 'flex max-h-full min-h-0 flex-col overflow-hidden' : '')}
           style={{ maxWidth: width }}
         >
           {title != null && (
-            <div className="flex items-center justify-between border-b border-line-soft px-5 py-4">
-              <h3 id={titleId} className="section-title">{title}</h3>
+            <div className="flex shrink-0 items-center justify-between gap-3 border-b border-line-soft px-5 py-4">
+              <h3 id={titleId} className={'section-title ' + (fitViewport ? 'min-w-0 flex-1 truncate' : '')}>{title}</h3>
               <button
                 type="button"
                 aria-label="关闭"
                 onClick={onClose}
-                className="flex h-7 w-7 items-center justify-center rounded-lg text-ink-3 transition-colors hover:bg-fill hover:text-ink-1"
+                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-ink-3 transition-colors hover:bg-fill hover:text-ink-1"
               >
                 <X size={15} />
               </button>
             </div>
           )}
-          <div className="px-5 py-4">{children}</div>
+          <div className={fitViewport ? 'min-h-0 flex-auto overflow-y-auto px-5 py-4' : 'px-5 py-4'}>{children}</div>
           {footer != null && (
-            <div className="flex items-center justify-end gap-2 border-t border-line-soft px-5 py-3.5">{footer}</div>
+            <div className="flex shrink-0 items-center justify-end gap-2 border-t border-line-soft px-5 py-3.5">{footer}</div>
           )}
         </div>
       </div>

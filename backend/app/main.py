@@ -14,8 +14,8 @@ from pydantic import BaseModel
 
 from app import auth
 from app.config import CORS_ORIGINS, ensure_dirs
-from app.db import fail_interrupted_recordings
 from app.jobs import fail_interrupted_jobs
+from app.services.recorder import recover_interrupted_recordings as fail_interrupted_recordings
 from app.services.understanding import fail_interrupted_analyses
 from app.routers import (
     ai, download, drama, edit, events, exports, inspirations, jobs, maintenance, motion, profiles,

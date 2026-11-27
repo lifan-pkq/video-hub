@@ -26,6 +26,7 @@ from app.config import (
 from app.db import get_video, list_videos, update_video
 from app.services.ai_pool import AI_POOL, AIPoolError
 from app.services.audio_analysis import analyze_loudness, detect_beats, detect_silence
+from app.services.content_document import chenze_notice, compose_document, local_structure
 from app.services.media import probe_video
 from app.services.video_analysis import detect_scene_cuts
 
@@ -236,7 +237,14 @@ def _timeline_batches(entries: list[dict], budget: int = SUMMARY_BUDGET_CHARS) -
     return batches or ["[]"]
 
 
+def _text_model_ready() -> bool:
+    """没写模型名时直接跳过。有名字但没有 Key 时，请求函数会在发出网络请求前失败。"""
+    return bool(str(AI_MODEL or "").strip())
+
+
 def _text_summary(speech: list[dict], visual: list[dict], *, budget: int = SUMMARY_BUDGET_CHARS) -> dict:
+    if not _text_model_ready():
+        raise UnderstandingError("未配置文本模型")
     batches = _timeline_batches(_timeline_entries(speech, visual), budget)
     if len(batches) == 1:
         return _request_json([{"role": "user", "content": (
@@ -308,11 +316,27 @@ def analyze_video(video_id: int, log=print) -> dict[str, Any]:
             silence, loudness, beats = [], {"status": "unknown"}, []
             warnings.append(f"声音：{exc}")
         audio = silence + [{"start": value, "end": value + 0.12, "kind": "beat"} for value in beats]
+        local = local_structure(duration, speech, cuts, silence)
+        summary_source = "local"
         try:
+            if not _text_model_ready():
+                raise UnderstandingError("未配置文本模型")
             summary = _text_summary(speech, visual)
+            summary_source = "model"
         except Exception as exc:  # noqa: BLE001
-            summary = (visual_result.get("analysis") or {})
+            summary = (visual_result.get("analysis") or {}) if visual else {}
             warnings.append(f"结构：{exc}")
+        if summary_source != "model":
+            summary = {**local, **{key: value for key, value in summary.items() if value}}
+            if not summary.get("summary"):
+                summary["summary"] = local["summary"]
+            if not summary.get("structure"):
+                summary["structure"] = local["structure"]
+            if not summary.get("best_segments"):
+                summary["best_segments"] = local["best_segments"]
+        suggested = local["suggested_cuts"]
+        visual_source = "model" if visual else "skipped"
+        notice = chenze_notice(video, speech)
         result = {
             "schema_version": 1,
             "video_id": video_id,
@@ -320,20 +344,30 @@ def analyze_video(video_id: int, log=print) -> dict[str, Any]:
             "tracks": {"speech": speech, "visual": visual, "audio": audio},
             "scene_cuts": cuts,
             "audio_summary": {**loudness, "beat_detection": "energy_onset_candidates"},
-            "summary": summary.get("summary") or "",
+            "summary": summary.get("summary") or local["summary"],
             "people": summary.get("people") or [],
             "scenes": summary.get("scenes") or [],
             "emotion_tags": summary.get("emotion_tags") or [],
-            "best_segments": summary.get("best_segments") or [],
-            "structure": summary.get("structure") or [],
+            "best_segments": summary.get("best_segments") or local["best_segments"],
+            "structure": summary.get("structure") or local["structure"],
             "emotion_curve": summary.get("emotion_curve") or [],
+            "suggested_cuts": suggested,
+            "sources": {
+                "transcript": "local_asr" if speech else "none",
+                "summary": summary_source,
+                "visual": visual_source,
+            },
+            "chenze_notice": notice,
             "warnings": warnings,
             "visual_status": ("unknown" if not visual else visual_result.get("status")) or "unknown",
         }
+        markdown, meta = compose_document(video, result)
+        result["content_document"] = meta
         UNDERSTANDING_DIR.mkdir(parents=True, exist_ok=True)
         (UNDERSTANDING_DIR / f"{video_id}.json").write_text(
             json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8"
         )
+        (UNDERSTANDING_DIR / f"{video_id}.md").write_text(markdown, encoding="utf-8")
         update_video(
             video_id,
             analysis_status="partial" if warnings else "success",
@@ -369,6 +403,31 @@ def start_analysis(video_id: int) -> None:
             return
 
     threading.Thread(target=worker, daemon=True, name=f"understanding-{video_id}").start()
+
+
+def document_path(video_id: int) -> Path:
+    return UNDERSTANDING_DIR / f"{video_id}.md"
+
+
+def ensure_document(video_id: int) -> Path | None:
+    """分析 JSON 还在、markdown 丢了时，按同一份结果再写出阅读稿。"""
+    path = document_path(video_id)
+    if path.is_file():
+        return path
+    video = get_video(video_id)
+    if not video:
+        return None
+    analysis = video.get("analysis")
+    if not isinstance(analysis, dict) or not analysis:
+        stored = UNDERSTANDING_DIR / f"{video_id}.json"
+        try:
+            analysis = json.loads(stored.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+    markdown, _meta = compose_document(video, analysis)
+    UNDERSTANDING_DIR.mkdir(parents=True, exist_ok=True)
+    path.write_text(markdown, encoding="utf-8")
+    return path
 
 
 def get_analysis(video_id: int) -> dict[str, Any]:

@@ -13,6 +13,7 @@ import {
   uploadVideo,
   type Video,
 } from '../api'
+import AnalysisDocument from '../components/AnalysisDocument'
 import VideoCard from '../components/VideoCard'
 import RequestState from '../ui/RequestState'
 import {
@@ -75,6 +76,7 @@ export default function VideosPage() {
 
   // 重命名
   const [renaming, setRenaming] = useState<Video | null>(null)
+  const [reading, setReading] = useState<Video | null>(null)
   const [renameTitle, setRenameTitle] = useState('')
   const [renameSaving, setRenameSaving] = useState(false)
 
@@ -455,10 +457,13 @@ export default function VideosPage() {
                 onDownload={handleDownload}
                 onDelete={handleDelete}
               />
-              {(v.quality_score != null || v.analysis?.summary || v.analysis_status === 'running') && (
+              {(v.quality_score != null || v.analysis?.summary || v.analysis_status === 'running' || v.analysis_status === 'success' || v.analysis_status === 'partial') && (
                 <div className="mt-2 rounded-lg border border-line-soft bg-fill px-2.5 py-2 text-[11px] text-ink-3">
                   {v.quality_score != null && <span className="mr-2 text-accent">质量 {Math.round(v.quality_score)}</span>}
-                  {v.analysis_status === 'running' ? '正在生成素材卡…' : v.analysis?.summary}
+                  {v.analysis_status === 'running' ? '正在生成内容分析文档…' : v.analysis?.summary}
+                  {(v.analysis_status === 'success' || v.analysis_status === 'partial') && (
+                    <button type="button" className="ml-2 text-accent" onClick={() => setReading(v)}>阅读分析文档</button>
+                  )}
                 </div>
               )}
             </div>
@@ -602,6 +607,7 @@ export default function VideosPage() {
           }}
         />
       </Modal>
+      <AnalysisDocument videoId={reading?.id ?? null} title={reading?.title} onClose={() => setReading(null)} />
     </div>
   )
 }

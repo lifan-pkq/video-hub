@@ -26,6 +26,8 @@ export interface Video {
     emotion_tags?: string[]
     best_segments?: Array<{ start: number; end: number; reason?: string }>
   } | null
+  chenze_style?: boolean
+  chenze?: ChenzeOptions | null
   created_at: string
   file_url: string
   cover_url: string | null
@@ -149,7 +151,13 @@ export interface Recording {
   elapsed?: number
   /** 仍在解析/握手/等待首帧，计时尚未开始 */
   starting?: boolean
-  segments?: Array<{ index: number; video_id: number; duration: number; size: number; quality_score: number; summary_status: string }>
+  chenze_style?: boolean
+  chenze?: ChenzeOptions | null
+  analysis_status?: Video['analysis_status'] | null
+  quality_score?: number | null
+  document_ready?: boolean
+  document_url?: string | null
+  segments?: Array<{ index: number; video_id: number; duration: number; size: number; quality_score: number; summary_status: string; document_status?: string }>
 }
 
 /** 画质档位 */
@@ -918,10 +926,31 @@ export async function createRecording(
   title?: string,
   quality = 'best',
   fps = 0,
+  chenzeStyle = false,
+  chenze?: ChenzeOptions,
 ): Promise<Recording> {
   // 启动时会同步阻塞数秒解析流地址
-  const { data } = await http.post<Recording>('/recordings', { url, title, quality, fps })
+  const { data } = await http.post<Recording>('/recordings', {
+    url,
+    title,
+    quality,
+    fps,
+    chenze_style: chenzeStyle,
+    ...(chenzeStyle && chenze ? { chenze } : {}),
+  })
   return data
+}
+
+export async function fetchAnalysisDocument(videoId: number): Promise<string> {
+  const { data } = await http.get<string>(`/understanding/${videoId}/document`, {
+    responseType: 'text',
+    transformResponse: [(value) => value],
+  })
+  return data
+}
+
+export function analysisDocumentDownloadUrl(videoId: number): string {
+  return `/api/understanding/${videoId}/document?download=1`
 }
 
 export async function fetchRecordings(): Promise<Recording[]> {

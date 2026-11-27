@@ -1,4 +1,4 @@
-"""主流程端到端：本地短片下载、上传、漫剧生命周期、分段录制、多画幅导出。
+"""主流程端到端：本地短片下载、上传、漫剧生命周期、整场录制、多画幅导出。
 
 外部模型和成片接口用假实现。下载走真实 yt-dlp，对着本机 HTTP 上的短片。
 """
@@ -108,23 +108,24 @@ class WorkflowTests(unittest.TestCase):
                 self.assertEqual(listed.json()[0]["title"], "上传的短片")
                 self.assertTrue(added.called)
 
-    def test_recording_segments_a_local_stream(self):
-        from app.services.recorder import _build_ffmpeg_cmd
+    def test_recording_writes_one_faststart_mp4(self):
+        from app.services.media import probe_video
+        from app.services.recorder import _build_ffmpeg_cmd, _remux_to_faststart
 
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             source = root / "live.mp4"
-            _tiny_mp4(source, 5.0)
-            pattern = root / "part_%03d.mp4"
-            command = _build_ffmpeg_cmd(str(source), "direct", pattern, fps=8)
-            command[command.index("600")] = "2"
-            # 直播流关键帧很密，10 分钟一段能切开。这段 5 秒样片要强制关键帧，否则分段器只写出一个文件。
-            insert_at = command.index("-f")
-            command[insert_at:insert_at] = ["-force_key_frames", "expr:gte(t,n_forced*2)", "-g", "16"]
+            _tiny_mp4(source, 2.0)
+            capture = root / "capture.mp4"
+            command = _build_ffmpeg_cmd(str(source), "direct", capture)
+            joined = " ".join(command)
+            self.assertNotIn("-f segment", joined)
+            self.assertNotIn("-segment_time", joined)
             subprocess.run(command, check=True, capture_output=True, timeout=60)
-            parts = sorted(root.glob("part_*.mp4"))
-            self.assertGreaterEqual(len(parts), 2, [item.name for item in parts])
-            self.assertTrue(all(item.stat().st_size > 200 for item in parts))
+            self.assertEqual([item.name for item in root.glob("capture*.mp4")], ["capture.mp4"])
+            final = root / "final.mp4"
+            self.assertTrue(_remux_to_faststart(capture, final))
+            self.assertGreater(probe_video(final).get("duration") or 0, 0)
 
     def test_drama_plan_start_and_cancel(self):
         from app.main import app

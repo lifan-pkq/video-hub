@@ -253,7 +253,7 @@ export default function TasksPage() {
             action={
               <Link to="/download">
                 <Button variant="primary" icon={<DownloadSimple size={15} />}>
-                  去下载视频
+                  去下载
                 </Button>
               </Link>
             }

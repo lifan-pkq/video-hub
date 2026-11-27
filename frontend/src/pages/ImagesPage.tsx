@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { DownloadSimple, ImageSquare, Sparkle, Trash, UploadSimple } from '@phosphor-icons/react'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import {
   deleteAIImage,
   errorMessage,
@@ -13,13 +13,14 @@ import { Button, EmptyState, Input, Modal, PageHeader, Panel, confirmDialog, toa
 import RequestState from '../ui/RequestState'
 
 export default function ImagesPage() {
+  const [searchParams] = useSearchParams()
   const [images, setImages] = useState<AIImageAsset[]>([])
   const [loading, setLoading] = useState(true)
   const [hasData, setHasData] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [uploading, setUploading] = useState(false)
   const [over, setOver] = useState(false)
-  const [search, setSearch] = useState('')
+  const [search, setSearch] = useState(() => searchParams.get('q') ?? '')
   const [preview, setPreview] = useState<AIImageAsset | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
@@ -37,6 +38,11 @@ export default function ImagesPage() {
   }, [])
 
   useEffect(() => { void load() }, [load])
+
+  useEffect(() => {
+    const query = searchParams.get('q')
+    if (query !== null) setSearch(query)
+  }, [searchParams])
 
   const upload = async (files: FileList | File[] | null) => {
     const list = files ? Array.from(files) : []
@@ -76,7 +82,7 @@ export default function ImagesPage() {
     <section aria-label="图片素材库">
       <PageHeader
         title="图片素材"
-        desc="生成图和上传的参考图都在这里。选中后可以带到 AI 素材页当参考。"
+        desc="下载的图集原图、生成图和上传的参考图都在这里。可以预览，也可以逐张下载。"
         extra={
           <>
             <Link to="/ai-media"><Button variant="ghost" icon={<Sparkle size={15} />}>去生成</Button></Link>
@@ -109,7 +115,7 @@ export default function ImagesPage() {
           <EmptyState
             icon={<ImageSquare size={26} />}
             title={images.length === 0 ? '还没有图片素材' : '没有匹配的图片'}
-            desc={images.length === 0 ? '先去 AI 素材生成一张并保存，或直接上传参考图。' : '换个关键词，或清空搜索。'}
+            desc={images.length === 0 ? '可以从下载页粘贴图文链接，或去 AI 素材生成后保存，也可以直接上传。' : '换个关键词，或清空搜索。'}
             action={images.length === 0 ? <Link to="/ai-media"><Button size="sm">去生成图片</Button></Link> : <Button size="sm" variant="ghost" onClick={() => setSearch('')}>清空搜索</Button>}
           />
         ) : (

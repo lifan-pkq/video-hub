@@ -69,21 +69,32 @@ def save_generated(name: str, title: str = "", prompt: str = "") -> dict:
     return _insert(target, title, prompt)
 
 
-def import_local(source: Path, title: str = "", prompt: str = "") -> dict:
-    """把已经落盘的 GIF / WebP 放进图片素材库。文件名由服务端生成。"""
+def _copy_into_library(source: Path, prefix: str, title: str, prompt: str, empty_message: str) -> dict:
     suffix = source.suffix.lower()
-    if suffix not in {".gif", ".webp", ".png", ".jpg", ".jpeg"}:
+    if suffix == ".jpeg":
+        suffix = ".jpg"
+    if suffix not in {".gif", ".webp", ".png", ".jpg"}:
         raise AIImageError("不支持的图片格式")
     resolved = source.resolve()
     if not resolved.is_file():
-        raise AIImageError("动图文件不存在")
+        raise AIImageError(empty_message)
     AI_IMAGES_DIR.mkdir(parents=True, exist_ok=True)
-    name = f"motion_{uuid.uuid4().hex}{suffix}"
+    name = f"{prefix}_{uuid.uuid4().hex}{suffix}"
     target = (AI_IMAGES_DIR / name).resolve()
     if target.parent != AI_IMAGES_DIR.resolve():
         raise AIImageError("保存路径不合法")
     shutil.copy2(resolved, target)
-    return _insert(target, title or "动图", prompt)
+    return _insert(target, title, prompt)
+
+
+def import_local(source: Path, title: str = "", prompt: str = "") -> dict:
+    """把已经落盘的 GIF / WebP 放进图片素材库。文件名由服务端生成。"""
+    return _copy_into_library(source, "motion", title or "动图", prompt, "动图文件不存在")
+
+
+def import_downloaded(source: Path, title: str = "", prompt: str = "") -> dict:
+    """把下载到的图文原图放进图片素材库。文件名由服务端生成，不覆盖上传图。"""
+    return _copy_into_library(source, "gallery", title or "图集原图", prompt, "图片文件不存在")
 
 
 def upload(data: bytes, filename: str, title: str = "") -> dict:

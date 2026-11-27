@@ -60,7 +60,7 @@ export default function DownloadPage() {
   const parse = async () => {
     const first = text.split('\n').map((line) => line.trim()).find(Boolean)
     if (!first) {
-      setProblem({ code: 'url_missing', message: '还没有可解析的链接。', action: '先粘贴一条以 http 开头的视频链接。' })
+      setProblem({ code: 'url_missing', message: '还没有可解析的链接。', action: '先粘贴一条以 http 开头的视频或图文链接。' })
       return
     }
     setParsing(true)
@@ -78,7 +78,7 @@ export default function DownloadPage() {
   const download = async () => {
     const links = text.split('\n').map((line) => line.trim()).filter(Boolean)
     if (!links.length) {
-      setProblem({ code: 'url_missing', message: '还没有可下载的链接。', action: '每行粘贴一条视频链接，再开始下载。' })
+      setProblem({ code: 'url_missing', message: '还没有可下载的链接。', action: '每行粘贴一条视频或图文链接，再开始下载。' })
       return
     }
     setDownloading(true)
@@ -114,16 +114,16 @@ export default function DownloadPage() {
   return (
     <section>
       <PageHeader
-        title="视频下载"
-        desc="粘贴链接即可下载，抖音无需 Cookie。失败会说明原因和下一步。"
+        title="下载视频和图文"
+        desc="粘贴视频或图文链接即可下载。抖音无需 Cookie；图文作品会把原图存进图片素材库，可以逐张查看和下载。"
         extra={<Link to="/tasks"><Button variant="ghost">任务中心</Button></Link>}
       />
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1.2fr)_minmax(300px,0.8fr)]">
         <div className="space-y-5">
           <Panel title="解析并下载">
-            <TextArea value={text} onChange={setText} rows={5} placeholder="每行一个视频链接" />
+            <TextArea value={text} onChange={setText} rows={5} placeholder="每行一个视频或图文链接" />
             <div className="mt-3 flex flex-wrap gap-2">
-              <Button variant="ghost" loading={parsing} onClick={() => void parse()}>解析最高画质</Button>
+              <Button variant="ghost" loading={parsing} onClick={() => void parse()}>解析链接</Button>
               <Button variant="primary" icon={<DownloadSimple size={15} />} loading={downloading} onClick={() => void download()}>开始下载</Button>
               <Link to="/library/import"><Button variant="ghost">改用导入向导</Button></Link>
             </div>
@@ -132,7 +132,11 @@ export default function DownloadPage() {
               <div className="mt-4 rounded-xl border border-line-soft bg-fill p-3 text-[12px] text-ink-3">
                 <p className="text-ink-1">{parsed.title}</p>
                 <p className="mt-1">{parsed.author || '未知作者'} · {parsed.platform}</p>
-                {parsed.available_best && <p className="mt-1">可用最高：{parsed.available_best.width ?? '?'}×{parsed.available_best.height ?? '?'} · {parsed.available_best.format_note || parsed.available_best.vcodec || '格式未知'}</p>}
+                {parsed.media_kind === 'images' ? (
+                  <p className="mt-1">图集原图 {parsed.image_count ?? 0} 张。下载后保存在图片素材库，可以逐张查看和下载。</p>
+                ) : parsed.available_best ? (
+                  <p className="mt-1">可用最高：{parsed.available_best.width ?? '?'}×{parsed.available_best.height ?? '?'} · {parsed.available_best.format_note || parsed.available_best.vcodec || '格式未知'}</p>
+                ) : null}
               </div>
             )}
           </Panel>
@@ -155,6 +159,19 @@ export default function DownloadPage() {
                     )}
                     {task.result?.video && (
                       <Link to={`/videos?q=${encodeURIComponent(task.result.video.title)}`} className="mt-2 inline-block text-[12px] text-accent">已入库，去素材库查看</Link>
+                    )}
+                    {task.result?.media_kind === 'images' && task.result.gallery && (
+                      <div className="mt-2">
+                        <p className="text-[12px] leading-5 text-ink-2">已保存 {task.result.gallery.count} 张原图。这些是图片文件，不是替代用的幻灯片视频。</p>
+                        <Link to={`/images?q=${encodeURIComponent(task.result.gallery.query)}`} className="mt-1 inline-block text-[12px] text-accent">在图片素材库查看这组图集</Link>
+                        <div className="mt-2 grid grid-cols-4 gap-2">
+                          {(task.result.images || []).map((image) => (
+                            <a key={image.id} href={image.download_url} download className="block overflow-hidden rounded-lg border border-line-soft" title={`下载 ${image.title}`}>
+                              <img src={image.url} alt={image.title} className="aspect-square w-full object-cover" />
+                            </a>
+                          ))}
+                        </div>
+                      </div>
                     )}
                   </div>
                 ))}

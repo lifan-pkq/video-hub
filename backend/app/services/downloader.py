@@ -1,4 +1,7 @@
-"""视频下载以 yt-dlp 为主；抖音在 Cookie 失效时走 iesdouyin 分享页备用链路。"""
+"""视频下载以 yt-dlp 为主；抖音在 Cookie 失效时走 iesdouyin 分享页备用链路。
+
+图文作品把原图存进图片素材库。抖音图文沿用免 Cookie 备用链路；
+本地 Cookie 只在 yt-dlp 匿名失败后作为可选重试。"""
 
 import asyncio
 import json
@@ -13,6 +16,9 @@ from app.config import COVERS_DIR, DOWNLOAD_TIMEOUT, MAX_UPLOAD_MB, TMP_DIR, VID
 from app.db import add_video, update_video
 from app.services.cookies import make_ytdlp_cookiefile
 from app.services.douyin_fallback import FallbackCancelled, download_douyin, is_douyin_url, parse_douyin
+from app.services.image_gallery import GalleryCancelled, store_originals
+from app.services.xiaohongshu_images import download_images as download_xiaohongshu_images
+from app.services.xiaohongshu_images import is_xiaohongshu_url, load_image_post as load_xiaohongshu_images
 from app.services.media import ensure_h264, make_cover, probe_video
 from app.services.quality import assess_source
 from app.services.understanding import start_analysis
@@ -34,11 +40,17 @@ def explain_download_error(message: str) -> dict:
             "message": "没有识别到可用的视频链接。",
             "action": "每行粘贴一条以 http 开头的分享链接后再解析或下载。",
         }
-    if any(marker in text for marker in ("图文作品", "iesdouyin", "detail API", "aweme_id", "备用下载")):
+    if "图文作品" in text or "图集原图" in text:
+        return {
+            "code": "image_post_failed",
+            "message": (text[:400] or "图文作品下载失败"),
+            "action": "确认链接仍可打开后重试。成功后原图会进入图片素材库，可以逐张查看和下载。",
+        }
+    if any(marker in text for marker in ("iesdouyin", "detail API", "aweme_id", "备用下载")):
         return {
             "code": "download_failed",
             "message": (text[:400] or "下载失败"),
-            "action": "确认链接仍可在抖音 App / 浏览器打开；图文作品请改用本地上传。",
+            "action": "确认链接仍可在抖音 App / 浏览器打开。视频仍失败时，可以把原片上传到素材库。",
         }
     if any(marker in lower for marker in ("timed out", "timeout", "timeouterror", "read timed out")):
         return {
@@ -114,11 +126,56 @@ def _best_format(info: dict) -> dict:
     }
 
 
+def _image_parse_result(url: str, info: dict, *, fallback: str | None = None, ytdlp_error: str | None = None) -> dict:
+    count = int(info.get("image_count") or len(info.get("_image_slides") or []) or 0)
+    result = {
+        "url": url,
+        "title": info.get("title") or "未命名图集",
+        "author": info.get("uploader") or info.get("channel"),
+        "cover_url": info.get("thumbnail"),
+        "duration": None,
+        "platform": (info.get("extractor_key") or "unknown").lower(),
+        "video_id": info.get("id"),
+        "media_kind": "images",
+        "image_count": count,
+        "available_best": {"format_note": f"图集原图 {count} 张"},
+    }
+    if fallback:
+        result["fallback"] = fallback
+    if ytdlp_error:
+        result["ytdlp_error"] = ytdlp_error[:200]
+    return result
+
+
+def _douyin_note_url(*values: object) -> bool:
+    for value in values:
+        if "/note/" in str(value or ""):
+            return True
+    return False
+
+
 def parse_video(text: str) -> dict:
     url = extract_url(text)
     try:
         with yt_dlp.YoutubeDL({**_base_opts(url), "skip_download": True}) as ydl:
             info = ydl.extract_info(url, download=False)
+        if is_douyin_url(url) and _douyin_note_url(url, info.get("webpage_url")):
+            try:
+                note = parse_douyin(url)
+            except Exception:
+                note = None
+            if note and note.get("media_kind") == "images":
+                return _image_parse_result(url, note, fallback="iesdouyin")
+        if is_xiaohongshu_url(url):
+            formats = [item for item in info.get("formats") or [] if isinstance(item, dict)]
+            has_video = any(item.get("vcodec") not in (None, "none", "") for item in formats)
+            if not has_video:
+                try:
+                    note = load_xiaohongshu_images(url)
+                except Exception:
+                    note = None
+                if note:
+                    return _image_parse_result(url, note)
         return {
             "url": url,
             "title": info.get("title") or "未命名视频",
@@ -130,26 +187,37 @@ def parse_video(text: str) -> dict:
             "available_best": _best_format(info),
         }
     except Exception as ytdlp_exc:
-        if not is_douyin_url(url):
-            raise
-        try:
-            info = parse_douyin(url)
-        except Exception as fallback_exc:
-            raise RuntimeError(
-                f"yt-dlp 解析失败且 iesdouyin 备用解析也失败：{fallback_exc}"
-            ) from fallback_exc
-        return {
-            "url": url,
-            "title": info.get("title") or "未命名视频",
-            "author": info.get("uploader"),
-            "cover_url": info.get("thumbnail"),
-            "duration": info.get("duration"),
-            "platform": "douyin",
-            "video_id": info.get("id"),
-            "available_best": _best_format(info),
-            "fallback": "iesdouyin",
-            "ytdlp_error": str(ytdlp_exc)[:200],
-        }
+        if is_douyin_url(url):
+            try:
+                info = parse_douyin(url)
+            except Exception as fallback_exc:
+                raise RuntimeError(
+                    f"yt-dlp 解析失败且 iesdouyin 备用解析也失败：{fallback_exc}"
+                ) from fallback_exc
+            if info.get("media_kind") == "images":
+                return _image_parse_result(url, info, fallback="iesdouyin", ytdlp_error=str(ytdlp_exc))
+            return {
+                "url": url,
+                "title": info.get("title") or "未命名视频",
+                "author": info.get("uploader"),
+                "cover_url": info.get("thumbnail"),
+                "duration": info.get("duration"),
+                "platform": "douyin",
+                "video_id": info.get("id"),
+                "available_best": _best_format(info),
+                "fallback": "iesdouyin",
+                "ytdlp_error": str(ytdlp_exc)[:200],
+            }
+        if is_xiaohongshu_url(url):
+            try:
+                note = load_xiaohongshu_images(url)
+            except Exception as image_exc:
+                raise RuntimeError(
+                    f"yt-dlp 解析失败，小红书页面也没有解析出图集：{image_exc}"
+                ) from image_exc
+            if note:
+                return _image_parse_result(url, note, ytdlp_error=str(ytdlp_exc))
+        raise
 
 
 def _task_tmp_dir(task) -> Path:
@@ -191,7 +259,11 @@ def _download_cancelled(task) -> bool:
     return event is not None and event.is_set()
 
 
-def _douyin_fallback_download(task, url: str) -> tuple[Path, dict]:
+def _as_image_files(info: dict) -> list[Path]:
+    return [Path(path) for path in (info.get("image_files") or [])]
+
+
+def _douyin_fallback_download(task, url: str) -> tuple[Path | list[Path], dict]:
     task.log("使用 iesdouyin 分享页备用下载（无需 Cookie）…")
     out = _task_tmp_dir(task) / "douyin_fallback.mp4"
     try:
@@ -208,6 +280,14 @@ def _douyin_fallback_download(task, url: str) -> tuple[Path, dict]:
     if _download_cancelled(task):
         out.unlink(missing_ok=True)
         raise DownloadCancelled("下载已取消")
+    if info.get("media_kind") == "images":
+        files = _as_image_files(info)
+        out.unlink(missing_ok=True)
+        if not files:
+            raise RuntimeError("该抖音链接是图文作品，但没有下载到原图")
+        task.log(f"这是图文作品，已下载 {len(files)} 张原图")
+        task.progress = max(float(getattr(task, "progress", 0) or 0), 90.0)
+        return files, info
     # 用 aweme id 作为文件名，与 yt-dlp 下游命名习惯一致
     vid = re.sub(r"[^A-Za-z0-9_-]", "_", str(info.get("id") or "douyin"))[:64]
     named = out.with_name(f"{vid}.mp4")
@@ -220,12 +300,69 @@ def _douyin_fallback_download(task, url: str) -> tuple[Path, dict]:
     return out, info
 
 
-def _download_with_fallback(task, url: str) -> tuple[Path, dict]:
-    """yt-dlp 匿名 → 本地 Cookie → iesdouyin 免 Cookie 备用链路。"""
+def _discard_download(downloaded: Path | list[Path] | None) -> None:
+    if isinstance(downloaded, list):
+        for path in downloaded:
+            Path(path).unlink(missing_ok=True)
+        return
+    if isinstance(downloaded, Path):
+        downloaded.unlink(missing_ok=True)
+
+
+def _note_images_instead(task, url: str, downloaded: Path, info: dict) -> tuple[list[Path], dict] | None:
+    """图文链接即使被 yt-dlp 下成占位视频，也改存原图。普通视频链接不走这里。"""
+    if not is_douyin_url(url) or not _douyin_note_url(url, info.get("webpage_url"), info.get("original_url")):
+        return None
+    try:
+        files, image_info = _douyin_fallback_download(task, url)
+    except DownloadCancelled:
+        _discard_download(downloaded)
+        raise
+    except Exception as exc:
+        task.log(f"图文原图备用解析失败，保留已下载的视频：{exc}")
+        return None
+    if image_info.get("media_kind") != "images":
+        _discard_download(files if isinstance(files, Path) else None)
+        return None
+    downloaded.unlink(missing_ok=True)
+    return files, image_info
+
+
+def _prefer_originals(task, url: str, downloaded: Path, info: dict) -> tuple[Path | list[Path], dict]:
+    images = _note_images_instead(task, url, downloaded, info)
+    if images is not None:
+        return images
+    return downloaded, info
+
+
+def _xiaohongshu_image_download(task, url: str) -> tuple[list[Path], dict]:
+    task.log("尝试下载小红书图文原图（匿名优先，Cookie 仅作可选重试）…")
+    dest = _task_tmp_dir(task) / "xhs_images"
+    try:
+        info = download_xiaohongshu_images(
+            url,
+            dest,
+            should_cancel=lambda: _download_cancelled(task),
+            max_bytes=MAX_UPLOAD_MB * 1024 * 1024,
+            deadline_s=float(DOWNLOAD_TIMEOUT),
+        )
+    except GalleryCancelled as exc:
+        raise DownloadCancelled("下载已取消") from exc
+    files = _as_image_files(info)
+    if not files:
+        raise RuntimeError("小红书图文作品没有下载到原图")
+    task.log(f"这是图文作品，已下载 {len(files)} 张原图")
+    task.progress = max(float(getattr(task, "progress", 0) or 0), 90.0)
+    return files, info
+
+
+def _download_with_fallback(task, url: str) -> tuple[Path | list[Path], dict]:
+    """yt-dlp 匿名 → 本地 Cookie → 免 Cookie 图文/抖音备用链路。"""
     last_exc: Exception | None = None
     try:
         task.log("使用 yt-dlp 获取最高质量无水印可用源…")
-        return _ytdlp_download(task, url, use_cookie=False)
+        downloaded, info = _ytdlp_download(task, url, use_cookie=False)
+        return _prefer_originals(task, url, downloaded, info)
     except DownloadCancelled:
         raise
     except Exception as exc:
@@ -234,7 +371,8 @@ def _download_with_fallback(task, url: str) -> tuple[Path, dict]:
         if cookiefile:
             task.log("匿名解析失败，使用本地 Cookie 重试 yt-dlp…")
             try:
-                return _ytdlp_download(task, url)
+                downloaded, info = _ytdlp_download(task, url)
+                return _prefer_originals(task, url, downloaded, info)
             except DownloadCancelled:
                 raise
             except Exception as cookie_exc:
@@ -250,18 +388,52 @@ def _download_with_fallback(task, url: str) -> tuple[Path, dict]:
                 f"yt-dlp 与 iesdouyin 备用下载均失败：{fallback_exc}（此前：{last_exc}）"
             ) from fallback_exc
 
+    if is_xiaohongshu_url(url):
+        try:
+            return _xiaohongshu_image_download(task, url)
+        except DownloadCancelled:
+            raise
+        except Exception as image_exc:
+            raise RuntimeError(
+                f"无法通过 yt-dlp 获取视频，小红书页面也没有可保存的图集：{image_exc}（此前：{last_exc}）"
+            ) from image_exc
+
     raise RuntimeError(
         f"无法通过 yt-dlp 获取视频，建议下载原片后上传：{last_exc}"
     ) from last_exc
 
 
-def _do_download(task, text: str) -> tuple[Path, dict]:
+def _store_image_post(task, downloaded: list[Path], info: dict) -> dict:
+    files = [Path(path) for path in downloaded if Path(path).is_file()]
+    if not files:
+        raise RuntimeError("图文作品没有保存到原图")
+    gallery_id = re.sub(r"[^A-Za-z0-9_-]", "_", str(info.get("id") or task.id))[:64] or task.id
+    platform = (info.get("extractor_key") or "").lower()
+    records, query = store_originals(
+        files,
+        title=(info.get("title") or "").strip(),
+        source_url=str(info.get("webpage_url") or ""),
+        platform=platform,
+        gallery_id=gallery_id,
+    )
+    public = {key: value for key, value in info.items() if key != "image_files" and not str(key).startswith("_")}
+    public["media_kind"] = "images"
+    public["images"] = records
+    public["gallery_query"] = query
+    public["image_count"] = len(records)
+    return public
+
+
+def _do_download(task, text: str) -> tuple[Path | None, dict]:
     url = extract_url(text)
     ensure_dirs()
     with tempfile.TemporaryDirectory(prefix=f"download-{task.id}-", dir=TMP_DIR) as temp_dir:
         task.download_dir = Path(temp_dir)
         try:
             downloaded, info = _download_with_fallback(task, url)
+            if info.get("media_kind") == "images" or isinstance(downloaded, list):
+                files = downloaded if isinstance(downloaded, list) else []
+                return None, _store_image_post(task, files, info)
             title = (info.get("title") or "未命名视频").strip()
             vid = re.sub(r"[^A-Za-z0-9_-]", "_", str(info.get("id") or ""))[:64] or "video"
             safe_title = re.sub(r'[\\/:*?"<>|#\n\r]', "_", title)[:80].strip("_") or f"video_{vid}"
@@ -348,6 +520,23 @@ async def run_download(task, text: str):
                 return
         finally:
             _download_cancel_events.pop(task.id, None)
+        if info.get("media_kind") == "images":
+            images = info.get("images") or []
+            task.progress = 100.0
+            task.result = {
+                "media_kind": "images",
+                "images": images,
+                "gallery": {
+                    "title": info.get("title") or "图集",
+                    "count": len(images),
+                    "platform": (info.get("extractor_key") or "").lower() or None,
+                    "source_url": info.get("webpage_url"),
+                    "query": info.get("gallery_query") or "",
+                },
+            }
+            task.log(f"已保存 {len(images)} 张原图到图片素材库")
+            task.finish("success")
+            return
         try:
             task.log("下载完成，转码、质量分析与入库处理中…")
             video = await asyncio.to_thread(_post_process, task, final_path, info)

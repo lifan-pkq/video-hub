@@ -38,10 +38,28 @@ export interface ParseResult {
   title: string
   author: string
   cover_url: string
-  duration: number
+  duration: number | null
   platform: string
   video_id: string
+  media_kind?: 'images' | 'video'
+  image_count?: number
   available_best?: { width?: number; height?: number; format_note?: string; tbr?: number; vcodec?: string }
+}
+
+export interface GalleryImage {
+  id: number
+  title: string
+  url: string
+  download_url: string
+  filename?: string
+}
+
+export interface ImageGalleryResult {
+  title?: string
+  count: number
+  platform?: string | null
+  source_url?: string | null
+  query: string
 }
 
 export type TaskStatus = 'pending' | 'running' | 'success' | 'failed' | 'partial' | 'cancelled'
@@ -122,6 +140,9 @@ export interface Task {
     preview_url?: string
     image?: AIImageAsset
     ingest_error?: TaskError
+    media_kind?: 'images' | 'video'
+    images?: GalleryImage[]
+    gallery?: ImageGalleryResult
   } | null
   error?: TaskError | null
   created_at: string
